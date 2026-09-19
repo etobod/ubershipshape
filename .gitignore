@@ -1,0 +1,37 @@
+# Only what someone could use on THEIR OWN machine goes into this repository.
+# Nothing that says anything about this particular one.
+#
+# Rule before tracking anything new: if the file carries a machine name, an
+# account name, a SID, an SSID, a MAC address, a profile path, a serial number,
+# or any reading taken from this system — it stays out.
+
+# --- tooling and working context, not the product ---
+CLAUDE.md
+claude.bat
+claude.ps1
+.claude/
+
+# --- internal specification: PRD, DESIGN, per-skill manuals ---
+DOC/
+
+# --- workflow: plans, questions, reviews ---
+plan/
+pytania/
+przeglady/
+
+# --- this machine's output and state ---
+raporty/
+stan/
+tmp/
+
+# --- raw system data, wherever it ends up ---
+*.evtx
+*.dmp
+*.etl
+
+# --- usual debris ---
+__pycache__/
+*.py[cod]
+.ruff_cache/
+Thumbs.db
+desktop.ini
