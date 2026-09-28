@@ -2,3 +2,5 @@ loc/
 .claude/
 claude.bat
 CLAUDE.md
+ush-data/
+__pycache__/
