@@ -1,0 +1,27 @@
+[
+  {
+    "provider": "Microsoft-Windows-Kernel-PnP",
+    "event_id": 219,
+    "reason": "A driver (often WUDFRd) is logged as failing to load early in boot, before its dependency is ready; it usually loads moments later. Treat as a finding only if a device also reports a problem."
+  },
+  {
+    "provider": "Wdf01000",
+    "event_id": 3,
+    "reason": "A framework driver such as UsbXhciCompanion is not needed on the controller and reports object-name-not-found. Treat as a finding only if a USB device also reports a problem."
+  },
+  {
+    "provider": "Win32k",
+    "event_id": 700,
+    "reason": "Modern Standby telemetry: input suppression requested as the display turns off. Normal on every sleep."
+  },
+  {
+    "provider": "Win32k",
+    "event_id": 701,
+    "reason": "Modern Standby telemetry: input suppression withdrawn on wake, the pair of Win32k 700. Normal on every wake."
+  },
+  {
+    "provider": "Microsoft-Windows-DistributedCOM",
+    "event_id": 10016,
+    "reason": "A built-in component lacks a COM launch or activation permission it does not need. Microsoft documents this event as safe to ignore."
+  }
+]
