@@ -19,17 +19,16 @@ Rules (see ``references/report-format.md``):
   (``18.09.2026`` -> 18, 9, 2026; leading zeros do not matter).
 - Not scanned: the ``ush:summary`` line, the ``ush:detail`` and
   ``ush:not-checked`` marker lines (their ids are checked separately, or carry
-  no figures); heading numbering (``## 2.``); list numbering at the start of a
-  line (``1.``, ``12)``, ``> 3.``) when it starts a list item (after a blank
-  line, heading, table row, marker, thematic break or a ``===`` underline
-  after text; or when it is 1; or when it continues a list of the same
-  delimiter, ``.`` or ``)``, see ``_list_items``), while any other ``412.``
-  after text is a number in the paragraph; the number in the first cell of
+  no figures); the number of a numbered heading (``## 2.``, outside a ``>``
+  quote) when it equals the heading's position among the numbered headings
+  of its level, counted from 1 again under every heading of a higher level
+  (see ``_heading_numbers``); the number in the first cell of
   a table row when it equals the row's position among the table's data rows
   (``| 3 | ...`` as the third row); and item ids (``g3``, ``n1``, ``a2``,
   ``b0``, ``r4``, ``d1``) of the summary, of the ``ush:detail`` items and of the groups cut
   from the summary. A token of that shape that is no such id is a number.
-  Every other number is checked.
+  Every other number is checked, also one that numbers a list item (a report
+  has no numbered lists) or a quoted heading.
 - Fenced code blocks are not scanned. Fences follow CommonMark: a fence line
   starts with at most 3 spaces (a block at the top level or directly in a
   first-level list item, ``-`` or a number 1-9; never in a nested list item or
@@ -75,16 +74,10 @@ DETAIL_LINE = re.compile(r"^\s*<!--\s*ush:detail\b(?P<ids>.*?)-->\s*$")
 TOKEN = re.compile(
     r"(?P<hex>(?<![0-9A-Za-z_])0[xX][0-9a-fA-F]+(?![0-9A-Za-z_]))|(?P<dec>[0-9]+)"
 )
-# Heading numbering: "## 2. ".
-HEADING_NUMBER = re.compile(r"^ {0,3}(?:>[ \t]*)*#{1,6}[ \t]+[0-9]+[.)](?=[ \t]|$)")
-# List numbering at the start of a line, bare, in a quote or after a bullet:
-# "1. ", "12) ", "> 3. ", "- 4. ". At most 3 spaces before a marker or the
-# number: 4 make an indented code block.
-LIST_NUMBER = re.compile(
-    r"^(?P<prefix>(?: {0,3}(?:>[ \t]?|[-+*][ \t]+))* {0,3})"
-    r"(?P<number>[0-9]+)(?P<delimiter>[.)])(?=[ \t]|$)"
+# An ATX heading outside a quote, and its number if it has one: "## 2. ".
+HEADING_NUMBER = re.compile(
+    r"^ {0,3}(?P<level>#{1,6})(?:[ \t]+(?P<number>[0-9]+)[.)](?=[ \t]|$)|(?=[ \t]|$))"
 )
-THEMATIC_BREAK = re.compile(r"^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$")
 # Row number in the first cell of a table row: "| 3 | ...".
 TABLE_ROW_NUMBER = re.compile(r"^\s*\|\s*(?P<number>[0-9]+)\s*(?=\|)")
 TABLE_ROW = re.compile(r"^\s*\|")
@@ -105,15 +98,10 @@ FENCE = re.compile(r"^ {0,3}(?P<fence>`{3,}|~{3,})(?P<rest>.*)$")
 # A line shaped like a closing fence, at any indent.
 CLOSING_FENCE = re.compile(r"^[ \t]*(?P<fence>`{3,}|~{3,})[ \t]*$")
 HEADING = re.compile(r"^ {0,3}#{1,6}\s")
-# A setext heading underline: at most 3 spaces, then only "=".
-SETEXT_UNDERLINE = re.compile(r"^ {0,3}=+[ \t]*$")
 # One leading piece of a line that is not its text: indent, a quote marker, or
 # a list marker followed by a space, a tab or the end of the line.
 LINE_PREFIX = re.compile(r"^(?:[ \t]+|>|(?:[-+*]|[0-9]{1,9}[.)])(?=[ \t]|$))")
 ONE_LINE_COMMENT = re.compile(r"^<!--.*-->[ \t]*$")
-QUOTE_MARKERS = re.compile(r"^ {0,3}>(?:[ \t]{0,3}>)*[ \t]?")
-# A line that starts a list item or a quote: "- a", "1. a", "2) a", "> a".
-LIST_OR_QUOTE = re.compile(r"^ {0,3}(?:>|(?:[-+*]|[0-9]{1,9}[.)])(?=[ \t]|$))")
 
 EXIT_OK, EXIT_NUMBERS, EXIT_ERROR = 0, 1, 2
 
@@ -247,7 +235,7 @@ def check(report: Path) -> tuple[list[str], int]:
 
     known_ids = item_ids(summary) | set(ids)
 
-    list_items = _list_items(lines)
+    in_order = _heading_numbers(lines)
     problems, checked = [], 0
     position = 0  # data-row position in the current table; 0 outside a table
     row = 0  # row index in the current table: 0 header, 1 delimiter row
@@ -262,11 +250,7 @@ def check(report: Path) -> tuple[list[str], int]:
             position = row = 0
         if NOT_CHECKED_LINE.match(line) or DETAIL_LINE.match(line):
             continue
-        numbering = HEADING_NUMBER.match(line)
-        if not numbering:
-            listed = LIST_NUMBER.match(line)
-            if listed and list_items.get(number - 1):
-                numbering = listed
+        numbering = HEADING_NUMBER.match(line) if number - 1 in in_order else None
         if not numbering and position:
             cell = TABLE_ROW_NUMBER.match(line)
             if cell and int(cell["number"]) == position:
@@ -308,117 +292,30 @@ def item_ids(summary) -> set[str]:
     return found
 
 
-def _boundary_at(lines: list[str], at: int) -> bool:
-    """True when ``lines[at]`` is a block boundary (``_block_boundary``) or a
-    ``===`` setext underline under a paragraph of plain text. Right after a
-    boundary, or under a run of lines that holds a list item or quote line,
-    ``===`` is paragraph text (a lazy continuation in CommonMark), so it is no
-    boundary there."""
-    if _block_boundary(lines[at]):
-        return True
-    if not SETEXT_UNDERLINE.match(lines[at]) or at == 0 or _block_boundary(lines[at - 1]):
-        return False
-    for above in range(at - 1, -1, -1):
-        if _block_boundary(lines[above]):
-            break
-        if LIST_OR_QUOTE.match(lines[above]):
-            return False
-    return True
+def _heading_numbers(lines: list[str]) -> set[int]:
+    """Indices of the numbered headings whose number equals their position.
 
-
-def _block_boundary(line: str) -> bool:
-    """True for a line that no paragraph runs across: blank, heading, table row,
-    marker or thematic break, also inside a quote (``>`` alone is a blank line)."""
-    line = QUOTE_MARKERS.sub("", line, count=1)
-    return not line.strip(" \t") or bool(
-        HEADING.match(line) or TABLE_ROW.match(line) or line.lstrip().startswith("<!--")
-        or THEMATIC_BREAK.match(line)
-    )
-
-
-def _list_items(lines: list[str]) -> dict[int, bool]:
-    """For each numbered line (``LIST_NUMBER``), True when it starts a list item.
-
-    CommonMark: only a list starting at 1 may interrupt a paragraph, so after
-    text a number is list numbering only when it is 1 or continues a list: the
-    nearest earlier numbered line in the same run of lines (lazy or indented
-    continuation lines included) with as many ``>`` is itself a list item, and
-    this number stands left of that item's text (a sibling, not a line of its
-    text) and has the same delimiter (``.`` or ``)``). A list item with the
-    other delimiter left of the number ends the search: in CommonMark it
-    starts a new list, so the number is paragraph text. An item indented to
-    the number's own text column or further belongs to a nested list and is
-    skipped. A blank line does not end the search when every line right
-    below a blank one is indented to that item's text (a multi-paragraph
-    item). An earlier number that
-    is itself paragraph text is skipped and the search goes on upwards.
-    Otherwise ``412. `` after text is paragraph text, also inside a list item
-    or a quote.
-
-    Lines are decided top to bottom, so each search reads the earlier answers
-    instead of recomputing them: no recursion, time at most quadratic.
+    Numbered ATX headings (``HEADING_NUMBER``) of each level are counted from
+    1 in order; a heading of a higher level (fewer ``#``), numbered or not,
+    starts the count of every lower level again. A heading whose number is
+    out of order still counts, so one wrong number does not shift the rest.
+    Setext headings and quoted headings are not counted.
     """
-    results: dict[int, bool] = {}
+    counts = [0] * 7  # counts[level] for levels 1..6
+    found: set[int] = set()
     for index, line in enumerate(lines):
-        listed = LIST_NUMBER.match(line)
-        if listed:
-            results[index] = _starts_item(lines, index, listed, results)
-    return results
-
-
-def _starts_item(lines: list[str], index: int, listed: re.Match,
-                 results: dict[int, bool]) -> bool:
-    """One step of ``_list_items``: ``results`` holds every earlier numbered line."""
-    if int(listed["number"]) == 1 or index == 0 or _boundary_at(lines, index - 1):
-        return True
-    if _opens_container(lines, index, listed["prefix"]):
-        return True
-    width = len(listed["prefix"].expandtabs(4))
-    own_text = _text_column(lines[index], listed)
-    after_blank = None  # least indent of a line right below a blank line passed
-    for at in range(index - 1, -1, -1):
-        if not lines[at].strip(" 	"):
-            # A blank line inside a list item: the search goes on, and the
-            # item found must hold every line below a blank in its text.
-            below = _indent(lines[at + 1])
-            after_blank = below if after_blank is None else min(after_blank, below)
+        heading = HEADING_NUMBER.match(line)
+        if not heading:
             continue
-        if _boundary_at(lines, at):
-            return False
-        item = LIST_NUMBER.match(lines[at])
-        if item and item["prefix"].count(">") == listed["prefix"].count(">"):
-            nested = len(item["prefix"].expandtabs(4)) >= own_text  # inside this item's text
-            if width < _text_column(lines[at], item) and results[at] and not nested:
-                if after_blank is not None and after_blank < _text_column(lines[at], item):
-                    return False  # a paragraph after a blank line ended the list
-                return item["delimiter"] == listed["delimiter"]
-    return False
-
-
-def _opens_container(lines: list[str], index: int, prefix: str) -> bool:
-    """True when the prefix of numbered line ``index`` opens a new container,
-    so its number starts a list: a bullet (always a new list item) or more
-    ``>`` than any line of the run above it (a new quote; a lazy line without
-    ``>`` still lies in the quote opened above it). No paragraph continues
-    into either."""
-    if any(c in prefix for c in "-+*"):
-        return True
-    depth = 0
-    for at in range(index - 1, -1, -1):
-        if _boundary_at(lines, at):
-            break
-        above = QUOTE_MARKERS.match(lines[at])
-        depth = max(depth, above.group().count(">") if above else 0)
-    return prefix.count(">") > depth
-
-
-def _text_column(line: str, item: re.Match) -> int:
-    """Column where the text of a numbered list item starts (CommonMark: 1 to 4
-    spaces after the marker; with more, or none, it starts one space after)."""
-    marker = len(item.group().expandtabs(4))
-    rest = line.expandtabs(4)[marker:]
-    gap = len(rest) - len(rest.lstrip(" "))
-    return marker + (gap if gap <= 4 and rest.strip() else 1)
+        level = len(heading["level"])
+        for lower in range(level + 1, 7):
+            counts[lower] = 0
+        if heading["number"] is None:
+            continue
+        counts[level] += 1
+        if int(heading["number"]) == counts[level]:
+            found.add(index)
+    return found
 
 
 def _indent(line: str) -> int:

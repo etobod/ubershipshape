@@ -237,13 +237,10 @@ class TestNumberingExemptions(CheckerTestCase):
         self.assertEqual(code, 1, output)
         self.assertIn("412", output)
 
-        code, output = self.run_check(["Some text", "", "412. more text", *NOT_CHECKED])
-        self.assertEqual(code, 0, output)
-
-    def test_list_continuation_and_heading_keep_exemption(self):
+    def test_bullets_and_heading_keep_exemption(self):
         self.summary({"count": 4})
-        code, output = self.run_check(["Intro.", "", "1. text", "   continued text", "2. next",
-                                       "", "A plain paragraph line.", "## 3. Title",
+        code, output = self.run_check(["Intro.", "", "- text", "  continued text", "- next",
+                                       "", "A plain paragraph line.", "## 1. Title",
                                        *NOT_CHECKED])
         self.assertEqual(code, 0, output)
 

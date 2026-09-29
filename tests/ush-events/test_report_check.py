@@ -8,8 +8,8 @@ from pathlib import Path
 
 from tests.skill_loader import load_script
 
-# All data below is invented. Numbers were picked so that the numbering used
-# in the report ("## 8.", "6.") does not occur anywhere in the JSON files.
+# All data below is invented. The heading number of the report ("## 1.") is
+# skipped as the first numbered heading of its level.
 
 
 def _summary_data(detail_file):
@@ -49,8 +49,8 @@ def _valid_body_lines():
         "Average per day: 3,5.",
         "<!-- ush:detail g1 -->",
         "The largest group has 4321 events.",
-        "## 8. Findings",
-        "6. Nothing else stands out.",
+        "## 1. Findings",
+        "- Nothing else stands out.",
         "",
         "## Not checked",
         "<!-- ush:not-checked -->",

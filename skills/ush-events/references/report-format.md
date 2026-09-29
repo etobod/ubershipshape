@@ -19,20 +19,18 @@ numbers this way:
   So dates and times may be written in local format and a decimal comma is
   fine, but write counts without a thousands separator (`1234`, not `1 234`):
   its parts are rarely in the JSON on their own.
-- Ignored: heading numbering (`## 2. `); list numbering at the start of a
-  line (`1. `, `12) `, `> 3. `, `- 4. `) when it starts a list item: after a blank
-  line, a heading, a table row, a marker, `---` or a `===` underline right
-  under a paragraph that is not inside a list item or a `>` quote, right
-  after a bullet (`- `, `+ `, `* `) or a `>` more than the line above has,
-  or when it is 1, or when an earlier item of the same
-  list (as many `>`, the same delimiter `.` or `)`, its number left of that
-  item's text) is in the same run of lines, or above blank lines that only
-  separate paragraphs indented to that item's text. An item with the other delimiter
-  starts a new list, so number every item of a list with the same
-  delimiter. Any other `412. ` after text is a number in the paragraph (also
-  inside a list item or a quote) and is checked; leave a blank line before a
-  list. Indent a number at most 3 spaces (a nested list included): with 4
-  or more, or with a tab or a non-breaking space before it, it is checked. Also ignored: the number in the first cell of a table row when it
+- No numbered lists: use `-` bullets.
+  A number at the start of a line (`1. `, `412. `, `- 4. `, `> 3. `) is
+  checked like any other number, so a numbered list fails unless its
+  numbers happen to be in the JSON.
+- Ignored: the number of a numbered heading (`## 2. `) when the numbering
+  of its level counts from 1 in order: the first numbered `##` heading is
+  `## 1.`, the next `## 2.`, and the count starts again under every heading
+  of a higher level (fewer `#`). Write every heading with `#`: a heading
+  underlined with `===` or `---` does not start the count again. Any other
+  heading number (`## 412.`, a
+  skipped or repeated number) is checked, and so is a heading number in a
+  `>` quote. Also ignored: the number in the first cell of a table row when it
   equals the row's position among the table's data rows (`| 3 | ...` as the
   third row; start every table row with `|`), and the marker lines
   (`ush:summary`, `ush:detail`, `ush:not-checked`). Therefore never put a
@@ -54,8 +52,9 @@ numbers this way:
   in a code block. Markers inside a code block do not count, and a block
   left open fails the check.
 - Fences follow CommonMark. A fence line starts with at most 3 spaces: a
-  code block at the top level or directly in a first-level list item (`-`
-  or a number 1-9), never in a nested list item or in a `>` quote; otherwise
+  code block at the top level or directly in a first-level `-` item (the
+  check also accepts one under a numbered item, but a report has no
+  numbered lists), never in a nested list item or in a `>` quote; otherwise
   the fence is not recognised and the command's constants are checked. A
   block opens with 3 or more backticks or tildes (a backtick fence has no
   backtick after it) and closes only on a line of the same character, at
@@ -129,7 +128,8 @@ numbers this way:
    - ❌ problem found - a fault with no fix the user can apply themselves
      (for example failing hardware); the section says who can help.
 
-5. One section per finding (`## 1. <name>`), most important first:
+5. One section per finding (`## 1. <name>`, `## 2. <name>` and so on, in
+   order from 1), most important first:
    - what happened, with the numbers and times from the JSON and the ids
      (`g3`, `a1`);
    - a quoted sample from the group's `sample` (a `>` block, shortened if

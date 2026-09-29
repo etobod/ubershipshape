@@ -59,40 +59,37 @@ class TestNoHtml(CheckerTestCase):
                 self.assertEqual(code, 0, output)
 
 
-class TestListDelimiter(CheckerTestCase):
-    def test_sibling_needs_same_delimiter(self):
+class TestParenDelimiter(CheckerTestCase):
+    def test_number_after_text_is_checked_whatever_the_delimiter(self):
         self.summary({"count": 3})
-        with self.subTest(case="other delimiter is not a sibling"):
+        with self.subTest(case="paren number after a dot item"):
             code, output = self.run_check(["1. a", "text", "7) b", *NOT_CHECKED])
             self.assertEqual(code, 1, output)
             self.assertIn(": 7 is not", output)
 
-        with self.subTest(case="item with other delimiter ends the search"):
+        with self.subTest(case="paren number after mixed items"):
             code, output = self.run_check(["1) x", "1. a", "text", "2) b", *NOT_CHECKED])
             self.assertEqual(code, 1, output)
             self.assertIn(": 2 is not", output)
 
-        with self.subTest(case="same delimiter is a sibling"):
-            code, output = self.run_check(["1) a", "text", "2) b", *NOT_CHECKED])
-            self.assertEqual(code, 0, output)
 
-
-class TestSiblingSearch(CheckerTestCase):
-    def test_paragraph_number_in_item_does_not_stop_the_search(self):
+class TestNumberInItem(CheckerTestCase):
+    def test_number_continuing_a_numbered_item_is_checked(self):
         self.summary({"count": 3})
         code, output = self.run_check(["1. First item", "   412. more", "2. second",
                                        *NOT_CHECKED])
         self.assertEqual(code, 1, output)
         self.assertIn("412", output)
-        self.assertNotIn(": 2 is not", output)
+        self.assertIn(": 2 is not", output)
 
 
 class TestSetextUnderline(CheckerTestCase):
-    def test_setext_underline_is_a_boundary(self):
+    def test_numbers_near_a_setext_underline_are_checked(self):
         self.summary({"count": 3})
-        with self.subTest(case="underline after text ends the paragraph"):
+        with self.subTest(case="number after a setext heading is checked"):
             code, output = self.run_check(["Title", "===", "2. Next", *NOT_CHECKED])
-            self.assertEqual(code, 0, output)
+            self.assertEqual(code, 1, output)
+            self.assertIn(": 2 is not", output)
 
         with self.subTest(case="number mid paragraph is still checked"):
             code, output = self.run_check(["Some text", "2. Next", *NOT_CHECKED])
