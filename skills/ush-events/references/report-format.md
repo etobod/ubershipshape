@@ -67,17 +67,24 @@ numbers this way:
   less fails the check. Never open a fence on the line of a list marker
   (`- ```powershell`): write the item's text after the marker and the
   fence on its own line below; a fence after a marker fails the check.
-- No HTML. The only HTML comments are the `ush:` markers. A marker is the
-  whole line, never in a `>` quote or a list item, with nothing after it.
-  Any other `<!--` fails the check, wherever it stands: in text, in a
-  quote, after a backslash or in inline code. Write a literal `<!--` (in a
-  quoted sample) as `&lt;!--`; a preview shows it as the opener. Any other
-  line whose text starts with `<` after its `>` quote markers, indent and
-  list markers (`-`, `+`, `*`, `1.`, `1)`) fails the check, and so does an
-  HTML block such as `<details>`: it could hide text from the check. A quoted line (for
-  example an event's `sample`) must never start with `<`: write it as
-  `\<` (`> \<Data> text`). Inside a code block `<` is fine
-  (`<# ... #>` in PowerShell).
+- No HTML and no links. The only HTML comments are the `ush:` markers. A
+  marker is the whole line, never in a `>` quote or a list item, with
+  nothing after it. Any other `<!--` fails the check, wherever it stands: in
+  text, in a quote, after a backslash or in inline code. Write a literal
+  `<!--` (in a quoted sample) as `&lt;!--`; a preview shows it as the opener.
+  Outside code blocks, `<` directly before a letter, `?`, `!` or `/` fails the
+  check anywhere in a line (a tag such as `<details>` or `<span>`, an
+  autolink, `<?...`, `<![CDATA[`), and so do `]:` (a link reference
+  definition) and `](` (a link or an image): a preview hides them or their
+  target. Write a literal `<` there as `&lt;` (an event's `sample`:
+  `> &lt;Data> text`). `<` before a space, a digit or `=` is text (`a < b`,
+  `<= 3`). A placeholder such as `&lt;data dir>` goes in plain text or in a
+  code block, never in inline code: inline code shows `&lt;` as it is and
+  `<` fails the check. Name items in plain text, never as a link. Write a
+  literal `]` before `:` or `(` (an event's `sample`) as `&rsqb;`
+  (`> proc[x&rsqb;: text`); a preview shows it as `]`, and `\]` still fails
+  the check. Inside a
+  code block `<`, `]:` and `](` are fine (`<# ... #>` in PowerShell).
 - Every other number is checked, in text, tables and quotes.
   Do not add up, average or convert numbers yourself; do not convert times to
   another time zone (the JSON times are UTC; write them as UTC or say so).

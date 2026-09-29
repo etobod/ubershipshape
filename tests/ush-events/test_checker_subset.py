@@ -52,6 +52,7 @@ class TestNoHtml(CheckerTestCase):
                                              "  There were 412 events.", "", "  " + B3],
             "html after a bullet and a tab": ["-\t<details>", "  " + B3, "  </details>",
                                               "  There were 412 events.", "", "  " + B3],
+            "escaped angle bracket in a quote": ["> \\<tag> text"],
         }
         for case, body in rejected.items():
             with self.subTest(case=case):
@@ -61,7 +62,7 @@ class TestNoHtml(CheckerTestCase):
         accepted = {
             "powershell block comment inside a code block": [B3 + "powershell",
                                                              "<# note #>", B3],
-            "escaped angle bracket in a quote": ["> \\<tag> text"],
+            "entity angle bracket in a quote": ["> &lt;tag> text"],
         }
         for case, body in accepted.items():
             with self.subTest(case=case):

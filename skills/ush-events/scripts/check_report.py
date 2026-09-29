@@ -47,13 +47,13 @@ Rules (see ``references/report-format.md``):
   not be read), requires nothing. Boot sessions, noise items, reliability
   records, groups cut from the summary and ``ush:detail`` items are not
   required: the report selects or summarises them.
-- No HTML. Outside code blocks, only the ush: marker lines hold an HTML
-  comment: a marker is the whole line (not in a quote or a list item) with
-  one ``<!--`` and one ``-->`` and nothing after it. Any other ``<!--``, in
-  inline code or after a backslash too, is an error; a literal one is written
-  ``&lt;!--``. A line whose text (what is left after its quote markers, indent
-  and list markers) starts with ``<`` is an error too; a literal ``<`` there
-  is written ``\\<``.
+- No HTML and no links. Outside code blocks, only the ush: marker lines hold
+  an HTML comment: a marker is the whole line (not in a quote or a list item)
+  with one ``<!--`` and one ``-->`` and nothing after it. Any other ``<!--``,
+  in inline code or after a backslash too, is an error; a literal one is
+  written ``&lt;!--``. So is ``<`` before a letter, ``?``, ``!`` or ``/``
+  anywhere in a line (written ``&lt;``), ``]:`` and ``](``. ``<`` before a
+  space, a digit or ``=`` is text.
 
 JSON files are tokenized from their parsed values (strings, numbers and keys),
 not from the raw text, so ``\\u0105`` escapes cannot supply numbers. File paths and
@@ -113,6 +113,7 @@ CLOSING_FENCE = re.compile(r"^[ \t]*(?P<fence>`{3,}|~{3,})[ \t]*$")
 HEADING = re.compile(r"^ {0,3}#{1,6}\s")
 # One leading piece of a line that is not its text: indent, a quote marker, or
 # a list marker followed by a space, a tab or the end of the line.
+RAW_HTML = re.compile(r"<[A-Za-z?!/]")
 LINE_PREFIX = re.compile(r"^(?:[ \t]+|>|(?:[-+*]|[0-9]{1,9}[.)])(?=[ \t]|$))")
 
 EXIT_OK, EXIT_NUMBERS, EXIT_ERROR = 0, 1, 2
@@ -426,14 +427,16 @@ def _marker_fence(line: str) -> bool:
 def _reject_html(lines: list[str], fenced: set[int]) -> None:
     """Raise CheckError for an HTML line outside the code blocks.
 
-    Only the ush: marker lines may hold an HTML comment: a preview hides a
-    comment, so an id in it would count as named without being shown. A marker
-    is the whole raw line (not in a quote or a list item) with one ``<!--`` and
-    one ``-->``. Any other ``<!--``, wherever it stands, is an error. A line's
-    text is what is left after stripping its quote markers, indent and list
-    markers again and again; text starting with ``<`` is an error too: an HTML
-    block could hide text from the check (a ``<details>`` line turns the fence
-    after it into HTML).
+    A preview hides comments, raw HTML, link targets and link reference
+    definitions, so an id in them would count as named without being shown.
+    Only the ush: marker lines may hold an HTML comment: a marker is the whole
+    raw line (not in a quote or a list item) with one ``<!--`` and one ``-->``.
+    Any other ``<!--``, wherever it stands, is an error; so is ``<`` before a
+    letter, ``?``, ``!`` or ``/`` (every HTML tag, block start, autolink,
+    processing instruction or CDATA), ``]:`` (a link reference definition,
+    also one whose label spans lines) and ``](`` (a link or image target).
+    These are banned outright, in inline code or after a backslash too,
+    rather than recognised.
     """
     for index, line in enumerate(lines):
         if index in fenced:
@@ -445,13 +448,20 @@ def _reject_html(lines: list[str], fenced: set[int]) -> None:
                 f"line {index + 1} has an HTML comment: only the ush: marker lines may; "
                 f"write a literal '<!--' as '&lt;!--'"
             )
-        text = line
-        while (prefix := LINE_PREFIX.match(text)) and prefix.end():
-            text = text[prefix.end():]
-        if text.startswith("<"):
+        if RAW_HTML.search(line):
             raise CheckError(
-                f"line {index + 1} starts with '<': the report format has no HTML; "
-                f"write a literal '<' at the start of a line (a quoted sample) as '\\<'"
+                f"line {index + 1} has raw HTML: a preview may hide it; write a literal '<' "
+                f"before a letter, '?', '!' or '/' as '&lt;'"
+            )
+        if "]:" in line:
+            raise CheckError(
+                f"line {index + 1} has ']:': a preview may hide it as a link reference "
+                f"definition; name items in plain text"
+            )
+        if "](" in line:
+            raise CheckError(
+                f"line {index + 1} has a link: a preview shows only its text; name items "
+                f"in plain text, without links"
             )
 
 
