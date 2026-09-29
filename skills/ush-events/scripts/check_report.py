@@ -111,9 +111,10 @@ FENCE = re.compile(r"^ {0,3}(?P<fence>`{3,}|~{3,})(?P<rest>.*)$")
 # A line shaped like a closing fence, at any indent.
 CLOSING_FENCE = re.compile(r"^[ \t]*(?P<fence>`{3,}|~{3,})[ \t]*$")
 HEADING = re.compile(r"^ {0,3}#{1,6}\s")
+# The start of any raw HTML: a tag, an autolink, a processing instruction or CDATA.
+RAW_HTML = re.compile(r"<[A-Za-z?!/]")
 # One leading piece of a line that is not its text: indent, a quote marker, or
 # a list marker followed by a space, a tab or the end of the line.
-RAW_HTML = re.compile(r"<[A-Za-z?!/]")
 LINE_PREFIX = re.compile(r"^(?:[ \t]+|>|(?:[-+*]|[0-9]{1,9}[.)])(?=[ \t]|$))")
 
 EXIT_OK, EXIT_NUMBERS, EXIT_ERROR = 0, 1, 2
