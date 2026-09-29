@@ -393,7 +393,7 @@ class TestCollect(CollectTestCase):
             self.assertRegex(script, r"Level\s*=\s*1,\s*2,\s*3")
             self.assertIn("StartTime", script)
 
-        # Pass B: System only, the ten boot and anomaly Ids.
+        # Pass B: System only, the eleven boot, shutdown status and anomaly Ids.
         script = scripts["B:System"][0]
         self.assertIn("LogName='System'", script)
         self.assertNotIn("'Application'", script)
@@ -402,7 +402,7 @@ class TestCollect(CollectTestCase):
         self.assertIsNotNone(match, script)
         self.assertEqual(
             sorted(int(i) for i in match.group(1).split(",") if i.strip()),
-            [12, 27, 41, 506, 507, 1001, 6005, 6006, 6008, 6009],
+            [12, 20, 27, 41, 506, 507, 1001, 6005, 6006, 6008, 6009],
         )
 
         # The oldest record of each log, without a level filter.

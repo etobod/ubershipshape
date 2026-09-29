@@ -149,11 +149,16 @@ numbers this way:
    sessions whose `boot_type` is not `cold`, each on its own (no sums):
    `fast_startup`, or `null` = the type is unknown (always in session 0),
    never read as Fast Startup. `clean_shutdown` `null` before a Fast Startup
-   boot, or before a boot whose type could not be read (see "not checked"),
-   means "unknown", not "unclean". A `fast_startup` session
+   boot, before a boot whose type could not be read (see "not checked"), or
+   before a boot (cold or without a type) that reported the last shutdown as
+   successful (a Fast Startup or hibernate shutdown writes no 6006), means
+   "unknown", not "unclean". A 6008 or Kernel-Power 41 in the following
+   session keeps `false`, even when that session is `fast_startup`. A `fast_startup` session
    does not take the next boot's markers (a Fast Startup boot writes only its
    Kernel-Boot 27), so the anomalies listed in a `fast_startup` session
-   belong to it.
+   belong to it. A session named in "not checked" as joined by a Fast Startup
+   Kernel-Boot 27 without a typed one of its own is not certainly Fast
+   Startup: name it there, with the ids from that entry.
 
 8. Stability (Reliability Monitor): from `reliability` and
    `reliability_records`.

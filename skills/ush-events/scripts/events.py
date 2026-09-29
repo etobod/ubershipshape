@@ -56,6 +56,7 @@ BOOT = (EVENTLOG, 6005)
 OS_VERSION_AT_BOOT = (EVENTLOG, 6009)
 # The markers every boot writes once each, in an order that varies.
 BOOT_MARKERS = (OS_START, OS_VERSION_AT_BOOT, BOOT)
+EVENTLOG_START = (OS_VERSION_AT_BOOT, BOOT)  # the event log block of a boot
 # Kernel-Boot 27: the boot type is Properties[0]. Types 0 (cold) and 1 (hybrid,
 # Fast Startup) are a boot marker of their own; 2 (resume from hibernation) is not.
 # A hybrid boot writes only its 27 of type 1, none of BOOT_MARKERS, so a session
@@ -63,6 +64,10 @@ BOOT_MARKERS = (OS_START, OS_VERSION_AT_BOOT, BOOT)
 KERNEL_BOOT = ("Microsoft-Windows-Kernel-Boot", 27)
 BOOT_TYPES = {"0": "cold", "1": "fast_startup"}
 HIBERNATE_RESUME = "2"
+# Kernel-Boot 20: a cold boot writes the success of the last shutdown in
+# Properties[0] ("True" or "False") after its Kernel-General 12. A Fast
+# Startup or hibernate shutdown writes no 6006, but its status is "True".
+LAST_SHUTDOWN = ("Microsoft-Windows-Kernel-Boot", 20)
 CLEAN_SHUTDOWN = (EVENTLOG, 6006)
 UNEXPECTED_SHUTDOWN = (EVENTLOG, 6008)
 KERNEL_POWER_41 = (KERNEL_POWER, 41)
@@ -258,7 +263,7 @@ def analyze(events: list[dict], noise: list[dict], window=None, coverage=None,
         key=lambda pair: (pair[0], str(pair[1].get("LogName")), pair[1].get("RecordId") or 0),
     )
     groups, noise_items = _group(timed, noise, window, coverage, trend_rule)
-    boots, boot_of, unread_types = _boots(timed)
+    boots, boot_of, unread_types, uncertain = _boots(timed)
     return {
         "groups": groups,
         "noise": noise_items,
@@ -266,6 +271,7 @@ def analyze(events: list[dict], noise: list[dict], window=None, coverage=None,
         "anomalies": _anomalies(timed, boot_of),
         "unreadable": unreadable,
         "unread_boot_types": unread_types,
+        "uncertain_boots": uncertain,
     }
 
 
@@ -363,8 +369,9 @@ def _system_order(timed: list[tuple]) -> list[int]:
     return system
 
 
-def _boots(timed: list[tuple]) -> tuple[list[dict], list[int], int]:
-    """Boot sessions, the session of each event and the number of unread boot types.
+def _boots(timed: list[tuple]) -> tuple[list[dict], list[int], int, list[int]]:
+    """Boot sessions, the session of each event, the number of unread boot types
+    and the indexes of sessions whose boundary is uncertain.
 
     Sessions are read from the System log in RecordId order, which is the
     order of writing and does not move when the clock is corrected at boot.
@@ -376,8 +383,12 @@ def _boots(timed: list[tuple]) -> tuple[list[dict], list[int], int]:
     ahead of the event log's. A boot that lost one of its markers may take a
     marker of the next boot: the edge of the session shifts, but no session
     is invented. The
-    session starts at the earliest time among its markers. Kernel-Power 41 and EventLog 6008 of a crash are written in this
-    block or after it, so they fall into the boot that reports the crash.
+    session starts at the earliest time among its markers. Kernel-Power 41
+    of a crash is written after the markers of the boot that reports it. An
+    EventLog 6008 comes with that boot's event log block, before or after
+    its markers, so it joins the session of the System event right after
+    it when that is an EventLog 6009 or 6005, and otherwise the session it
+    was read in. Both fall into the boot that reports the crash.
     Events of other logs join the most recent session that started at or
     before their time.
 
@@ -389,7 +400,12 @@ def _boots(timed: list[tuple]) -> tuple[list[dict], list[int], int]:
     be running, for a session followed by a Fast Startup boot (that shutdown
     hibernates the kernel and writes no 6006, so it is unknown), and for a
     session followed by a boot whose only 27 had no readable type (it may
-    have been Fast Startup).
+    have been Fast Startup), and for a session followed by a boot whose
+    first Kernel-Boot 20 says the last shutdown succeeded ("True") and that
+    holds no EventLog 6008 or Kernel-Power 41: a Fast Startup or hibernate
+    shutdown after which the boot was cold. A crash (an EventLog 6008 or
+    Kernel-Power 41 in the following session) keeps False whatever its
+    status or boot type says.
 
     Kernel-Boot 27 of type 0 (cold) or 1 (Fast Startup) is a marker of its
     own kind under the same rule; the first one in a session sets its
@@ -406,7 +422,10 @@ def _boots(timed: list[tuple]) -> tuple[list[dict], list[int], int]:
     takes no Kernel-General 12, EventLog 6009 or 6005: a Fast Startup boot
     writes only its 27, so such a marker is the next boot's and opens a new
     session, with that boot's crash events. A session opened by 12, 6009 or
-    6005 still takes a later 27 of type 1 and the other markers.
+    6005 still takes a later 27 of type 1 and the other markers. Such a
+    session had no typed 27 of its own when the 27 of type 1 joined it, so
+    that 27 may have been a separate hybrid boot: its index is returned as
+    uncertain, and the sessions are not split.
     """
     system = _system_order(timed)
 
@@ -419,6 +438,8 @@ def _boots(timed: list[tuple]) -> tuple[list[dict], list[int], int]:
     resumes_before_first = 0  # hibernation resumes before the first boot: session 0
     unread: set[int] = set()  # Kernel-Boot 27 without a readable type: in no session
     unread_pending = False  # such a 27 seen for the next session to open
+    uncertain: list[int] = []  # sessions a 27 of type 1 joined while untyped
+    pending_6008: tuple[int, int] | None = None  # (event, session) of a 6008 not yet placed
     for i in system:
         moment, ev = timed[i]
         marker = key(ev)
@@ -444,6 +465,8 @@ def _boots(timed: list[tuple]) -> tuple[list[dict], list[int], int]:
             joins = (not closed and marker not in seen
                      and not (hybrid and marker in BOOT_MARKERS))
             if joins:
+                if boot_type == "fast_startup" and boots[-1]["boot_type"] is None:
+                    uncertain.append(boots[-1]["index"])
                 seen.add(marker)
                 if moment < starts[-1]:
                     boots[-1]["start"] = iso(moment)
@@ -465,7 +488,27 @@ def _boots(timed: list[tuple]) -> tuple[list[dict], list[int], int]:
             boots[-1]["end"] = iso(moment)
             boots[-1]["clean_shutdown"] = True
             closed = True
+        # Internal fields for the rule below; removed before returning.
+        if marker == LAST_SHUTDOWN and boots and "last_shutdown" not in boots[-1]:
+            boots[-1]["last_shutdown"] = _first_property(ev)
         boot_of[i] = len(starts)
+        # A 6008 is written in the event log block of the boot that reports
+        # the crash. Right before that boot's 6009 or 6005 it belongs to
+        # their session; otherwise to the session it was read in.
+        if pending_6008 is not None:
+            index, session = pending_6008
+            if marker in EVENTLOG_START:
+                session = len(starts)
+            boot_of[index] = session
+            if session:
+                boots[session - 1]["crash"] = True
+            pending_6008 = None
+        if marker == UNEXPECTED_SHUTDOWN:
+            pending_6008 = (i, len(starts))
+        elif marker == KERNEL_POWER_41 and boots:
+            boots[-1]["crash"] = True
+    if pending_6008 is not None and pending_6008[1]:
+        boots[pending_6008[1] - 1]["crash"] = True
 
     for i, (moment, _) in enumerate(timed):
         if boot_of[i] is None:
@@ -483,12 +526,18 @@ def _boots(timed: list[tuple]) -> tuple[list[dict], list[int], int]:
                          "hibernate_resumes": resumes_before_first})
     for boot, following in itertools.pairwise(boots):
         unknown_type = following["boot_type"] is None and following.get("unread_type")
-        if (boot["clean_shutdown"] is None and following["boot_type"] != "fast_startup"
-                and not unknown_type):
+        succeeded = (str(following.get("last_shutdown")).lower() == "true"
+                     and not following.get("crash"))
+        # A 6008 or 41 proves the crash even when a joined 27 typed the
+        # following session Fast Startup.
+        if boot["clean_shutdown"] is None and (following.get("crash") or (
+                following["boot_type"] != "fast_startup"
+                and not unknown_type and not succeeded)):
             boot["clean_shutdown"] = False
     for boot in boots:
-        boot.pop("unread_type", None)
-    return boots, boot_of, len(unread)
+        for field in ("unread_type", "last_shutdown", "crash"):
+            boot.pop(field, None)
+    return boots, boot_of, len(unread), uncertain
 
 
 def _anomalies(timed: list[tuple], boot_of: list[int]) -> list[dict]:
@@ -570,7 +619,7 @@ SKILL = "ush-events"
 LOGS = ("System", "Application")
 # Pass B: boots, shutdowns, sleep and crashes. Most are level 4, which the
 # level 1-3 filter of pass A drops.
-PASS_B_IDS = (12, 27, 41, 506, 507, 1001, 6005, 6006, 6008, 6009)
+PASS_B_IDS = (12, 20, 27, 41, 506, 507, 1001, 6005, 6006, 6008, 6009)
 NO_MATCH = "NoMatchingEventsFound"
 SUMMARY_MAX_CHARS = 35000
 STDERR_MAX = 1000
@@ -829,7 +878,8 @@ def fit_budget(summary: dict, limit: int = SUMMARY_MAX_CHARS) -> str:
     """Cut groups from the end until the summary fits; never anything else.
 
     Groups are ordered by count, so the rarest go first. ``truncated`` says
-    how many were cut; the full list stays in the detail file.
+    how many were cut; the full list stays in the detail file. When the
+    summary does not fit even with every group cut, ``not_checked`` says so.
     """
     groups = summary["groups"]
     text = dump(summary)
@@ -837,9 +887,18 @@ def fit_budget(summary: dict, limit: int = SUMMARY_MAX_CHARS) -> str:
         return text
     # Estimate how many groups fit, then correct one group at a time.
     base = len(dump({**summary, "groups": [], "truncated": len(groups)}))
+    if base > limit:
+        summary["groups"] = []
+        summary["truncated"] = len(groups)
+        summary["not_checked"] = summary["not_checked"] + [{
+            "what": f"summary over its size limit of {limit} characters",
+            "reason": "all groups were cut and the summary still does not fit; only groups "
+                      "are ever cut, all lists are complete in the detail file",
+        }]
+        return dump(summary)
     keep, size = 0, base
     for group in groups:
-        size += len(dump(group)) + 1
+        size += len(dump(group)) + (1 if keep else 0)  # a comma before all but the first
         if size > limit:
             break
         keep += 1
@@ -1055,6 +1114,15 @@ def build_summary(now, days, sources, analysis, not_checked, summary_file, detai
         # Without pass B the boot sessions are unknown, not "none".
         boots = None
         anomalies = [{**item, "boot": None} for item in anomalies]
+    uncertain = sorted(analysis.get("uncertain_boots", []))
+    if boots is not None and uncertain:
+        ids = ", ".join(f"b{index}" for index in uncertain)
+        not_checked = not_checked + [{
+            "what": f"boot sessions {ids}: a Fast Startup Kernel-Boot 27 joined a session "
+                    "without a typed Kernel-Boot 27",
+            "reason": "it may be a separate hybrid boot; the boot_type of these sessions "
+                      "and the clean_shutdown before them are uncertain",
+        }]
     dumps = link_dumps(anomalies, dumps)
     return {
         "schema_version": SCHEMA_VERSION,

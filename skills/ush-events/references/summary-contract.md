@@ -25,8 +25,10 @@ with `--detail <id>` (see below), never by reading raw captures.
 
 The summary is compact ASCII JSON. To keep it within 35 000 characters only
 `groups` are cut, from the end (the rarest); `truncated` counts them. Nothing
-else is ever cut, so a window with very many anomalies or boots can still
-exceed the limit; the full lists are in the detail file either way.
+else is ever cut. When the summary does not fit even with every group cut
+(a window with very many anomalies or boots), it goes out over the limit and
+`not_checked` gets one item saying so; the full lists are in the detail file
+either way.
 
 ## Summary fields
 
@@ -40,7 +42,7 @@ exceed the limit; the full lists are in the detail file either way.
 | `groups` | list | level 1-3 events grouped by log, provider and Id (known noise excluded), most frequent first; ids `g1`, `g2`, ... |
 | `noise` | list | groups that match the known-noise list `data/noise.json`, with `count` and `reason`; ids `n1`, `n2`, ... Noise is counted, never hidden |
 | `boots` | list or null | boot sessions; id `b<index>` (`b0` is the part of a session that began before the window). `null` when System pass B was unreadable: sessions are unknown, and every anomaly's `boot` is `null` too |
-| `anomalies` | list | bugchecks, unexpected shutdowns, Kernel-Power 41, sleep without wake; ids `a1`, `a2`, ... Never truncated |
+| `anomalies` | list | bugchecks, unexpected shutdowns, Kernel-Power 41, sleep without wake; ids `a1`, `a2`, ... `boot` of a 6008 is the session of the EventLog 6009 or 6005 right after it, otherwise the session it was read in (the event log writes it before or after the markers of the boot that reports the crash). Never truncated |
 | `reliability` | object | the daily Windows stability index from the Reliability Monitor, see below. Always present |
 | `reliability_records` | list or null | Reliability Monitor records in the window grouped by source and Id, most frequent first; ids `r1`, `r2`, ... Never truncated. `null` when the records could not be read |
 | `dumps` | object | the memory dump settings and files, linked to bugchecks by path, see below. Always present |
@@ -87,11 +89,19 @@ follows that is not Fast Startup, also when that boot wrote no Kernel-Boot
 session followed by a Fast Startup boot: that shutdown hibernates the kernel
 and writes no 6006, so it is unknown, not unclean; and for a session
 followed by a boot whose Kernel-Boot 27 had no readable type, since that
-boot may have been Fast Startup), `boot_type` (`cold` or
+boot may have been Fast Startup; and for a session followed by a boot whose
+first Kernel-Boot 20 says the last shutdown succeeded (`Properties[0]`
+"True") and that holds no EventLog 6008 or Kernel-Power 41: a Fast Startup
+or hibernate shutdown after which the image was not loaded, whether the
+boot is typed `cold` or has no Kernel-Boot 27; a crash, an EventLog 6008 or
+Kernel-Power 41 in the following session, keeps `false` whatever its
+Kernel-Boot 20 or boot type says), `boot_type` (`cold` or
 `fast_startup`, from the first Kernel-Boot 27 of type 0 or 1 in the session;
 `null` without one, always for session 0; a session opened by a
 Kernel-Boot 27 of type 1 does not take the next boot's markers: a later
-Kernel-General 12, EventLog 6009 or 6005 opens a new session) and `hibernate_resumes` (the
+Kernel-General 12, EventLog 6009 or 6005 opens a new session; a session opened by
+12, 6009 or 6005 takes a later Kernel-Boot 27 of type 1, and when it had no
+typed 27 yet it is named in `not_checked`) and `hibernate_resumes` (the
 number of Kernel-Boot 27 of type 2, resumes from hibernation, in the
 session; 0 without any; those before the first boot of the window count in
 session 0).
@@ -188,7 +198,7 @@ One entry per pass:
 
 - `System` pass `A` and `Application` pass `A`: levels 1-3 in the window,
   read separately so a failure of one log does not take the other.
-- `System` pass `B`: Ids 12, 27, 41, 506, 507, 1001, 6005, 6006, 6008, 6009
+- `System` pass `B`: Ids 12, 20, 27, 41, 506, 507, 1001, 6005, 6006, 6008, 6009
   in the window (boots, boot type, shutdowns, sleep, crashes; most are
   level 4).
 
@@ -230,13 +240,22 @@ a time gap also `from` and `to` (ISO 8601). Items are added for:
   itself is under `unreadable` in the detail file);
 - Kernel-Boot 27 events without a readable boot type (one item with their
   count; they are left out of `boot_type` and `hibernate_resumes`);
+- boot sessions that a Kernel-Boot 27 of type 1 joined while they had no
+  typed Kernel-Boot 27 (one item naming their ids, e.g. "boot sessions b1,
+  b4: ..."; that 27 may have been a separate hybrid boot, so their `boot_type`
+  and the `clean_shutdown` before them are uncertain; the sessions are not
+  split; no item when `boots` is `null`);
 - each Reliability Monitor query that could not be read (stability index,
   records), reason = the error text. An `empty` query adds nothing;
 - Reliability Monitor measurements or records whose time (or index) could not
   be read (one item each with their count; they are left out);
 - memory dumps with `dumps.status` `unreadable` (the registry values or the
   dump folder), reason = the error text. A dump file with `readable: false`
-  is not an item here: it is listed in `dumps.files` with its `reason`.
+  is not an item here: it is listed in `dumps.files` with its `reason`;
+- the summary itself when it is over its size limit with every group cut
+  ("summary over its size limit of 35000 characters"; `groups` is empty and
+  `truncated` counts them all; nothing else was cut, the full lists are in
+  the detail file).
 
 The report names each item; an empty list is reported as "nothing".
 
