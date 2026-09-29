@@ -88,6 +88,55 @@ class TestUnclosedCodeBlock(CheckerTestCase):
         self.assertEqual(code, 0, output)
 
 
+B3 = "`" * 3
+B4 = "`" * 4
+
+
+class TestCommonMarkFences(CheckerTestCase):
+    def test_shorter_fence_does_not_close_a_longer_one(self):
+        # B4 block holds a B3 line; the number sits between two closed B4 blocks.
+        self.summary({"count": 3})
+        code, output = self.run_check([B4, B3, B4, "There were 412 events.", B4, B3, B4,
+                                       *NOT_CHECKED])
+        self.assertEqual(code, 1, output)
+        self.assertIn("412", output)
+
+    def test_fence_with_trailing_text_does_not_close(self):
+        self.summary({"count": 3})
+        code, output = self.run_check(["There were 3 events.", B3, "powercfg /a",
+                                       B3 + " text", "cmd 4096", *NOT_CHECKED])
+        self.assertEqual(code, 2, output)
+        self.assertIn("never closed", output)
+
+    def test_indented_four_spaces_is_not_a_fence(self):
+        self.summary({"count": 3})
+        code, output = self.run_check(["    " + B3, "    There were 412 events.", "    " + B3,
+                                       *NOT_CHECKED])
+        self.assertEqual(code, 1, output)
+        self.assertIn("412", output)
+
+    def test_info_string_opens_and_longer_fence_closes(self):
+        self.summary({"count": 3})
+        code, output = self.run_check(["There were 3 events.", B3 + "powershell",
+                                       "reg add HKLM /v Y /d 4096", B4, *NOT_CHECKED])
+        self.assertEqual(code, 0, output)
+
+        code, output = self.run_check([B3 + "powershell", "reg add HKLM /v Y /d 4096", B4,
+                                       "There were 412 events.", *NOT_CHECKED])
+        self.assertEqual(code, 1, output)
+        self.assertIn("412", output)
+
+    def test_deeply_indented_fence_is_checked(self):
+        # A block in a nested list item is not recognised (report-format.md forbids it),
+        # so its constants are checked like any text.
+        self.summary({"count": 3})
+        code, output = self.run_check(["- There were 3 events.", "  - nested item",
+                                       "     " + B3, "     cmd 4096", "     " + B3,
+                                       *NOT_CHECKED])
+        self.assertEqual(code, 1, output)
+        self.assertIn("4096", output)
+
+
 class TestMarkerInCodeBlock(CheckerTestCase):
     def test_marker_inside_a_code_block_does_not_count(self):
         self.summary({"count": 3})
@@ -128,6 +177,75 @@ class TestLatestIgnoresOtherSkills(CheckerTestCase):
         code, output = self.run_argv(["--latest", "--data-dir", str(self.root)])
         self.assertEqual(code, 0, output)
         self.assertIn("events-2026-09-28-1200.md", output)
+
+
+class TestIdsSupplyNoNumbers(CheckerTestCase):
+    def test_group_id_does_not_back_a_count(self):
+        # g17 is an id, not a reading; no count is 17.
+        groups = [{"id": f"g{i}", "count": 1000 + i} for i in range(1, 26)]
+        self.summary({"groups": groups, "truncated": 0})
+        code, output = self.run_check(["There were 17 critical errors.", *NOT_CHECKED])
+        self.assertEqual(code, 1, output)
+        self.assertIn("17", output)
+
+    def test_known_ids_are_skipped(self):
+        self.summary({"groups": [{"id": "g6", "count": 11}, {"id": "g22", "count": 2}],
+                      "truncated": 0})
+        code, output = self.run_check(["Wi-Fi: g6: 11, g22: 2", *NOT_CHECKED])
+        self.assertEqual(code, 0, output)
+
+    def test_unknown_id_shape_is_a_number(self):
+        quote = "> Sample: adapter b2 lost the link."
+        # b2 is not an id of any summary item and 2 is not a reading.
+        self.summary({"groups": [{"id": "g1", "count": 4}], "truncated": 0})
+        code, output = self.run_check([quote, *NOT_CHECKED])
+        self.assertEqual(code, 1, output)
+        self.assertIn(": 2 is not", output)
+
+        # With 2 among the readings the same token is backed.
+        self.summary({"groups": [{"id": "g1", "count": 2}], "truncated": 0})
+        code, output = self.run_check([quote, *NOT_CHECKED])
+        self.assertEqual(code, 0, output)
+
+    def test_truncated_group_ids_are_known(self):
+        # Two groups listed, three cut off: g3..g5 are known ids, g6 is not.
+        self.summary({"groups": [{"id": "g1", "count": 4}, {"id": "g2", "count": 7}],
+                      "truncated": 3})
+        code, output = self.run_check(["Group g5 was cut from the summary.", *NOT_CHECKED])
+        self.assertEqual(code, 0, output)
+
+        code, output = self.run_check(["Group g6 was cut from the summary.", *NOT_CHECKED])
+        self.assertEqual(code, 1, output)
+        self.assertIn(": 6 is not", output)
+
+
+class TestNumberingExemptions(CheckerTestCase):
+    def test_table_first_cell_must_be_its_position(self):
+        self.summary({"event_id": 41})
+        header = ["| # | Event |", "|---|---|"]
+        code, output = self.run_check([*header, "| 412 | Kernel-Power 41 |", *NOT_CHECKED])
+        self.assertEqual(code, 1, output)
+        self.assertIn("412", output)
+
+        code, output = self.run_check([*header, "| 1 | Kernel-Power 41 |",
+                                       "| 2 | Kernel-Power 41 |", *NOT_CHECKED])
+        self.assertEqual(code, 0, output)
+
+    def test_list_number_mid_paragraph_is_checked(self):
+        self.summary({"count": 3})
+        code, output = self.run_check(["Some text", "412. more text", *NOT_CHECKED])
+        self.assertEqual(code, 1, output)
+        self.assertIn("412", output)
+
+        code, output = self.run_check(["Some text", "", "412. more text", *NOT_CHECKED])
+        self.assertEqual(code, 0, output)
+
+    def test_list_continuation_and_heading_keep_exemption(self):
+        self.summary({"count": 4})
+        code, output = self.run_check(["Intro.", "", "1. text", "   continued text", "2. next",
+                                       "", "A plain paragraph line.", "## 3. Title",
+                                       *NOT_CHECKED])
+        self.assertEqual(code, 0, output)
 
 
 if __name__ == "__main__":

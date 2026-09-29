@@ -23,6 +23,11 @@ from pathlib import Path
 
 from tests.skill_loader import load_script, script_path
 
+
+def NO_DUMPS():
+    """Fake read_dumps: no memory dumps (the machine is never read)."""
+    return {"status": "empty", "reason": None, "settings": None, "files": []}
+
 SYSTEM = "System"
 APPLICATION = "Application"
 
@@ -135,6 +140,8 @@ class FakePowerShell:
         self.responses = {
             "oldest:System": ok(oldest(SYSTEM)),
             "oldest:Application": ok(oldest(APPLICATION)),
+            "R:metrics": ok([]),
+            "R:records": ok([]),
         }
         self.responses.update(responses or {})
         self.calls = []
@@ -172,7 +179,8 @@ class CollectTestCase(unittest.TestCase):
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
             code = self.events.main(
-                ["--data-dir", str(data_dir), *extra], run_ps=fake, now=now
+                ["--data-dir", str(data_dir), *extra], run_ps=fake, now=now,
+                read_dumps=NO_DUMPS,
             )
         return code, out.getvalue()
 
@@ -348,7 +356,8 @@ class TestCollect(CollectTestCase):
         scripts = {job: (script, out_path) for job, script, out_path in fake.calls}
         self.assertEqual(
             set(scripts),
-            {"A:System", "A:Application", "B:System", "oldest:System", "oldest:Application"},
+            {"A:System", "A:Application", "B:System", "oldest:System", "oldest:Application",
+             "R:metrics", "R:records"},
         )
         work = (data_dir / "work").resolve()
         projection = ("TimeCreated.ToString('o')", "ProviderName", "Id", "Level", "LogName",
@@ -361,6 +370,8 @@ class TestCollect(CollectTestCase):
             self.assertTrue(out_path.is_absolute(), out_path)
             self.assertEqual(out_path.parent.resolve(), work, out_path)
             self.assertIn(str(out_path), script, job)
+            if not job.startswith(("A:", "B:", "oldest:")):
+                continue  # the WMI jobs have their own projection (test_reliability.py)
             # The M2 projection, Properties as a list of strings.
             for name in projection:
                 self.assertIn(name, script, f"{job}: {name}")
@@ -382,7 +393,7 @@ class TestCollect(CollectTestCase):
             self.assertRegex(script, r"Level\s*=\s*1,\s*2,\s*3")
             self.assertIn("StartTime", script)
 
-        # Pass B: System only, the nine boot and anomaly Ids.
+        # Pass B: System only, the ten boot and anomaly Ids.
         script = scripts["B:System"][0]
         self.assertIn("LogName='System'", script)
         self.assertNotIn("'Application'", script)
@@ -391,7 +402,7 @@ class TestCollect(CollectTestCase):
         self.assertIsNotNone(match, script)
         self.assertEqual(
             sorted(int(i) for i in match.group(1).split(",") if i.strip()),
-            [12, 41, 506, 507, 1001, 6005, 6006, 6008, 6009],
+            [12, 27, 41, 506, 507, 1001, 6005, 6006, 6008, 6009],
         )
 
         # The oldest record of each log, without a level filter.
@@ -620,7 +631,7 @@ class TestCli(CollectTestCase):
             })
             out = io.StringIO()
             with redirect_stdout(out), redirect_stderr(io.StringIO()):
-                code = self.events.main(argv, run_ps=fake, now=NOW)
+                code = self.events.main(argv, run_ps=fake, now=NOW, read_dumps=NO_DUMPS)
             self.assertEqual(code, 0, out.getvalue()[:300])
             summary = self.parse(out.getvalue())
             self.assertIn("summary_file", summary)

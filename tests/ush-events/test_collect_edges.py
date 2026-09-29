@@ -10,6 +10,11 @@ from pathlib import Path
 
 from tests.skill_loader import load_script
 
+
+def NO_DUMPS():
+    """Fake read_dumps: no memory dumps (the machine is never read)."""
+    return {"status": "empty", "reason": None, "settings": None, "files": []}
+
 NOW = datetime(2026, 9, 28, 12, 0, tzinfo=timezone.utc)
 START = NOW - timedelta(days=30)
 
@@ -27,7 +32,7 @@ def invented(provider, event_id, level, log, record_id, time):
 def fake(answers):
     """run_ps that writes answers[job] (a list of events) or reports its error."""
     def run_ps(job, script, out_path):
-        answer = answers.get(job)
+        answer = answers.get(job, [] if job.startswith("R:") else None)
         if answer is None:
             return no_matches(job, script, out_path)
         if isinstance(answer, str):
@@ -79,7 +84,8 @@ class TestSummaryEdges(unittest.TestCase):
             out = Path(tmp) / "stdout.txt"
             with open(out, "w", encoding="utf-8") as handle, contextlib.redirect_stdout(handle):
                 code = self.events.main(["--data-dir", str(Path(tmp).absolute())],
-                                        run_ps=fake(answers), now=NOW)
+                                        run_ps=fake(answers), now=NOW,
+                                        read_dumps=NO_DUMPS)
             self.assertEqual(code, 0)
             return json.loads(out.read_text(encoding="utf-8"))
 

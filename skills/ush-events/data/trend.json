@@ -1,0 +1,6 @@
+{
+  "min_count": 4,
+  "factor": 2,
+  "min_delta": 3,
+  "reason": "The window is split at its midpoint; an event exactly at the midpoint counts in the second half. A group whose log does not cover the whole window, or whose log's oldest record could not be read, is 'unknown' (its halves are not comparable). A group with fewer than min_count events is 'too_few'. It is 'rising' when the second half has at least factor times as many events as the first half and at least min_delta more; 'falling' is the same with the halves swapped; anything else is 'stable'. The values are conservative because a false alarm is worse than a miss: 5 then 7 is stable, 0 then 5 is rising."
+}

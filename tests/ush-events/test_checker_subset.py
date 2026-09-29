@@ -1,0 +1,109 @@
+"""The narrow report format the checker understands in full (invented data only)."""
+
+import importlib
+import unittest
+
+# The shared base class; the package name has a hyphen, so import it by string.
+_edges = importlib.import_module("tests.ush-events.test_checker_edges")
+CheckerTestCase, NOT_CHECKED = _edges.CheckerTestCase, _edges.NOT_CHECKED
+
+B3 = "`" * 3
+
+
+class TestFenceIndent(CheckerTestCase):
+    def test_closing_fence_must_match_opening_indent(self):
+        with self.subTest(case="closing fence indented deeper than the opening one"):
+            # A renderer closes the block at the 4-space fence; 412 must not hide in it.
+            self.summary({"count": 3})
+            code, output = self.run_check(["- Fix:", "  " + B3, "  cmd", "    " + B3,
+                                           "  There were 412 events.", "  " + B3,
+                                           *NOT_CHECKED])
+            self.assertNotEqual(code, 0, output)
+            self.assertEqual(code, 2, output)
+
+        with self.subTest(case="closing fence at the opening indent"):
+            self.summary({"count": 3})
+            code, output = self.run_check(["- Fix:", "  " + B3, "  cmd", "  " + B3,
+                                           "- There were 3 events.", *NOT_CHECKED])
+            self.assertEqual(code, 0, output)
+
+
+class TestNoHtml(CheckerTestCase):
+    def test_html_block_is_rejected(self):
+        self.summary({"count": 3})
+        rejected = {
+            "html block hiding a fence": ["<details>", B3, "</details>",
+                                          "There were 412 events.", "", B3],
+            "comment not closed on its line": ["<!-- note", "There were 3 events."],
+            "html after a bullet marker": ["- <details>", "  " + B3, "  </details>",
+                                           "  There were 412 events.", "", "  " + B3],
+            "html after an ordered marker": ["1. <details>", "  " + B3, "  </details>",
+                                             "  There were 412 events.", "", "  " + B3],
+            "html after a bullet and a tab": ["-\t<details>", "  " + B3, "  </details>",
+                                              "  There were 412 events.", "", "  " + B3],
+        }
+        for case, body in rejected.items():
+            with self.subTest(case=case):
+                code, output = self.run_check([*body, *NOT_CHECKED])
+                self.assertEqual(code, 2, output)
+
+        accepted = {
+            "one-line comment": ["<!-- note -->", "There were 3 events."],
+            "powershell block comment inside a code block": [B3 + "powershell",
+                                                             "<# note #>", B3],
+            "escaped angle bracket in a quote": ["> \\<tag> text"],
+        }
+        for case, body in accepted.items():
+            with self.subTest(case=case):
+                code, output = self.run_check([*body, *NOT_CHECKED])
+                self.assertEqual(code, 0, output)
+
+
+class TestListDelimiter(CheckerTestCase):
+    def test_sibling_needs_same_delimiter(self):
+        self.summary({"count": 3})
+        with self.subTest(case="other delimiter is not a sibling"):
+            code, output = self.run_check(["1. a", "text", "7) b", *NOT_CHECKED])
+            self.assertEqual(code, 1, output)
+            self.assertIn(": 7 is not", output)
+
+        with self.subTest(case="item with other delimiter ends the search"):
+            code, output = self.run_check(["1) x", "1. a", "text", "2) b", *NOT_CHECKED])
+            self.assertEqual(code, 1, output)
+            self.assertIn(": 2 is not", output)
+
+        with self.subTest(case="same delimiter is a sibling"):
+            code, output = self.run_check(["1) a", "text", "2) b", *NOT_CHECKED])
+            self.assertEqual(code, 0, output)
+
+
+class TestSiblingSearch(CheckerTestCase):
+    def test_paragraph_number_in_item_does_not_stop_the_search(self):
+        self.summary({"count": 3})
+        code, output = self.run_check(["1. First item", "   412. more", "2. second",
+                                       *NOT_CHECKED])
+        self.assertEqual(code, 1, output)
+        self.assertIn("412", output)
+        self.assertNotIn(": 2 is not", output)
+
+
+class TestSetextUnderline(CheckerTestCase):
+    def test_setext_underline_is_a_boundary(self):
+        self.summary({"count": 3})
+        with self.subTest(case="underline after text ends the paragraph"):
+            code, output = self.run_check(["Title", "===", "2. Next", *NOT_CHECKED])
+            self.assertEqual(code, 0, output)
+
+        with self.subTest(case="number mid paragraph is still checked"):
+            code, output = self.run_check(["Some text", "2. Next", *NOT_CHECKED])
+            self.assertEqual(code, 1, output)
+            self.assertIn(": 2 is not", output)
+
+        with self.subTest(case="underline after a blank line is paragraph text"):
+            code, output = self.run_check(["", "===", "2. Next", *NOT_CHECKED])
+            self.assertEqual(code, 1, output)
+            self.assertIn(": 2 is not", output)
+
+
+if __name__ == "__main__":
+    unittest.main()

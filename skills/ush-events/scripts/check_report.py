@@ -19,13 +19,36 @@ Rules (see ``references/report-format.md``):
   (``18.09.2026`` -> 18, 9, 2026; leading zeros do not matter).
 - Not scanned: the ``ush:summary`` line, the ``ush:detail`` and
   ``ush:not-checked`` marker lines (their ids are checked separately, or carry
-  no figures), list and heading numbering at the start of a line (``1.``,
-  ``12)``, ``## 2.``) and the row number in the first cell of a table row
-  (``| 3 | ...``). Every other number is checked.
+  no figures); heading numbering (``## 2.``); list numbering at the start of a
+  line (``1.``, ``12)``, ``> 3.``) when it starts a list item (after a blank
+  line, heading, table row, marker, thematic break or a ``===`` underline
+  after text; or when it is 1; or when it continues a list of the same
+  delimiter, ``.`` or ``)``, see ``_list_items``), while any other ``412.``
+  after text is a number in the paragraph; the number in the first cell of
+  a table row when it equals the row's position among the table's data rows
+  (``| 3 | ...`` as the third row); and item ids (``g3``, ``n1``, ``a2``,
+  ``b0``, ``r4``, ``d1``) of the summary, of the ``ush:detail`` items and of the groups cut
+  from the summary. A token of that shape that is no such id is a number.
+  Every other number is checked.
+- Fenced code blocks are not scanned. Fences follow CommonMark: a fence line
+  starts with at most 3 spaces (a block at the top level or directly in a
+  first-level list item, ``-`` or a number 1-9; never in a nested list item or
+  in a ``>`` quote), then 3 or more backticks or tildes; a block closes only
+  on the same character, at least as long, with nothing after it, at exactly
+  the indent of its opening fence. Any other fence is not recognised and the
+  constants in it are checked. A line inside a block indented less than its
+  opening fence is an error, and so is a line shaped like the closing fence
+  at another indent (a renderer may close the block there).
+- No HTML. Outside code blocks, a line whose text (what is left after its
+  quote markers, indent and list markers) starts with ``<`` must be a
+  one-line comment ``<!-- ... -->``; any other such line is an error. A
+  literal ``<`` at the start of a line is written ``\\<``.
 
 JSON files are tokenized from their parsed values (strings, numbers and keys),
-not from the raw text, so ``\\u0105`` escapes cannot supply numbers. File paths
-(``summary_file``, ``detail_file``) supply none either. A hex token is backed
+not from the raw text, so ``\\u0105`` escapes cannot supply numbers. File paths and
+names (``summary_file``, ``detail_file``, ``name``, ``path``, ``dump_path``,
+``minidump_dir``, ``dump_file``), item ids (``id``) and references to them
+(``dump``, ``bugcheck``, ``bugcheck_candidates``) supply none either. A hex token is backed
 only by a hex value and a decimal token only by a decimal one. The
 ``ush:not-checked`` line must stand directly before or after a heading.
 ``--latest`` takes the newest ``events-*.md``, since other skills share ``reports/``.
@@ -41,7 +64,8 @@ import re
 import sys
 from pathlib import Path
 
-DETAIL_SECTIONS = ("groups", "noise", "boots", "anomalies")
+DETAIL_SECTIONS = ("groups", "noise", "boots", "anomalies", "reliability_records",
+                   "dump_files")
 
 SUMMARY_LINE = re.compile(r"^<!-- ush:summary (?P<path>\S.*?) -->\s*$")
 NOT_CHECKED_LINE = re.compile(r"^\s*<!--\s*ush:not-checked\s*-->\s*$")
@@ -51,16 +75,45 @@ DETAIL_LINE = re.compile(r"^\s*<!--\s*ush:detail\b(?P<ids>.*?)-->\s*$")
 TOKEN = re.compile(
     r"(?P<hex>(?<![0-9A-Za-z_])0[xX][0-9a-fA-F]+(?![0-9A-Za-z_]))|(?P<dec>[0-9]+)"
 )
-# Numbering at the start of a line: "1. ", "12) ", "## 2. ", "> 3. ".
-LIST_NUMBER = re.compile(r"^\s*(?:>\s*)*(?:#{1,6}\s+)?[0-9]+[.)](?=\s|$)")
+# Heading numbering: "## 2. ".
+HEADING_NUMBER = re.compile(r"^ {0,3}(?:>[ \t]*)*#{1,6}[ \t]+[0-9]+[.)](?=[ \t]|$)")
+# List numbering at the start of a line, bare, in a quote or after a bullet:
+# "1. ", "12) ", "> 3. ", "- 4. ". At most 3 spaces before a marker or the
+# number: 4 make an indented code block.
+LIST_NUMBER = re.compile(
+    r"^(?P<prefix>(?: {0,3}(?:>[ \t]?|[-+*][ \t]+))* {0,3})"
+    r"(?P<number>[0-9]+)(?P<delimiter>[.)])(?=[ \t]|$)"
+)
+THEMATIC_BREAK = re.compile(r"^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$")
 # Row number in the first cell of a table row: "| 3 | ...".
-TABLE_ROW_NUMBER = re.compile(r"^\s*\|\s*[0-9]+\s*(?=\|)")
+TABLE_ROW_NUMBER = re.compile(r"^\s*\|\s*(?P<number>[0-9]+)\s*(?=\|)")
+TABLE_ROW = re.compile(r"^\s*\|")
+TABLE_SEPARATOR = re.compile(r"^\s*\|[\s:|-]*-[\s:|-]*$")
+# An id of a summary or detail item: g3, n1, a2, b0, r4, d1 as a separate lowercase word.
+ITEM_ID = re.compile(r"(?<![0-9A-Za-z_])[gnabrd][0-9]+(?![0-9A-Za-z_])")
 
-# Summary keys whose values are file paths, not readings.
-PATH_KEYS = frozenset({"summary_file", "detail_file"})
+# Keys whose values are file paths or file names, not readings (a minidump is
+# named like 093026-54321-01.dmp).
+PATH_KEYS = frozenset({"summary_file", "detail_file", "name", "path", "dump_path",
+                       "minidump_dir", "dump_file"})
+# Keys whose values are item ids (g3, b0) or references to them, not readings.
+ID_KEYS = frozenset({"id", "dump", "bugcheck", "bugcheck_candidates"})
 REPORT_GLOB = "events-*.md"
-FENCE = re.compile(r"^\s*(```|~~~)")
-HEADING = re.compile(r"^\s*#{1,6}\s")
+# A fence (CommonMark): at most 3 spaces of indent, then 3 or more backticks or
+# tildes; the rest of an opening line is its info string.
+FENCE = re.compile(r"^ {0,3}(?P<fence>`{3,}|~{3,})(?P<rest>.*)$")
+# A line shaped like a closing fence, at any indent.
+CLOSING_FENCE = re.compile(r"^[ \t]*(?P<fence>`{3,}|~{3,})[ \t]*$")
+HEADING = re.compile(r"^ {0,3}#{1,6}\s")
+# A setext heading underline: at most 3 spaces, then only "=".
+SETEXT_UNDERLINE = re.compile(r"^ {0,3}=+[ \t]*$")
+# One leading piece of a line that is not its text: indent, a quote marker, or
+# a list marker followed by a space, a tab or the end of the line.
+LINE_PREFIX = re.compile(r"^(?:[ \t]+|>|(?:[-+*]|[0-9]{1,9}[.)])(?=[ \t]|$))")
+ONE_LINE_COMMENT = re.compile(r"^<!--.*-->[ \t]*$")
+QUOTE_MARKERS = re.compile(r"^ {0,3}>(?:[ \t]{0,3}>)*[ \t]?")
+# A line that starts a list item or a quote: "- a", "1. a", "2) a", "> a".
+LIST_OR_QUOTE = re.compile(r"^ {0,3}(?:>|(?:[-+*]|[0-9]{1,9}[.)])(?=[ \t]|$))")
 
 EXIT_OK, EXIT_NUMBERS, EXIT_ERROR = 0, 1, 2
 
@@ -85,8 +138,8 @@ def tokens(text: str):
 def json_values(data) -> set[tuple[str, int]]:
     """Number tokens of every key, string and number in parsed JSON.
 
-    The values of PATH_KEYS are skipped: a file path is not a reading, and its
-    digits would back numbers the report made up.
+    The values of PATH_KEYS and ID_KEYS are skipped: a file path or an item id
+    is not a reading, and its digits would back numbers the report made up.
     """
     found: set[tuple[str, int]] = set()
     stack = [data]
@@ -95,7 +148,7 @@ def json_values(data) -> set[tuple[str, int]]:
         if isinstance(item, dict):
             for key, value in item.items():
                 found.update(value for _, value in tokens(str(key)))
-                if key not in PATH_KEYS:
+                if key not in PATH_KEYS and key not in ID_KEYS:
                     stack.append(value)
         elif isinstance(item, list):
             stack.extend(item)
@@ -165,6 +218,7 @@ def check(report: Path) -> tuple[list[str], int]:
 
     # Code blocks are paste-ready commands: no markers and no reported numbers.
     fenced = _fenced_lines(lines)
+    _reject_html(lines, fenced)
     visible = [("" if index in fenced else line) for index, line in enumerate(lines)]
     lines = visible
 
@@ -173,7 +227,7 @@ def check(report: Path) -> tuple[list[str], int]:
             "the report has no '<!-- ush:not-checked -->' line before its "
             "'not checked' section"
         )
-    if not any(NOT_CHECKED_LINE.match(line) and _next_to_heading(lines, index)
+    if not any(NOT_CHECKED_LINE.match(line) and _next_to_heading(lines, index, fenced)
                for index, line in enumerate(lines)):
         raise CheckError(
             "the '<!-- ush:not-checked -->' line must stand directly before or after "
@@ -191,13 +245,35 @@ def check(report: Path) -> tuple[list[str], int]:
     for item in detail_items(summary, ids) if ids else []:
         allowed |= json_values(item)
 
+    known_ids = item_ids(summary) | set(ids)
+
+    list_items = _list_items(lines)
     problems, checked = [], 0
+    position = 0  # data-row position in the current table; 0 outside a table
+    row = 0  # row index in the current table: 0 header, 1 delimiter row
     for number, line in enumerate(lines[1:], start=2):
+        if TABLE_ROW.match(line):
+            row = row + 1 if TABLE_ROW.match(lines[number - 2]) else 0
+            if row == 0:
+                position = 0  # a new table: this is its header row
+            elif not (row == 1 and TABLE_SEPARATOR.match(line)):
+                position += 1
+        else:
+            position = row = 0
         if NOT_CHECKED_LINE.match(line) or DETAIL_LINE.match(line):
             continue
-        numbering = LIST_NUMBER.match(line) or TABLE_ROW_NUMBER.match(line)
+        numbering = HEADING_NUMBER.match(line)
+        if not numbering:
+            listed = LIST_NUMBER.match(line)
+            if listed and list_items.get(number - 1):
+                numbering = listed
+        if not numbering and position:
+            cell = TABLE_ROW_NUMBER.match(line)
+            if cell and int(cell["number"]) == position:
+                numbering = cell
         if numbering:
             line = line[numbering.end():]
+        line = ITEM_ID.sub(lambda m: " " if m.group() in known_ids else m.group(), line)
         for written, value in tokens(line):
             checked += 1
             if value not in allowed:
@@ -208,19 +284,192 @@ def check(report: Path) -> tuple[list[str], int]:
     return problems, checked
 
 
+def item_ids(summary) -> set[str]:
+    """Ids of the summary's items, and of the groups cut from it.
+
+    The cut groups are g<N+1>...g<N+truncated>, N being the number of groups
+    in the summary; the report is told to mention them.
+    """
+    found: set[str] = set()
+    stack = [summary]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            if isinstance(item.get("id"), str):
+                found.add(item["id"])
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+    if isinstance(summary, dict):
+        groups, truncated = summary.get("groups"), summary.get("truncated")
+        if (isinstance(groups, list) and isinstance(truncated, int)
+                and not isinstance(truncated, bool)):
+            found.update(f"g{n}" for n in range(len(groups) + 1, len(groups) + truncated + 1))
+    return found
+
+
+def _boundary_at(lines: list[str], at: int) -> bool:
+    """True when ``lines[at]`` is a block boundary (``_block_boundary``) or a
+    ``===`` setext underline under a paragraph of plain text. Right after a
+    boundary, or under a run of lines that holds a list item or quote line,
+    ``===`` is paragraph text (a lazy continuation in CommonMark), so it is no
+    boundary there."""
+    if _block_boundary(lines[at]):
+        return True
+    if not SETEXT_UNDERLINE.match(lines[at]) or at == 0 or _block_boundary(lines[at - 1]):
+        return False
+    for above in range(at - 1, -1, -1):
+        if _block_boundary(lines[above]):
+            break
+        if LIST_OR_QUOTE.match(lines[above]):
+            return False
+    return True
+
+
+def _block_boundary(line: str) -> bool:
+    """True for a line that no paragraph runs across: blank, heading, table row,
+    marker or thematic break, also inside a quote (``>`` alone is a blank line)."""
+    line = QUOTE_MARKERS.sub("", line, count=1)
+    return not line.strip(" \t") or bool(
+        HEADING.match(line) or TABLE_ROW.match(line) or line.lstrip().startswith("<!--")
+        or THEMATIC_BREAK.match(line)
+    )
+
+
+def _list_items(lines: list[str]) -> dict[int, bool]:
+    """For each numbered line (``LIST_NUMBER``), True when it starts a list item.
+
+    CommonMark: only a list starting at 1 may interrupt a paragraph, so after
+    text a number is list numbering only when it is 1 or continues a list: the
+    nearest earlier numbered line in the same run of lines (lazy or indented
+    continuation lines included) with as many ``>`` is itself a list item, and
+    this number stands left of that item's text (a sibling, not a line of its
+    text) and has the same delimiter (``.`` or ``)``). A list item with the
+    other delimiter left of the number ends the search: in CommonMark it
+    starts a new list, so the number is paragraph text. An item indented to
+    the number's own text column or further belongs to a nested list and is
+    skipped. A blank line does not end the search when every line right
+    below a blank one is indented to that item's text (a multi-paragraph
+    item). An earlier number that
+    is itself paragraph text is skipped and the search goes on upwards.
+    Otherwise ``412. `` after text is paragraph text, also inside a list item
+    or a quote.
+
+    Lines are decided top to bottom, so each search reads the earlier answers
+    instead of recomputing them: no recursion, time at most quadratic.
+    """
+    results: dict[int, bool] = {}
+    for index, line in enumerate(lines):
+        listed = LIST_NUMBER.match(line)
+        if listed:
+            results[index] = _starts_item(lines, index, listed, results)
+    return results
+
+
+def _starts_item(lines: list[str], index: int, listed: re.Match,
+                 results: dict[int, bool]) -> bool:
+    """One step of ``_list_items``: ``results`` holds every earlier numbered line."""
+    if int(listed["number"]) == 1 or index == 0 or _boundary_at(lines, index - 1):
+        return True
+    if _opens_container(lines, index, listed["prefix"]):
+        return True
+    width = len(listed["prefix"].expandtabs(4))
+    own_text = _text_column(lines[index], listed)
+    after_blank = None  # least indent of a line right below a blank line passed
+    for at in range(index - 1, -1, -1):
+        if not lines[at].strip(" 	"):
+            # A blank line inside a list item: the search goes on, and the
+            # item found must hold every line below a blank in its text.
+            below = _indent(lines[at + 1])
+            after_blank = below if after_blank is None else min(after_blank, below)
+            continue
+        if _boundary_at(lines, at):
+            return False
+        item = LIST_NUMBER.match(lines[at])
+        if item and item["prefix"].count(">") == listed["prefix"].count(">"):
+            nested = len(item["prefix"].expandtabs(4)) >= own_text  # inside this item's text
+            if width < _text_column(lines[at], item) and results[at] and not nested:
+                if after_blank is not None and after_blank < _text_column(lines[at], item):
+                    return False  # a paragraph after a blank line ended the list
+                return item["delimiter"] == listed["delimiter"]
+    return False
+
+
+def _opens_container(lines: list[str], index: int, prefix: str) -> bool:
+    """True when the prefix of numbered line ``index`` opens a new container,
+    so its number starts a list: a bullet (always a new list item) or more
+    ``>`` than any line of the run above it (a new quote; a lazy line without
+    ``>`` still lies in the quote opened above it). No paragraph continues
+    into either."""
+    if any(c in prefix for c in "-+*"):
+        return True
+    depth = 0
+    for at in range(index - 1, -1, -1):
+        if _boundary_at(lines, at):
+            break
+        above = QUOTE_MARKERS.match(lines[at])
+        depth = max(depth, above.group().count(">") if above else 0)
+    return prefix.count(">") > depth
+
+
+def _text_column(line: str, item: re.Match) -> int:
+    """Column where the text of a numbered list item starts (CommonMark: 1 to 4
+    spaces after the marker; with more, or none, it starts one space after)."""
+    marker = len(item.group().expandtabs(4))
+    rest = line.expandtabs(4)[marker:]
+    gap = len(rest) - len(rest.lstrip(" "))
+    return marker + (gap if gap <= 4 and rest.strip() else 1)
+
+
+def _indent(line: str) -> int:
+    """Leading columns of a line, a tab reaching the next multiple of 4 (CommonMark)."""
+    expanded = line.expandtabs(4)
+    return len(expanded) - len(expanded.lstrip(" "))
+
+
 def _fenced_lines(lines: list[str]) -> set[int]:
     """Indices of the lines of fenced code blocks, the fences included.
 
-    A block closes only on the fence string that opened it; a block still
-    open at the end of the report is an error, so it cannot hide the rest.
+    CommonMark fence rules: a fence line starts with at most 3 spaces, then at
+    least 3 backticks or 3 tildes. A backtick opening line with a backtick in
+    its info string is not a fence. A block closes only on a line of the same
+    character, at least as long as the opening fence, with nothing but spaces
+    after it. A block still open at the end of the report is an error, so it
+    cannot hide the rest. So is a non-blank line inside a block indented less
+    than its opening fence: in a list item the block would end with the item,
+    and the text after it would show but not be checked. A block closes only
+    at exactly the indent of its opening fence; a line shaped like the closing
+    fence at another indent is an error, since a renderer may close the block
+    there and show the lines after it.
     """
     fenced: set[int] = set()
-    fence, opened_at = None, 0
+    fence, opened_at, indent = None, 0, 0
     for index, line in enumerate(lines):
         match = FENCE.match(line)
-        if fence is None and match:
-            fence, opened_at = match.group(1), index
-        elif fence is not None and match and match.group(1) == fence:
+        if fence is None:
+            if match and not (match["fence"][0] == "`" and "`" in match["rest"]):
+                fence, opened_at = match["fence"], index
+                indent = _indent(line)
+            elif _marker_fence(line):
+                raise CheckError(
+                    f"line {index + 1} opens a code block on the line of a list marker; "
+                    f"put the text after the marker and the fence on its own "
+                    f"line below, indented to that text"
+                )
+        elif line.strip() and _indent(line) < indent:
+            raise CheckError(
+                f"line {index + 1} is indented less than the code block opened at line "
+                f"{opened_at + 1}; indent every line of a block, its closing fence "
+                f"included, at least as far as its opening fence"
+            )
+        elif ((closing := CLOSING_FENCE.match(line)) and closing["fence"][0] == fence[0]
+              and len(closing["fence"]) >= len(fence)):
+            if _indent(line) != indent:
+                raise CheckError(
+                    f"line {index + 1} looks like the closing fence of the code block "
+                    f"opened at line {opened_at + 1} but is indented differently; put "
+                    f"the closing fence at exactly the indent of the opening fence"
+                )
             fence = None
             fenced.add(index)
         if fence is not None:
@@ -230,11 +479,49 @@ def _fenced_lines(lines: list[str]) -> set[int]:
     return fenced
 
 
-def _next_to_heading(lines: list[str], index: int) -> bool:
-    """True when the nearest non-blank line before or after ``index`` is a heading."""
+def _marker_fence(line: str) -> bool:
+    """True when a fence follows a list marker on the same line (``- ```ps``,
+    ``1. ```ps``): the checker would miss its opening fence and take its
+    closing fence for an opening one."""
+    text, marker = line, False
+    while (prefix := LINE_PREFIX.match(text)) and prefix.end():
+        marker = marker or prefix.group().strip() not in ("", ">")
+        text = text[prefix.end():]
+    fence = FENCE.match(text)
+    return marker and bool(fence) and not (fence["fence"][0] == "`"
+                                           and "`" in fence["rest"])
+
+
+def _reject_html(lines: list[str], fenced: set[int]) -> None:
+    """Raise CheckError for an HTML line outside the code blocks.
+
+    A line's text is what is left after stripping its quote markers, indent
+    and list markers again and again. Text starting with ``<`` must be a
+    one-line comment ``<!-- ... -->``: an HTML block could hide text from the
+    check (a ``<details>`` line turns the fence after it into HTML).
+    """
+    for index, line in enumerate(lines):
+        if index in fenced:
+            continue
+        text = line
+        while (prefix := LINE_PREFIX.match(text)) and prefix.end():
+            text = text[prefix.end():]
+        if text.startswith("<") and not ONE_LINE_COMMENT.match(text):
+            raise CheckError(
+                f"line {index + 1} starts with '<': the report format has no HTML; "
+                f"write a literal '<' at the start of a line (a quoted sample) as '\\<', "
+                f"and close a comment '<!-- ... -->' on the line it opens"
+            )
+
+
+def _next_to_heading(lines: list[str], index: int, fenced: set[int] = frozenset()) -> bool:
+    """True when the nearest non-blank line before or after ``index`` is a heading.
+
+    A code block in between counts as content, not as blank lines.
+    """
     for step in (-1, 1):
         at = index + step
-        while 0 <= at < len(lines) and not lines[at].strip():
+        while 0 <= at < len(lines) and at not in fenced and not lines[at].strip():
             at += step
         if 0 <= at < len(lines) and HEADING.match(lines[at]):
             return True

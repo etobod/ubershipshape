@@ -19,15 +19,62 @@ numbers this way:
   So dates and times may be written in local format and a decimal comma is
   fine, but write counts without a thousands separator (`1234`, not `1 234`):
   its parts are rarely in the JSON on their own.
-- Ignored: list and heading numbering at the start of a line (`1. `, `12) `,
-  `## 2. `), the row number in the first cell of a table row (`| 3 | ...`;
-  start every table row with `|`, or its row number is checked),
-  and the marker lines (`ush:summary`, `ush:detail`, `ush:not-checked`).
-  Therefore never put a count in the first cell of a table row.
+- Ignored: heading numbering (`## 2. `); list numbering at the start of a
+  line (`1. `, `12) `, `> 3. `, `- 4. `) when it starts a list item: after a blank
+  line, a heading, a table row, a marker, `---` or a `===` underline right
+  under a paragraph that is not inside a list item or a `>` quote, right
+  after a bullet (`- `, `+ `, `* `) or a `>` more than the line above has,
+  or when it is 1, or when an earlier item of the same
+  list (as many `>`, the same delimiter `.` or `)`, its number left of that
+  item's text) is in the same run of lines, or above blank lines that only
+  separate paragraphs indented to that item's text. An item with the other delimiter
+  starts a new list, so number every item of a list with the same
+  delimiter. Any other `412. ` after text is a number in the paragraph (also
+  inside a list item or a quote) and is checked; leave a blank line before a
+  list. Indent a number at most 3 spaces (a nested list included): with 4
+  or more, or with a tab or a non-breaking space before it, it is checked. Also ignored: the number in the first cell of a table row when it
+  equals the row's position among the table's data rows (`| 3 | ...` as the
+  third row; start every table row with `|`), and the marker lines
+  (`ush:summary`, `ush:detail`, `ush:not-checked`). Therefore never put a
+  count in the first cell of a table row.
+- Item ids (`g3`, `n1`, `a2`, `b0`, `r4`, `d1`) can be written freely: an id of a summary
+  item, of an item named in `ush:detail` or of a group cut from the summary
+  (`truncated`) is not a number, and the `id` values of the JSON back no
+  number: a count next to an id must come from a reading. (Other fields
+  still do: a boot's `index` backs its own digits.) A word of that shape that is
+  no such id is checked as a number. The same holds for the links
+  `dump`, `bugcheck` and `bugcheck_candidates`: they back no number.
+- Paths and file names (`path`, `name`, `dump_path`, `minidump_dir`,
+  `dump_file`) back no number either: the digits of a minidump's name are
+  not a reading, and a name or path with digits written in the text (a code
+  span included) fails the check. Name a dump by its id (`d1`); a full path
+  may appear only inside a fenced code block.
 - Fenced code blocks (the paste-ready commands of a `change`) are not
   checked: a command needs its own constants. Never put a finding's number
   in a code block. Markers inside a code block do not count, and a block
   left open fails the check.
+- Fences follow CommonMark. A fence line starts with at most 3 spaces: a
+  code block at the top level or directly in a first-level list item (`-`
+  or a number 1-9), never in a nested list item or in a `>` quote; otherwise
+  the fence is not recognised and the command's constants are checked. A
+  block opens with 3 or more backticks or tildes (a backtick fence has no
+  backtick after it) and closes only on a line of the same character, at
+  least as long, with nothing after it. Put the closing fence at exactly
+  the indent of the opening fence: a closing fence at another indent fails
+  the check (a preview may close the block there and show the lines after
+  it unchecked). Indent every other line of a block at least as far as its
+  opening fence (a block in a list item ends with the item); a line indented
+  less fails the check. Never open a fence on the line of a list marker
+  (`- ```powershell`): write the item's text after the marker and the
+  fence on its own line below; a fence after a marker fails the check.
+- No HTML. The only HTML allowed is a comment opened and closed on one line
+  (`<!-- ... -->`, as the markers are). Any other line whose text starts
+  with `<` after its `>` quote markers, indent and list markers (`-`, `+`,
+  `*`, `1.`, `1)`) fails the check, and so does an HTML block such as
+  `<details>`: it could hide text from the check. A quoted line (for
+  example an event's `sample`) must never start with `<`: write it as
+  `\<` (`> \<Data> text`). Inside a code block `<` is fine
+  (`<# ... #>` in PowerShell).
 - Every other number is checked, in text, tables and quotes.
   Do not add up, average or convert numbers yourself; do not convert times to
   another time zone (the JSON times are UTC; write them as UTC or say so).
@@ -48,15 +95,30 @@ numbers this way:
 3. Dashboard: a table with one row per finding, in the order of the sections
    below.
 
-   | # | Finding | Count | Action |
-   |---|---|---|---|
-   | 1 | Bugcheck 0x0000019c | 1 | 🔧 see below |
-   | 2 | Kernel-Power 41 | 3 | 🔍 run again later |
+   | # | Finding | Count | Trend | Action |
+   |---|---|---|---|---|
+   | 1 | Bugcheck 0x0000019c | 1 | - | 🔧 see below |
+   | 2 | Disk 7 (g1) | 5 | rising (0, then 5) | 🔍 run again later |
 
    `#` is the section number of the finding, `Count` a count from the JSON,
    `Action` a legend symbol and a few words (no numbers of your own). A row
    that covers several groups gives each group's count with its id
    (`g6: 11, g22: 2`), never one group's count for all of them.
+
+   `Trend` is the group's `trend` as written in the JSON (in the report
+   language), optionally with its `first_half` and `second_half`; the
+   script sets it by the rule in `data/trend.json`
+   (`references/summary-contract.md`). A row without a group (an anomaly,
+   stability) has `-`; a row of several groups gives each group's trend with
+   its id. Read it this way:
+   - `unknown` (the log does not cover the whole window, or the time of its
+     oldest record could not be read: see `not_checked` for which) and `too_few` (too
+     few events to compare) are neither rising nor calm: write them as
+     such, never as `stable`, and never as a reason to worry.
+   - The trend is not a weight. A rare critical error stays important
+     however it trends, and a `rising` harmless message stays harmless; the
+     weight comes from what the events mean (`references/summary-contract.md`).
+   - Never compute a trend, a ratio or a difference yourself.
 
 4. Legend, under the dashboard:
 
@@ -83,8 +145,71 @@ numbers this way:
 
 7. Boot sessions: how many, which ended without a clean shutdown
    (`clean_shutdown` false), and which anomalies fall into which session.
+   Name the sessions with `hibernate_resumes` > 0 with their values, and the
+   sessions whose `boot_type` is not `cold`, each on its own (no sums):
+   `fast_startup`, or `null` = the type is unknown (always in session 0),
+   never read as Fast Startup. `clean_shutdown` `null` before a Fast Startup
+   boot, or before a boot whose type could not be read (see "not checked"),
+   means "unknown", not "unclean". A `fast_startup` session
+   does not take the next boot's markers (a Fast Startup boot writes only its
+   Kernel-Boot 27), so the anomalies listed in a `fast_startup` session
+   belong to it.
 
-8. Items fetched with `--detail`: name every id you used, on one or more
+8. Stability (Reliability Monitor): from `reliability` and
+   `reliability_records`.
+   - The lowest day: `lowest` (`date` and `index`), and the latest day of
+     `daily` for comparison.
+   - The drops you think matter, chosen from `drops`, each with its `date`,
+     `index` and `previous_index` as written there. Never compute a
+     difference, an average or a trend yourself; name only values that are
+     in the JSON. If you name only some drops, say that it is a selection
+     (do not count the rest yourself).
+   - The record groups that explain a drop or a finding, with their ids
+     (`r1`) and `count`, `source` and `product`. With `products` > 1 never
+     attribute the `count` to `product`: say that the group covers
+     `products` applications and `product` is only the newest. Tie a record group to a
+     drop only by its `first`/`last` dates, and say that it is a link in
+     time, not a proven cause.
+   - `status` `empty` or `daily` `[]`: read, but the Reliability Monitor
+     recorded nothing in the window. Windows records the index regularly
+     while its collection runs, so say that the collection may be off or its
+     data cleared (🔍); never ✅ and never "stable".
+     `unreadable`: give the `reason`, no conclusion. The same for
+     `records_status`, `reliability_records` `null` meaning the records
+     could not be read.
+
+9. Memory dumps: from `dumps` and each bugcheck's `dump_path` and `dump`.
+   - The settings: `crash_dump_enabled` as written, and where
+     `minidump_dir` and `dump_file` point (paths without digits may be
+     written); name those in `defaulted` as "Windows default". A value in
+     `defaulted` was not set on the machine: it is the assumed Windows
+     default, not a reading; say so.
+   - Each file with its id (`d1`), `size`, `modified` and whether it is
+     `readable`. `readable: false` with a `needs administrator` reason: the
+     dump is there but locked or protected, not missing, and its content is
+     unchecked.
+   - Links: a file's `bugcheck` and the bugcheck's `dump` are a link by path.
+     With `bugcheck` `null` and several `bugcheck_candidates` (typical for
+     `MEMORY.DMP`, overwritten at each crash), name the candidates and say
+     the file holds one of them, never which. A bugcheck with a `dump_path`
+     and `dump` `null` whose path is not in `files`: when `dumps.status` is
+     `read` or `empty` and `dump_path_listed` is `true`, its dump is gone
+     (deleted or overwritten); say so. With `dump_path_listed` `false` the
+     dump lies outside the places the inventory lists (the dump settings
+     changed since): say only that it was not looked for there. With
+     `dump_path_listed` `null`, say it could not be checked.
+     When `dumps.status` is `unreadable`, `files` may be incomplete: say
+     only that it could not be checked whether the dump still exists, with
+     the `reason`. Never link a dump to a crash by time.
+   - To keep a dump, recommend archiving it: a `change` with the fields from
+     `references/summary-contract.md` (permissions administrator; rollback:
+     the copy stays, deleting the original is irreversible) and the
+     paste-ready block from `SKILL.md`. Deleting originals is only offered
+     when the user asked for it.
+   - `status` `empty`: read, no dumps (✅). `unreadable`: give the `reason`,
+     no conclusion.
+
+10. Items fetched with `--detail`: name every id you used, on one or more
    lines anywhere in the report:
 
    ```
@@ -94,7 +219,7 @@ numbers this way:
    Without this line only the summary backs the numbers. A named id that is
    not in the detail file fails the check.
 
-9. Not checked, always last. Its marker stands directly before (or right
+11. Not checked, always last. Its marker stands directly before (or right
    after) the section heading. The check only confirms that some heading has
    the marker next to it; placing it on this section is up to you:
 
@@ -121,6 +246,13 @@ Never report missing data as "clean":
   holds no records at all.
 - `boots` is `null`: the boot sessions are unknown (the boot pass could not
   be read), not "no boots"; anomalies have no session.
+- `reliability.status` `unreadable` (`daily` `null`) or `reliability_records`
+  `null`: the Reliability Monitor part could not be read; give the reason,
+  never "stable". `status` `empty` or `daily` `[]`: read, nothing recorded
+  in the window - the collection may be off or cleared (🔍), never ✅.
+- `dumps.status` `unreadable`: the dump settings or folder could not be
+  read; give the `reason`, never "no dumps". A file with `readable: false`
+  exists; never report it as missing or as fine.
 - `truncated` > 0: say how many groups were left out of the summary (the
   rarest) and that the detail file has them; fetch one with `--detail` if it
   matters.
