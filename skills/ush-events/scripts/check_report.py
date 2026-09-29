@@ -1,4 +1,5 @@
-"""Check that every number in an ush-events report comes from the script's JSON.
+"""Check that every number in an ush-events report comes from the script's JSON,
+and that the report names every group, anomaly and dump file of the summary.
 
 Usage (from the project root):
 
@@ -38,10 +39,21 @@ Rules (see ``references/report-format.md``):
   constants in it are checked. A line inside a block indented less than its
   opening fence is an error, and so is a line shaped like the closing fence
   at another indent (a renderer may close the block there).
-- No HTML. Outside code blocks, a line whose text (what is left after its
-  quote markers, indent and list markers) starts with ``<`` must be a
-  one-line comment ``<!-- ... -->``; any other such line is an error. A
-  literal ``<`` at the start of a line is written ``\\<``.
+- Every ``groups[*].id``, ``anomalies[*].id`` and ``dumps.files[*].id`` of the
+  summary is named as a separate word (``g25`` does not name ``g2``) in a line
+  that is scanned for numbers: not in a code block, not on the ``ush:summary``
+  line and not on an ``ush:detail`` or ``ush:not-checked`` marker line. A
+  missing list, or one that is not a list (``null`` for a source that could
+  not be read), requires nothing. Boot sessions, noise items, reliability
+  records, groups cut from the summary and ``ush:detail`` items are not
+  required: the report selects or summarises them.
+- No HTML. Outside code blocks, only the ush: marker lines hold an HTML
+  comment: a marker is the whole line (not in a quote or a list item) with
+  one ``<!--`` and one ``-->`` and nothing after it. Any other ``<!--``, in
+  inline code or after a backslash too, is an error; a literal one is written
+  ``&lt;!--``. A line whose text (what is left after its quote markers, indent
+  and list markers) starts with ``<`` is an error too; a literal ``<`` there
+  is written ``\\<``.
 
 JSON files are tokenized from their parsed values (strings, numbers and keys),
 not from the raw text, so ``\\u0105`` escapes cannot supply numbers. File paths and
@@ -53,8 +65,9 @@ only by a hex value and a decimal token only by a decimal one. The
 ``--latest`` takes the newest ``events-*.md``, since other skills share ``reports/``.
 
 The script counts; it does not judge whether a number is right, only whether
-it is backed by the JSON. Exit codes: 0 OK, 1 numbers not backed, 2 the report
-or its JSON could not be checked.
+it is backed by the JSON, nor whether an item is described well, only whether
+its id is there. Exit codes: 0 OK, 1 numbers not backed or summary items not
+named, 2 the report or its JSON could not be checked.
 """
 
 import argparse
@@ -101,7 +114,6 @@ HEADING = re.compile(r"^ {0,3}#{1,6}\s")
 # One leading piece of a line that is not its text: indent, a quote marker, or
 # a list marker followed by a space, a tab or the end of the line.
 LINE_PREFIX = re.compile(r"^(?:[ \t]+|>|(?:[-+*]|[0-9]{1,9}[.)])(?=[ \t]|$))")
-ONE_LINE_COMMENT = re.compile(r"^<!--.*-->[ \t]*$")
 
 EXIT_OK, EXIT_NUMBERS, EXIT_ERROR = 0, 1, 2
 
@@ -187,8 +199,9 @@ def detail_items(summary, ids: list[str]) -> list:
     return [by_id[item_id] for item_id in ids]
 
 
-def check(report: Path) -> tuple[list[str], int]:
-    """Return (unbacked-number messages, number of checked tokens)."""
+def check(report: Path) -> tuple[list[str], int, list[str]]:
+    """Return (unbacked-number messages, number of checked tokens,
+    messages for the summary items the report does not name)."""
     lines = read_text(report, "report").splitlines()
     first = lines[0] if lines else ""
     match = SUMMARY_LINE.match(first)
@@ -197,6 +210,10 @@ def check(report: Path) -> tuple[list[str], int]:
             "the first line of the report must be exactly "
             "'<!-- ush:summary <absolute path of the summary file> -->'"
         )
+    # Code blocks are paste-ready commands: no markers and no reported numbers.
+    fenced = _fenced_lines(lines)
+    # Before the summary path: a comment after the marker would end up in the path.
+    _reject_html(lines, fenced)
     summary_path = Path(match.group("path"))
     if not summary_path.is_absolute():
         raise CheckError(f"the ush:summary path is not absolute: {summary_path}")
@@ -204,9 +221,6 @@ def check(report: Path) -> tuple[list[str], int]:
         raise CheckError(f"the summary file named on the first line does not exist: {summary_path}")
     summary = read_json(summary_path, "summary file")
 
-    # Code blocks are paste-ready commands: no markers and no reported numbers.
-    fenced = _fenced_lines(lines)
-    _reject_html(lines, fenced)
     visible = [("" if index in fenced else line) for index, line in enumerate(lines)]
     lines = visible
 
@@ -237,6 +251,7 @@ def check(report: Path) -> tuple[list[str], int]:
 
     in_order = _heading_numbers(lines)
     problems, checked = [], 0
+    mentioned: set[str] = set()
     position = 0  # data-row position in the current table; 0 outside a table
     row = 0  # row index in the current table: 0 header, 1 delimiter row
     for number, line in enumerate(lines[1:], start=2):
@@ -257,6 +272,7 @@ def check(report: Path) -> tuple[list[str], int]:
                 numbering = cell
         if numbering:
             line = line[numbering.end():]
+        mentioned.update(ITEM_ID.findall(line))
         line = ITEM_ID.sub(lambda m: " " if m.group() in known_ids else m.group(), line)
         for written, value in tokens(line):
             checked += 1
@@ -265,7 +281,25 @@ def check(report: Path) -> tuple[list[str], int]:
                     f"line {number}: {written} is not in the summary or in a detail "
                     f"item named in ush:detail"
                 )
-    return problems, checked
+    missing = [f"not named in the report: {item_id} ({where})"
+               for item_id, where in required_ids(summary) if item_id not in mentioned]
+    return problems, checked, missing
+
+
+def required_ids(summary) -> list[tuple[str, str]]:
+    """(id, list name) of the groups, anomalies and dump files of the summary.
+
+    A list that is missing or not a list (``null``: the source could not be
+    read) requires nothing.
+    """
+    if not isinstance(summary, dict):
+        return []
+    dumps = summary.get("dumps")
+    lists = (("groups", summary.get("groups")),
+             ("anomalies", summary.get("anomalies")),
+             ("dumps.files", dumps.get("files") if isinstance(dumps, dict) else None))
+    return [(item["id"], where) for where, items in lists if isinstance(items, list)
+            for item in items if isinstance(item, dict) and isinstance(item.get("id"), str)]
 
 
 def item_ids(summary) -> set[str]:
@@ -392,23 +426,42 @@ def _marker_fence(line: str) -> bool:
 def _reject_html(lines: list[str], fenced: set[int]) -> None:
     """Raise CheckError for an HTML line outside the code blocks.
 
-    A line's text is what is left after stripping its quote markers, indent
-    and list markers again and again. Text starting with ``<`` must be a
-    one-line comment ``<!-- ... -->``: an HTML block could hide text from the
-    check (a ``<details>`` line turns the fence after it into HTML).
+    Only the ush: marker lines may hold an HTML comment: a preview hides a
+    comment, so an id in it would count as named without being shown. A marker
+    is the whole raw line (not in a quote or a list item) with one ``<!--`` and
+    one ``-->``. Any other ``<!--``, wherever it stands, is an error. A line's
+    text is what is left after stripping its quote markers, indent and list
+    markers again and again; text starting with ``<`` is an error too: an HTML
+    block could hide text from the check (a ``<details>`` line turns the fence
+    after it into HTML).
     """
     for index, line in enumerate(lines):
         if index in fenced:
             continue
+        if _is_marker(line, index):
+            continue
+        if "<!--" in line:
+            raise CheckError(
+                f"line {index + 1} has an HTML comment: only the ush: marker lines may; "
+                f"write a literal '<!--' as '&lt;!--'"
+            )
         text = line
         while (prefix := LINE_PREFIX.match(text)) and prefix.end():
             text = text[prefix.end():]
-        if text.startswith("<") and not ONE_LINE_COMMENT.match(text):
+        if text.startswith("<"):
             raise CheckError(
                 f"line {index + 1} starts with '<': the report format has no HTML; "
-                f"write a literal '<' at the start of a line (a quoted sample) as '\\<', "
-                f"and close a comment '<!-- ... -->' on the line it opens"
+                f"write a literal '<' at the start of a line (a quoted sample) as '\\<'"
             )
+
+
+def _is_marker(line: str, index: int) -> bool:
+    """True when ``line`` (at 0-based ``index``) is one whole ush: marker line."""
+    if line.count("<!--") != 1 or line.count("-->") != 1:
+        return False
+    if index == 0 and SUMMARY_LINE.match(line):
+        return True
+    return bool(NOT_CHECKED_LINE.match(line) or DETAIL_LINE.match(line))
 
 
 def _next_to_heading(lines: list[str], index: int, fenced: set[int] = frozenset()) -> bool:
@@ -439,7 +492,8 @@ def latest_report(data_dir: Path) -> Path:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="check_report.py",
-        description="Check that every number in an ush-events report is backed by its JSON.",
+        description="Check that every number in an ush-events report is backed by its JSON "
+                    "and that the report names every group, anomaly and dump file.",
     )
     parser.add_argument("report", nargs="?", help="path of the report (.md)")
     parser.add_argument("--latest", action="store_true",
@@ -460,14 +514,17 @@ def main(argv=None) -> int:
             report = latest_report(Path(args.data_dir).absolute())
         else:
             report = Path(args.report).absolute()
-        problems, checked = check(report)
+        problems, checked, missing = check(report)
     except CheckError as exc:
         print(f"FAILED: {exc}", file=sys.stderr)
         return EXIT_ERROR
+    for line in problems + missing:
+        print(line)
     if problems:
-        for problem in problems:
-            print(problem)
         print(f"FAILED: {report}: {len(problems)} of {checked} numbers are not backed by the JSON")
+    if missing:
+        print(f"FAILED: {report}: {len(missing)} summary items not named in the report")
+    if problems or missing:
         return EXIT_NUMBERS
     print(f"OK: {report}: {checked} numbers checked")
     return EXIT_OK

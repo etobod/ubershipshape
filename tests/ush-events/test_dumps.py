@@ -705,7 +705,8 @@ class TestIds(EventsTestCase):
                           "files": seven}}
         # Only the id carries a 7 (the temporary paths added later are not readings).
         self.assertNotIn("7", json.dumps(data).replace('"d7"', ""))
-        code, output = run_check(data, "Memory dump d7: invented-golf.dmp.")
+        code, output = run_check(data, "Memory dump d7: invented-golf.dmp."
+                                 " Other dumps: d1, d2, d3, d4, d5, d6.")
         self.assertEqual(code, 0, output)
 
         # A number only in a dump file name, or only in a bugcheck reference, is not backed.
@@ -720,8 +721,8 @@ class TestIds(EventsTestCase):
         text = json.dumps(data)
         self.assertNotIn("54321", text.replace(minidump, ""))
         self.assertNotIn("8", text.replace('"a8"', ""))
-        for line, number in (("There were 54321 crashes.", "54321"),
-                             ("There were 8 crashes.", "8")):
+        for line, number in (("Dump d1: there were 54321 crashes.", "54321"),
+                             ("Dump d1: there were 8 crashes.", "8")):
             with self.subTest(number=number):
                 code, output = run_check(data, line)
                 self.assertEqual(code, 1, output)

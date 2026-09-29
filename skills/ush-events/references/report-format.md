@@ -4,7 +4,8 @@ The report is Markdown in the language the user addressed the skill in. It is
 saved as `ush-data/reports/events-<YYYY-MM-DD-HHMM>.md` and checked with
 `scripts/check_report.py`. The markers below are HTML comments: they do not
 depend on the report language and do not show in a preview. Each marker
-stands on its own line.
+stands on its own line, outside quotes and lists; no other HTML comment is
+allowed.
 
 ## Numbers
 
@@ -66,17 +67,32 @@ numbers this way:
   less fails the check. Never open a fence on the line of a list marker
   (`- ```powershell`): write the item's text after the marker and the
   fence on its own line below; a fence after a marker fails the check.
-- No HTML. The only HTML allowed is a comment opened and closed on one line
-  (`<!-- ... -->`, as the markers are). Any other line whose text starts
-  with `<` after its `>` quote markers, indent and list markers (`-`, `+`,
-  `*`, `1.`, `1)`) fails the check, and so does an HTML block such as
-  `<details>`: it could hide text from the check. A quoted line (for
+- No HTML. The only HTML comments are the `ush:` markers. A marker is the
+  whole line, never in a `>` quote or a list item, with nothing after it.
+  Any other `<!--` fails the check, wherever it stands: in text, in a
+  quote, after a backslash or in inline code. Write a literal `<!--` (in a
+  quoted sample) as `&lt;!--`; a preview shows it as the opener. Any other
+  line whose text starts with `<` after its `>` quote markers, indent and
+  list markers (`-`, `+`, `*`, `1.`, `1)`) fails the check, and so does an
+  HTML block such as `<details>`: it could hide text from the check. A quoted line (for
   example an event's `sample`) must never start with `<`: write it as
   `\<` (`> \<Data> text`). Inside a code block `<` is fine
   (`<# ... #>` in PowerShell).
 - Every other number is checked, in text, tables and quotes.
   Do not add up, average or convert numbers yourself; do not convert times to
   another time zone (the JSON times are UTC; write them as UTC or say so).
+
+## Items the report must name
+
+Every `groups[*].id`, `anomalies[*].id` and `dumps.files[*].id` of the
+summary appears in a visible line of the report, as a word of its own
+(`g25` does not name `g2`). A mention inside a fenced code block, on the
+`ush:summary` line or on an `ush:detail` or `ush:not-checked` marker line
+does not count. The check lists each missing id as
+`not named in the report: <id> (<list>)` and fails. Boot sessions (`b`),
+noise items (`n`), reliability records (`r`), groups cut from the summary
+(`truncated`) and items fetched with `--detail` are not required. A group
+that is not a finding goes on the "Other groups" line (layout, item 5).
 
 ## Layout
 
@@ -138,6 +154,12 @@ numbers this way:
      `evidence`, `permissions` and `rollback`
      (`references/summary-contract.md`). A `change` gives a paste-ready block
      and how to read the value back afterwards.
+
+   The groups that are not a finding go on one line at the end of the last
+   finding section, written in the report language, each with its id and
+   `count`: `Other groups: g29 (2), g22 (1), ...`. With no findings, put
+   that line in a section of its own right after the dashboard and its
+   legend.
 
 6. Known noise, a separate section: one line per noise item with its
    provider, Id, `count` and `reason`. Noise is not a finding and is not

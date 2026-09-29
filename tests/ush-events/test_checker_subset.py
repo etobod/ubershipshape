@@ -35,6 +35,17 @@ class TestNoHtml(CheckerTestCase):
             "html block hiding a fence": ["<details>", B3, "</details>",
                                           "There were 412 events.", "", B3],
             "comment not closed on its line": ["<!-- note", "There were 3 events."],
+            "comment opened mid-line and not closed on it": [
+                "There were 3 events. <!-- note", "g2 -->"],
+            "comment opener after an escaped backslash": [r"Sample: C:\\<!-- note", "-->"],
+            "comment opener after an escaped backtick": [r"See \` and <!-- g2 `n`", "-->"],
+            "one-line comment": ["<!-- note -->", "There were 3 events."],
+            "comment closed within a line": ["There were 3 events. <!-- note -->"],
+            "escaped comment opener in a quote": ["> Sample: payload \\<!-- cut"],
+            "comment opener in inline code": ["Payload `<!--` cut"],
+            "inline code after an escaped backslash": [r"Path C:\\`<!-- x` shown"],
+            "comment after an escaped backtick": [r"Escape \` then <!-- g2 `x` --> hidden"],
+            "backticks in two comments": ["Note <!-- a ` --> x <!-- g2 ` --> end"],
             "html after a bullet marker": ["- <details>", "  " + B3, "  </details>",
                                            "  There were 412 events.", "", "  " + B3],
             "html after an ordered marker": ["1. <details>", "  " + B3, "  </details>",
@@ -48,7 +59,6 @@ class TestNoHtml(CheckerTestCase):
                 self.assertEqual(code, 2, output)
 
         accepted = {
-            "one-line comment": ["<!-- note -->", "There were 3 events."],
             "powershell block comment inside a code block": [B3 + "powershell",
                                                              "<# note #>", B3],
             "escaped angle bracket in a quote": ["> \\<tag> text"],

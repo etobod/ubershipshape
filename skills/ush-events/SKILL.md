@@ -102,13 +102,17 @@ for these.
    python -B skills/ush-events/scripts/check_report.py ush-data/reports/events-<YYYY-MM-DD-HHMM>.md
    ```
 
-   It prints `OK` when every number is backed by the JSON and the markers are
-   in place. `OK` means each number occurs somewhere in the JSON, not that it
+   It prints `OK` when every number is backed by the JSON, every group, anomaly
+   and dump file of the summary is named, and the markers are in place. `OK` means each number occurs somewhere in the JSON, not that it
    is used for the right thing: small numbers (days, hours, minutes) almost
    always occur, so the rule above still binds you. Otherwise it names each unbacked number with its line: remove or
    correct that number (or fetch the item with `--detail` and name its id in
-   `ush:detail`), save, and run the check again until it prints `OK`. Do not
-   hand the report to the user before it does.
+   `ush:detail`), save, and run the check again until it prints `OK`. A line
+   `not named in the report: <id> (<list>)` means the report leaves out that
+   group, anomaly or dump file: name it in the section it belongs to (a group
+   that is not a finding goes on the "Other groups" line, see
+   `references/report-format.md`), save, and run the check again. Do not
+   hand the report to the user before it prints `OK`.
 
 7. Tell the user where the report is and give the dashboard and the main
    findings in a few lines.
