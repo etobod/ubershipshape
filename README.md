@@ -13,12 +13,12 @@ to act on.
 | Skill | What it does |
 |---|---|
 | **ush-events** | Collapses thousands of event-log entries into a list of a dozen. Surfaces bugchecks, sudden restarts, and sleeps the machine never woke from. |
-| **ush-settings** | Watches whether your privacy and performance settings have quietly drifted back to where they were before you changed them. |
-| **ush-advice** | Checks current recommendations and tests them against your actual machine. No generalities. |
+| **ush-health** | What shape the machine is in: disk and battery wear, devices with errors, failed updates, a pending restart, restore points and recovery. |
+| **ush-settings** | Watches whether your privacy, security, power and network settings have quietly drifted back to where they were before you changed them. |
+| **ush-inventory** | What is on the system and what is new since the last check: programs, what starts with Windows, Windows components, and anything added that weakens protection. |
+| **ush-processes** | What is running now, what is eating memory, who started it, and what is listening on the network. |
 | **ush-files** | Shows what appeared on disk since the last check. Cleanup with a list to approve first. |
-| **ush-programs** | What is installed, what is new, and what you don't remember installing. |
-| **ush-processes** | What is eating memory, why it is running, and who started it. |
-| **ush-components** | Windows components — including the ones that switched themselves on after an update. |
+| **ush-advice** | Checks current recommendations and tests them against your actual machine. No generalities. |
 | **ush-runall** | Runs all of the above and returns one report with one prioritised list of recommendations. Read-only, always — *run everything* never means *change everything*. |
 
 ---
