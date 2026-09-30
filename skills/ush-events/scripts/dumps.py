@@ -2,7 +2,7 @@
 
 Usage (from the project root):
 
-    python -B skills/ush-events/scripts/dumps.py [--data-dir ush-data]
+    python -B skills/ush-events/scripts/dumps.py [--data-dir DIR]
     python -B skills/ush-events/scripts/dumps.py --copy [--delete-source] [--data-dir ...]
 
 Without flags the script only prints the inventory as JSON. Reading a dump's
@@ -46,7 +46,10 @@ from pathlib import Path
 
 # load_script does not put this directory on sys.path; dumpfiles lives next to this file.
 sys.path.insert(0, str(Path(__file__).absolute().parent))
+# The shared data-directory resolution lives in skills/ush-common/scripts.
+sys.path.insert(0, str(Path(__file__).absolute().parents[2] / "ush-common" / "scripts"))
 
+import datadir
 import dumpfiles
 from dumpfiles import describe, iso
 
@@ -68,9 +71,7 @@ def build_parser() -> argparse.ArgumentParser:
             "to <data-dir>/dumps/ and verify it by SHA-256."
         ),
     )
-    parser.add_argument("--data-dir", default="ush-data",
-                        help="output directory, relative to the working directory "
-                             "(default: ush-data)")
+    parser.add_argument("--data-dir", default=None, help=datadir.HELP)
     parser.add_argument("--copy", action="store_true",
                         help="copy each readable dump to <data-dir>/dumps/ and verify it")
     parser.add_argument("--delete-source", action="store_true",
@@ -271,8 +272,11 @@ def main(argv=None, read_value=None, list_dir=None, stat=None, open_file=None,
     args = parser.parse_args(argv)
     if args.delete_source and not args.copy:
         parser.error("--delete-source needs --copy")
+    try:
+        data_dir = datadir.resolve(args.data_dir)
+    except datadir.DataDirError as exc:
+        parser.error(str(exc))
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
-    data_dir = Path(args.data_dir).absolute()
     dumps_dir = data_dir / "dumps"
     manifest_path = dumps_dir / MANIFEST
 

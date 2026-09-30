@@ -28,14 +28,25 @@ for these.
 ## Rules
 
 - **Read-only by default.** `events.py` and `dumps.py` without flags change
-  nothing on the machine; `logs.py --export` writes only under `ush-data/`.
+  nothing on the machine; `logs.py --export` writes only under `<data dir>`.
   Do not run anything that needs administrator rights yourself (it would
   also leave its own events in the log). A recommended change, copying
   dumps and clearing a log are given as a paste-ready block the user runs
   themselves in an elevated PowerShell; you then read the result back.
 - **Nothing leaves the machine.** No web search, no upload, no online tool.
 - **Read only the summary JSON.** Never open the raw captures or other files
-  in `ush-data/work/`. Single items come from `--detail <id>`.
+  in `<data dir>/work/`. Single items come from `--detail <id>`.
+- **The data directory.** `<data dir>` below is where the scripts
+  write: `--data-dir` when given, else `USH_DATA_DIR` (an absolute path),
+  else `%LOCALAPPDATA%\ubershipshape`. Take its absolute value from the
+  summary's `summary_file` (the directory above `work/`). In the report
+  text outside code blocks write it as `&lt;data dir>` in plain text,
+  never in inline code (a `<` before a letter fails the check, and inline
+  code shows `&lt;` as it is), and never the expanded path: it contains
+  the account name, which a report must not carry. The expanded path
+  appears only in the `ush:summary` marker and in code blocks. A block for an elevated shell always passes
+  `--data-dir "<absolute data dir>"`: an elevated shell of another
+  account has a different `%LOCALAPPDATA%`.
 - **Every number in the report comes from the JSON**: from the summary, or
   from a detail item you fetched with `--detail` and named in the report's
   `<!-- ush:detail ... -->` line. Do not compute totals, averages,
@@ -59,22 +70,22 @@ for these.
 1. From the project root run:
 
    ```
-   python -B skills/ush-events/scripts/events.py --data-dir ush-data
+   python -B skills/ush-events/scripts/events.py
    ```
 
    It prints the summary JSON on stdout and writes it, with a detail file, to
-   `ush-data/work/`. Use `--days <n>` only if the user asks for a different
+   `<data dir>/work/`. Use `--days <n>` only if the user asks for a different
    window. The field meanings are in `references/summary-contract.md`.
 
 2. Read the summary. If you need one item in full (for example a group left
    out by `truncated`, or a boot session), fetch it:
 
    ```
-   python -B skills/ush-events/scripts/events.py --data-dir ush-data --detail <id> --detail-file <detail_file>
+   python -B skills/ush-events/scripts/events.py --detail <id> --detail-file <detail_file>
    ```
 
    `<detail_file>` is the `detail_file` value from the summary, so the item
-   comes from the same run that `check_report.py` checks against.
+   comes from the same run that the report checker checks against.
 
    Ids: `g..` groups, `n..` noise, `b..` boot sessions, `a..` anomalies,
    `r..` Reliability Monitor record groups, `d..` memory dump files.
@@ -87,7 +98,7 @@ for these.
 
 4. Write the report in the language the user addressed you in, following
    `references/report-format.md`, and save it as
-   `ush-data/reports/events-<YYYY-MM-DD-HHMM>.md` (local time of the run).
+   `<data dir>/reports/events-<YYYY-MM-DD-HHMM>.md` (local time of the run).
    The first line is `<!-- ush:summary <summary_file> -->` with the absolute
    `summary_file` path from the summary.
 
@@ -99,8 +110,12 @@ for these.
 6. After saving, run:
 
    ```
-   python -B skills/ush-events/scripts/check_report.py ush-data/reports/events-<YYYY-MM-DD-HHMM>.md
+   python -B skills/ush-common/scripts/check_report.py "<absolute data dir>/reports/events-<YYYY-MM-DD-HHMM>.md"
    ```
+
+   (`python -B skills/ush-common/scripts/check_report.py --latest --skill ush-events`
+   checks the newest `events-*.md` instead.) The checker is shared by all
+   skills; it reads the ush-events rules from `data/report-profile.json`.
 
    It prints `OK` when every number is backed by the JSON, every group, anomaly
    and dump file of the summary is named, and the markers are in place. `OK` means each number occurs somewhere in the JSON, not that it
@@ -167,15 +182,15 @@ for these.
 
 9. Exporting a log, only when the user asks for it (or asks to clear a
    log, which starts with an export). This needs no elevation and writes
-   only to `ush-data/`, so you may run it yourself:
+   only to `<data dir>`, so you may run it yourself:
 
    ```
-   python -B skills/ush-events/scripts/logs.py --export <System|Application> --data-dir ush-data
+   python -B skills/ush-events/scripts/logs.py --export <System|Application>
    ```
 
    Tell the user from its JSON whether `export.verified` is `true`, where
    `export.file` is and, if not verified, the `export.reason`. The file is
-   also recorded in `ush-data/exports/manifest.json`. An export left
+   also recorded in `<data dir>/exports/manifest.json`. An export left
    unverified because the oldest records of a `Circular` log were
    overwritten during it is not a fault of the machine: run it again. A log
    with no records can never be verified (the `reason` says there is

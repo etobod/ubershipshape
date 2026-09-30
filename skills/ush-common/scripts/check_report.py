@@ -1,18 +1,42 @@
-"""Check that every number in an ush-events report comes from the script's JSON,
-and that the report names every group, anomaly and dump file of the summary.
+"""Check that every number in an ush-* report comes from the script's JSON,
+and that the report names every item the summary requires.
 
 Usage (from the project root):
 
-    python -B skills/ush-events/scripts/check_report.py <report.md>
-    python -B skills/ush-events/scripts/check_report.py --latest [--data-dir ush-data]
+    python -B skills/ush-common/scripts/check_report.py <report.md>
+    python -B skills/ush-common/scripts/check_report.py --latest --skill <ush-name> [--data-dir DIR]
 
-Rules (see ``references/report-format.md``):
+The rules below are shared by every skill. What differs between skills comes
+from the report profile ``skills/<skill>/data/report-profile.json``, where
+``<skill>`` is the ``skill`` key of the summary; only a name matching
+``^ush-[a-z]+$`` is accepted, and a summary without that key or a skill
+without a profile cannot be checked. The profile gives:
+
+- ``detail_sections``: the lists of the detail file that hold items with ids;
+- ``id_letters``: the letters of item ids (``g3`` with ``g`` among them);
+- ``path_keys``: keys whose values are file paths or names, not readings;
+- ``id_keys``: keys whose values are item ids or references to them;
+- ``required_lists``: dotted paths (``dumps.files``) of the summary lists
+  whose every item the report must name;
+- ``truncated``: ``null``, or a list of
+  ``{"list": <dotted path>, "prefix": <letters>, "count_key": <summary key>}``,
+  one per list cut from its end, where the top-level summary key
+  ``count_key`` (default ``truncated``) counts the items cut from that list;
+  one such object without the list brackets works as a one-item list;
+- ``required_keys`` (optional): top-level keys the summary must have; a key
+  whose value is ``null`` is present;
+- ``report_prefix``: the file name prefix of the skill's reports (``events-``).
+
+The shared contract is described in ``skills/ush-common/references/summary-contract.md``.
+
+Rules:
 
 - The first line of the report is exactly ``<!-- ush:summary <absolute path> -->``;
   the file must exist and parse as JSON.
 - The report contains the line ``<!-- ush:not-checked -->``.
 - Allowed numbers are the tokens of the summary plus the tokens of those items of
-  the detail file (``detail_file`` in the summary) whose ids are named in
+  the detail file (``detail_file`` in the summary, items in the profile's
+  ``detail_sections``) whose ids are named in
   ``<!-- ush:detail <id> <id> ... -->`` lines. A named id that is not in the
   detail file is an error.
 - Tokens: a hex literal ``0x...`` is one integer (``0x19C`` equals
@@ -25,11 +49,12 @@ Rules (see ``references/report-format.md``):
   of its level, counted from 1 again under every heading of a higher level
   (see ``_heading_numbers``); the number in the first cell of
   a table row when it equals the row's position among the table's data rows
-  (``| 3 | ...`` as the third row); and item ids (``g3``, ``n1``, ``a2``,
-  ``b0``, ``r4``, ``d1``) of the summary, of the ``ush:detail`` items and of the groups cut
-  from the summary. A token of that shape that is no such id is a number.
-  Every other number is checked, also one that numbers a list item (a report
-  has no numbered lists) or a quoted heading.
+  (``| 3 | ...`` as the third row); and item ids (one of the profile's
+  ``id_letters`` followed by digits, as a separate lowercase word) of the
+  summary, of the ``ush:detail`` items and of the items cut from the
+  summary (each ``truncated`` entry). A token of that shape that is no such id is a
+  number. Every other number is checked, also one that numbers a list item
+  (a report has no numbered lists) or a quoted heading.
 - Fenced code blocks are not scanned. Fences follow CommonMark: a fence line
   starts with at most 3 spaces (a block at the top level or directly in a
   first-level list item, ``-`` or a number 1-9; never in a nested list item or
@@ -39,14 +64,18 @@ Rules (see ``references/report-format.md``):
   constants in it are checked. A line inside a block indented less than its
   opening fence is an error, and so is a line shaped like the closing fence
   at another indent (a renderer may close the block there).
-- Every ``groups[*].id``, ``anomalies[*].id`` and ``dumps.files[*].id`` of the
-  summary is named as a separate word (``g25`` does not name ``g2``) in a line
-  that is scanned for numbers: not in a code block, not on the ``ush:summary``
-  line and not on an ``ush:detail`` or ``ush:not-checked`` marker line. A
-  missing list, or one that is not a list (``null`` for a source that could
-  not be read), requires nothing. Boot sessions, noise items, reliability
-  records, groups cut from the summary and ``ush:detail`` items are not
-  required: the report selects or summarises them.
+- Every key of the profile's ``required_keys`` is a top-level key of the
+  summary (its value may be ``null`` or empty); a missing one is named.
+  This is how a summary of an older shape, without a list the profile
+  requires, fails although a missing list requires nothing.
+- Every ``id`` of an item in a ``required_lists`` list of the summary is
+  named as a separate word (``g25`` does not name ``g2``) in a line that is
+  scanned for numbers: not in a code block, not on the ``ush:summary`` line
+  and not on an ``ush:detail`` or ``ush:not-checked`` marker line. A missing
+  list, or one that is not a list (``null`` for a source that could not be
+  read), requires nothing. Items of other lists, items cut from the summary
+  and ``ush:detail`` items are not required: the report selects or
+  summarises them.
 - No HTML and no links. Outside code blocks, only the ush: marker lines hold
   an HTML comment: a marker is the whole line (not in a quote or a list item)
   with one ``<!--`` and one ``-->`` and nothing after it. Any other ``<!--``,
@@ -56,28 +85,41 @@ Rules (see ``references/report-format.md``):
   space, a digit or ``=`` is text.
 
 JSON files are tokenized from their parsed values (strings, numbers and keys),
-not from the raw text, so ``\\u0105`` escapes cannot supply numbers. File paths and
-names (``summary_file``, ``detail_file``, ``name``, ``path``, ``dump_path``,
-``minidump_dir``, ``dump_file``), item ids (``id``) and references to them
-(``dump``, ``bugcheck``, ``bugcheck_candidates``) supply none either. A hex token is backed
-only by a hex value and a decimal token only by a decimal one. The
+not from the raw text, so ``\\u0105`` escapes cannot supply numbers. The values
+of the profile's ``path_keys`` and ``id_keys`` supply none either, nor does a
+key that holds a backslash (a field named by a file path, such as
+``facts[C:\\x\\y.exe].signer``) or its value. A hex token
+is backed only by a hex value and a decimal token only by a decimal one. The
 ``ush:not-checked`` line must stand directly before or after a heading.
-``--latest`` takes the newest ``events-*.md``, since other skills share ``reports/``.
+``--latest --skill <name>`` takes the newest ``<report_prefix>*.md`` of that
+skill's profile, since skills share ``reports/``; a report whose summary names
+another skill is an error.
 
 The script counts; it does not judge whether a number is right, only whether
 it is backed by the JSON, nor whether an item is described well, only whether
-its id is there. Exit codes: 0 OK, 1 numbers not backed or summary items not
-named, 2 the report or its JSON could not be checked.
+its id is there. Exit codes: 0 OK, 1 numbers not backed, summary items not named
+or required summary keys missing, 2 the report, its JSON or its profile could not be checked.
 """
 
 import argparse
 import json
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
-DETAIL_SECTIONS = ("groups", "noise", "boots", "anomalies", "reliability_records",
-                   "dump_files")
+# load_script does not put this directory on sys.path; datadir lives next to this file.
+sys.path.insert(0, str(Path(__file__).absolute().parent))
+
+import datadir
+
+# The skills/ directory: where the report profiles are read from (an input,
+# never an output path).
+SKILLS_DIR = Path(__file__).absolute().parents[2]
+PROFILE_FILE = Path("data") / "report-profile.json"
+SKILL_NAME = re.compile(r"^ush-[a-z]+$")
+ID_LETTERS = re.compile(r"^[a-z]+$")
+REPORT_PREFIX = re.compile(r"^[a-z]+-$")
 
 SUMMARY_LINE = re.compile(r"^<!-- ush:summary (?P<path>\S.*?) -->\s*$")
 NOT_CHECKED_LINE = re.compile(r"^\s*<!--\s*ush:not-checked\s*-->\s*$")
@@ -95,16 +137,6 @@ HEADING_NUMBER = re.compile(
 TABLE_ROW_NUMBER = re.compile(r"^\s*\|\s*(?P<number>[0-9]+)\s*(?=\|)")
 TABLE_ROW = re.compile(r"^\s*\|")
 TABLE_SEPARATOR = re.compile(r"^\s*\|[\s:|-]*-[\s:|-]*$")
-# An id of a summary or detail item: g3, n1, a2, b0, r4, d1 as a separate lowercase word.
-ITEM_ID = re.compile(r"(?<![0-9A-Za-z_])[gnabrd][0-9]+(?![0-9A-Za-z_])")
-
-# Keys whose values are file paths or file names, not readings (a minidump is
-# named like 093026-54321-01.dmp).
-PATH_KEYS = frozenset({"summary_file", "detail_file", "name", "path", "dump_path",
-                       "minidump_dir", "dump_file"})
-# Keys whose values are item ids (g3, b0) or references to them, not readings.
-ID_KEYS = frozenset({"id", "dump", "bugcheck", "bugcheck_candidates"})
-REPORT_GLOB = "events-*.md"
 # A fence (CommonMark): at most 3 spaces of indent, then 3 or more backticks or
 # tildes; the rest of an opening line is its info string.
 FENCE = re.compile(r"^ {0,3}(?P<fence>`{3,}|~{3,})(?P<rest>.*)$")
@@ -121,7 +153,121 @@ EXIT_OK, EXIT_NUMBERS, EXIT_ERROR = 0, 1, 2
 
 
 class CheckError(Exception):
-    """The report or one of its JSON files cannot be checked."""
+    """The report, one of its JSON files or its profile cannot be checked."""
+
+
+@dataclass(frozen=True)
+class Profile:
+    """The skill-specific rules of a report (``report-profile.json``)."""
+
+    skill: str
+    detail_sections: tuple[str, ...]
+    item_id: re.Pattern  # an item id as a separate lowercase word
+    skip_keys: frozenset[str]  # path_keys and id_keys: their values are no readings
+    required_lists: tuple[str, ...]  # dotted paths
+    truncated: tuple[dict, ...]  # ({"list": dotted path, "prefix": letters, "count_key": key}, ...)
+    required_keys: tuple[str, ...]  # top-level summary keys that must be present
+    report_prefix: str
+
+
+def check_skill_name(skill) -> str:
+    """Return ``skill`` when it is a name like ``ush-events``; raise CheckError
+    otherwise, before the name is used in any path."""
+    if not isinstance(skill, str) or not SKILL_NAME.match(skill):
+        raise CheckError(f"skill name {skill!r} is not of the form ush-<lowercase letters>")
+    return skill
+
+
+def load_profile(skill) -> Profile:
+    """Read and validate ``SKILLS_DIR/<skill>/data/report-profile.json``."""
+    skill = check_skill_name(skill)
+    path = SKILLS_DIR / skill / PROFILE_FILE
+    if not path.is_file():
+        raise CheckError(f"no report profile for {skill}: {path} does not exist")
+    data = read_json(path, "report profile")
+    if not isinstance(data, dict):
+        raise CheckError(f"report profile {path} is not a JSON object")
+
+    def names(key) -> tuple[str, ...]:
+        value = data.get(key)
+        if not isinstance(value, list) or not all(isinstance(v, str) and v for v in value):
+            raise CheckError(f"report profile {path}: {key} must be a list of names")
+        return tuple(value)
+
+    letters = data.get("id_letters")
+    if not isinstance(letters, str) or not ID_LETTERS.match(letters):
+        raise CheckError(f"report profile {path}: id_letters must be lowercase letters")
+    truncated = truncated_entries(data.get("truncated"))
+    if truncated is None:
+        raise CheckError(
+            f"report profile {path}: truncated must be null, "
+            f"{{list: <dotted path>, prefix: <lowercase letters>}} or a list of "
+            f"{{list, prefix, count_key: <summary key>}} (count_key optional)"
+        )
+    required_keys = names("required_keys") if "required_keys" in data else ()
+    prefix = data.get("report_prefix")
+    if not isinstance(prefix, str) or not REPORT_PREFIX.match(prefix):
+        raise CheckError(f"report profile {path}: report_prefix must be like 'events-'")
+    return Profile(
+        skill=skill,
+        detail_sections=names("detail_sections"),
+        item_id=re.compile(rf"(?<![0-9A-Za-z_])[{letters}][0-9]+(?![0-9A-Za-z_])"),
+        skip_keys=frozenset(names("path_keys") + names("id_keys")),
+        required_lists=names("required_lists"),
+        truncated=truncated,
+        required_keys=required_keys,
+        report_prefix=prefix,
+    )
+
+
+def truncated_entries(value) -> tuple[dict, ...] | None:
+    """The profile's ``truncated`` as a tuple of ``{list, prefix, count_key}``, or
+    None when it has another shape.
+
+    ``null`` is no entry; one object is a one-item list; ``count_key`` defaults to
+    ``truncated``.
+    """
+    if value is None:
+        return ()
+    entries = [value] if isinstance(value, dict) else value
+    if not isinstance(entries, list):
+        return None
+    found = []
+    for entry in entries:
+        if not (isinstance(entry, dict) and {"list", "prefix"} <= set(entry)
+                and set(entry) <= {"list", "prefix", "count_key"}
+                and isinstance(entry["list"], str) and entry["list"]
+                and isinstance(entry["prefix"], str) and ID_LETTERS.match(entry["prefix"])):
+            return None
+        count_key = entry.get("count_key", "truncated")
+        if not isinstance(count_key, str) or not count_key:
+            return None
+        found.append({"list": entry["list"], "prefix": entry["prefix"],
+                      "count_key": count_key})
+    return tuple(found)
+
+
+def summary_profile(summary, expected: str | None = None) -> Profile:
+    """The profile of the skill named by the summary's ``skill`` key.
+
+    With ``expected``, a summary of another skill is an error.
+    """
+    if not isinstance(summary, dict) or "skill" not in summary:
+        raise CheckError("the summary has no skill key; it names the skill whose report "
+                         "profile applies")
+    skill = check_skill_name(summary["skill"])
+    if expected is not None and skill != expected:
+        raise CheckError(f"the summary is of skill {skill}, not {expected}")
+    return load_profile(skill)
+
+
+def dotted(data, path: str):
+    """The value at a dotted path (``dumps.files``), or None when any part is missing."""
+    for part in path.split("."):
+        if not isinstance(data, dict):
+            return None
+        data = data.get(part)
+    return data
 
 
 def tokens(text: str):
@@ -137,11 +283,13 @@ def tokens(text: str):
             yield match.group("dec"), ("dec", int(match.group("dec")))
 
 
-def json_values(data) -> set[tuple[str, int]]:
+def json_values(data, skip_keys: frozenset[str]) -> set[tuple[str, int]]:
     """Number tokens of every key, string and number in parsed JSON.
 
-    The values of PATH_KEYS and ID_KEYS are skipped: a file path or an item id
-    is not a reading, and its digits would back numbers the report made up.
+    The values of ``skip_keys`` (the profile's path_keys and id_keys) are
+    skipped: a file path or an item id is not a reading, and its digits would
+    back numbers the report made up. So are a key that holds a backslash (a
+    field named by a file path) and its value.
     """
     found: set[tuple[str, int]] = set()
     stack = [data]
@@ -149,8 +297,10 @@ def json_values(data) -> set[tuple[str, int]]:
         item = stack.pop()
         if isinstance(item, dict):
             for key, value in item.items():
+                if "\\" in str(key):
+                    continue
                 found.update(value for _, value in tokens(str(key)))
-                if key not in PATH_KEYS and key not in ID_KEYS:
+                if key not in skip_keys:
                     stack.append(value)
         elif isinstance(item, list):
             stack.extend(item)
@@ -176,7 +326,7 @@ def read_json(path: Path, what: str):
         raise CheckError(f"{what} {path} is not valid JSON: {exc}")
 
 
-def detail_items(summary, ids: list[str]) -> list:
+def detail_items(summary, ids: list[str], profile: Profile) -> list:
     """Return the detail-file items with the given ids; every id must exist."""
     if not isinstance(summary, dict) or not isinstance(summary.get("detail_file"), str):
         raise CheckError("the report names ush:detail ids but the summary has no detail_file")
@@ -187,7 +337,7 @@ def detail_items(summary, ids: list[str]) -> list:
     if not isinstance(detail, dict):
         raise CheckError(f"detail file {path} is not a JSON object")
     by_id = {}
-    for section in DETAIL_SECTIONS:
+    for section in profile.detail_sections:
         items = detail.get(section)
         if isinstance(items, list):
             for item in items:
@@ -201,9 +351,12 @@ def detail_items(summary, ids: list[str]) -> list:
     return [by_id[item_id] for item_id in ids]
 
 
-def check(report: Path) -> tuple[list[str], int, list[str]]:
+def check(report: Path, skill: str | None = None) -> tuple[list[str], int, list[str]]:
     """Return (unbacked-number messages, number of checked tokens,
-    messages for the summary items the report does not name)."""
+    messages for the summary items the report does not name).
+
+    With ``skill``, a report whose summary is of another skill is an error.
+    """
     lines = read_text(report, "report").splitlines()
     first = lines[0] if lines else ""
     match = SUMMARY_LINE.match(first)
@@ -222,6 +375,7 @@ def check(report: Path) -> tuple[list[str], int, list[str]]:
     if not summary_path.is_file():
         raise CheckError(f"the summary file named on the first line does not exist: {summary_path}")
     summary = read_json(summary_path, "summary file")
+    profile = summary_profile(summary, skill)
 
     visible = [("" if index in fenced else line) for index, line in enumerate(lines)]
     lines = visible
@@ -245,11 +399,11 @@ def check(report: Path) -> tuple[list[str], int, list[str]]:
             named.extend(detail.group("ids").split())
     ids = list(dict.fromkeys(named))  # several markers are allowed; keep first order
 
-    allowed = json_values(summary)
-    for item in detail_items(summary, ids) if ids else []:
-        allowed |= json_values(item)
+    allowed = json_values(summary, profile.skip_keys)
+    for item in detail_items(summary, ids, profile) if ids else []:
+        allowed |= json_values(item, profile.skip_keys)
 
-    known_ids = item_ids(summary) | set(ids)
+    known_ids = item_ids(summary, profile) | set(ids)
 
     in_order = _heading_numbers(lines)
     problems, checked = [], 0
@@ -274,8 +428,8 @@ def check(report: Path) -> tuple[list[str], int, list[str]]:
                 numbering = cell
         if numbering:
             line = line[numbering.end():]
-        mentioned.update(ITEM_ID.findall(line))
-        line = ITEM_ID.sub(lambda m: " " if m.group() in known_ids else m.group(), line)
+        mentioned.update(profile.item_id.findall(line))
+        line = profile.item_id.sub(lambda m: " " if m.group() in known_ids else m.group(), line)
         for written, value in tokens(line):
             checked += 1
             if value not in allowed:
@@ -283,32 +437,32 @@ def check(report: Path) -> tuple[list[str], int, list[str]]:
                     f"line {number}: {written} is not in the summary or in a detail "
                     f"item named in ush:detail"
                 )
-    missing = [f"not named in the report: {item_id} ({where})"
-               for item_id, where in required_ids(summary) if item_id not in mentioned]
+    missing = [f"required key missing from the summary: {key}"
+               for key in profile.required_keys if key not in summary]
+    missing += [f"not named in the report: {item_id} ({where})"
+                for item_id, where in required_ids(summary, profile)
+                if item_id not in mentioned]
     return problems, checked, missing
 
 
-def required_ids(summary) -> list[tuple[str, str]]:
-    """(id, list name) of the groups, anomalies and dump files of the summary.
+def required_ids(summary, profile: Profile) -> list[tuple[str, str]]:
+    """(id, dotted list path) of the items of the profile's required lists.
 
     A list that is missing or not a list (``null``: the source could not be
     read) requires nothing.
     """
-    if not isinstance(summary, dict):
-        return []
-    dumps = summary.get("dumps")
-    lists = (("groups", summary.get("groups")),
-             ("anomalies", summary.get("anomalies")),
-             ("dumps.files", dumps.get("files") if isinstance(dumps, dict) else None))
+    lists = [(where, dotted(summary, where)) for where in profile.required_lists]
     return [(item["id"], where) for where, items in lists if isinstance(items, list)
             for item in items if isinstance(item, dict) and isinstance(item.get("id"), str)]
 
 
-def item_ids(summary) -> set[str]:
-    """Ids of the summary's items, and of the groups cut from it.
+def item_ids(summary, profile: Profile) -> set[str]:
+    """Ids of the summary's items, and of the items cut from it.
 
-    The cut groups are g<N+1>...g<N+truncated>, N being the number of groups
-    in the summary; the report is told to mention them.
+    For each entry {list, prefix, count_key} of the profile's ``truncated``,
+    the cut items are <prefix><N+1>...<prefix><N+C>, N being the number of
+    items in that list of the summary and C the value of the summary key
+    ``count_key``; the report is told to mention them.
     """
     found: set[str] = set()
     stack = [summary]
@@ -320,11 +474,13 @@ def item_ids(summary) -> set[str]:
             stack.extend(item.values())
         elif isinstance(item, list):
             stack.extend(item)
-    if isinstance(summary, dict):
-        groups, truncated = summary.get("groups"), summary.get("truncated")
-        if (isinstance(groups, list) and isinstance(truncated, int)
+    for entry in profile.truncated if isinstance(summary, dict) else ():
+        items = dotted(summary, entry["list"])
+        truncated, prefix = summary.get(entry["count_key"]), entry["prefix"]
+        if (isinstance(items, list) and isinstance(truncated, int)
                 and not isinstance(truncated, bool)):
-            found.update(f"g{n}" for n in range(len(groups) + 1, len(groups) + truncated + 1))
+            found.update(f"{prefix}{n}"
+                         for n in range(len(items) + 1, len(items) + truncated + 1))
     return found
 
 
@@ -489,29 +645,35 @@ def _next_to_heading(lines: list[str], index: int, fenced: set[int] = frozenset(
     return False
 
 
-def latest_report(data_dir: Path) -> Path:
+def latest_report(data_dir: Path, skill: str) -> Path:
+    """The newest (by name) ``<report_prefix>*.md`` of the skill's profile."""
+    pattern = f"{load_profile(skill).report_prefix}*.md"
     reports = data_dir / "reports"
     try:
-        found = sorted((p for p in reports.glob(REPORT_GLOB) if p.is_file()), key=lambda p: p.name)
+        found = sorted((p for p in reports.glob(pattern) if p.is_file()), key=lambda p: p.name)
     except OSError as exc:
         raise CheckError(f"{reports} could not be listed: {type(exc).__name__}: {exc}")
     if not found:
-        raise CheckError(f"no report ({REPORT_GLOB}) in {reports}")
+        raise CheckError(f"no report ({pattern}) in {reports}")
     return found[-1]
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="check_report.py",
-        description="Check that every number in an ush-events report is backed by its JSON "
-                    "and that the report names every group, anomaly and dump file.",
+        description="Check that every number in an ush-* report is backed by its JSON "
+                    "and that the report names every item its skill's report profile "
+                    "requires.",
     )
     parser.add_argument("report", nargs="?", help="path of the report (.md)")
     parser.add_argument("--latest", action="store_true",
-                        help=f"check the newest {REPORT_GLOB} (by name) in <data-dir>/reports/")
-    parser.add_argument("--data-dir", default="ush-data",
-                        help="data directory, relative to the working directory "
-                             "(default: ush-data); used with --latest")
+                        help="check the newest <report_prefix>*.md (by name) of --skill "
+                             "in <data-dir>/reports/")
+    parser.add_argument("--skill",
+                        help="the skill whose report is checked (ush-<letters>); required "
+                             "with --latest; the summary must name the same skill")
+    parser.add_argument("--data-dir", default=None,
+                        help=datadir.HELP + "; used with --latest")
     return parser
 
 
@@ -520,12 +682,22 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     if bool(args.report) == bool(args.latest):
         parser.error("give either a report path or --latest")
+    if args.latest and args.skill is None:
+        parser.error("--latest needs --skill <name>")
+    if args.skill is not None and not SKILL_NAME.match(args.skill):
+        parser.error(f"--skill {args.skill!r} is not of the form ush-<lowercase letters>")
+    data_dir = None
+    if args.latest:
+        try:
+            data_dir = datadir.resolve(args.data_dir)
+        except datadir.DataDirError as exc:
+            parser.error(str(exc))
     try:
         if args.latest:
-            report = latest_report(Path(args.data_dir).absolute())
+            report = latest_report(data_dir, args.skill)
         else:
             report = Path(args.report).absolute()
-        problems, checked, missing = check(report)
+        problems, checked, missing = check(report, args.skill)
     except CheckError as exc:
         print(f"FAILED: {exc}", file=sys.stderr)
         return EXIT_ERROR
@@ -533,8 +705,12 @@ def main(argv=None) -> int:
         print(line)
     if problems:
         print(f"FAILED: {report}: {len(problems)} of {checked} numbers are not backed by the JSON")
-    if missing:
-        print(f"FAILED: {report}: {len(missing)} summary items not named in the report")
+    missing_keys = sum(1 for line in missing if line.startswith("required key missing"))
+    if missing_keys:
+        print(f"FAILED: {report}: {missing_keys} required summary keys missing")
+    if len(missing) > missing_keys:
+        print(f"FAILED: {report}: {len(missing) - missing_keys} summary items not named "
+              f"in the report")
     if problems or missing:
         return EXIT_NUMBERS
     print(f"OK: {report}: {checked} numbers checked")

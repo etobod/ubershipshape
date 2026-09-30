@@ -1,0 +1,9 @@
+{
+  "detail_sections": ["disks", "volumes", "devices", "update_failures"],
+  "id_letters": "kvpu",
+  "path_keys": ["summary_file", "detail_file", "device_id", "instance_id"],
+  "id_keys": ["id"],
+  "required_lists": ["disks", "volumes", "devices", "updates.failures"],
+  "truncated": {"list": "updates.failures", "prefix": "u"},
+  "report_prefix": "health-"
+}

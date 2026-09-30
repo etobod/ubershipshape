@@ -14,6 +14,7 @@ from tests.skill_loader import load_script
 
 def _summary_data(detail_file):
     return {
+        "skill": "ush-events",
         "bugcheck_code": "0x0000019c",
         "last_bugcheck_time": "2026-09-18T10:15:00+00:00",
         "event_count": 1234,
@@ -60,7 +61,7 @@ def _valid_body_lines():
 
 class TestReportCheck(unittest.TestCase):
     def setUp(self):
-        self.check = load_script("ush-events", "check_report")
+        self.check = load_script("ush-common", "check_report")
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.root = Path(self._tmp.name).resolve()
@@ -184,20 +185,20 @@ class TestReportCheck(unittest.TestCase):
         self._write_report(broken, "events-2026-09-19-2330.md")
         (self.reports_dir / "events-2026-09-30-0000.txt").write_text("x", encoding="utf-8")
 
-        code, output = self._run_argv(["--latest", "--data-dir", str(self.root)])
+        code, output = self._run_argv(["--latest", "--skill", "ush-events", "--data-dir", str(self.root)])
         self.assertEqual(code, 0, f"output:\n{output}")
         self.assertIn("OK", output)
         self.assertIn("events-2026-09-20-0715.md", output)
 
         with self.subTest("newest report is checked, not just any"):
             self._write_report(broken, "events-2026-09-21-0600.md")
-            code, output = self._run_argv(["--latest", "--data-dir", str(self.root)])
+            code, output = self._run_argv(["--latest", "--skill", "ush-events", "--data-dir", str(self.root)])
             self.assertNotEqual(code, 0, f"output:\n{output}")
 
         with self.subTest("no report in the reports directory"):
             empty = self.root / "empty-data"
             (empty / "reports").mkdir(parents=True)
-            code, output = self._run_argv(["--latest", "--data-dir", str(empty)])
+            code, output = self._run_argv(["--latest", "--skill", "ush-events", "--data-dir", str(empty)])
             self.assertNotEqual(code, 0, f"output:\n{output}")
             self.assertTrue(output.strip(), "expected a message")
 

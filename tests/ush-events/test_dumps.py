@@ -672,7 +672,7 @@ class TestIds(EventsTestCase):
         self.assertEqual(read_calls, [])
 
         # check_report knows d<n>: seven dumps, no 7 in any other value.
-        check = load_script("ush-events", "check_report")
+        check = load_script("ush-common", "check_report")
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name).resolve()
@@ -680,7 +680,7 @@ class TestIds(EventsTestCase):
         summary_file = root / "summary.json"
 
         def run_check(data, line):
-            data = {**data, "summary_file": str(summary_file),
+            data = {**data, "skill": "ush-events", "summary_file": str(summary_file),
                     "detail_file": str(root / "detail.json")}
             summary_file.write_text(json.dumps(data), encoding="utf-8")
             report = root / "reports" / "events-2026-09-28-1200.md"

@@ -1,18 +1,17 @@
-# Summary contract (schema_version 1)
+# Summary contract, ush-events (schema_version 1)
 
-The shared shape of what a `ush-*` script hands to the model, and of the
-recommendations the model writes in its report. `ush-events` is the first
-skill that uses it; later skills follow the same shape.
-
-The script counts; the model judges. The script never rates severity and never
-writes a recommendation. Weights and recommendations are assigned by the model
-in the report, from the numbers in the summary.
+The ush-events fields of the summary, and the ush-events cases of the shared
+parts. The shared contract (files and budget, `sources`, `not_checked`, ids
+and `--detail`, recommendations, the report profile) is in
+`skills/ush-common/references/summary-contract.md`; the report checker reads
+the ush-events rules from `data/report-profile.json`.
 
 ## Files and output
 
-One run of `scripts/events.py` writes two files to `<data-dir>/work/`
-(`--data-dir` defaults to `ush-data` relative to the working directory and is
-made absolute at once):
+One run of `scripts/events.py` writes two files to `<data dir>/work/`
+(the data directory: `--data-dir`, else `USH_DATA_DIR`, else
+`%LOCALAPPDATA%\ubershipshape`, made absolute at once; see the shared
+contract):
 
 - `events-<YYYYmmdd-HHMMSS>.summary.json` - the summary. The same text is
   printed on stdout. The time in the name is UTC, so names sort by time.
@@ -20,11 +19,8 @@ made absolute at once):
   (never truncated) with the same ids as the summary, plus `reliability` and
   `unreadable`; the dump files are under `dump_files`.
 
-The model reads only the summary. It fetches single items from the detail file
-with `--detail <id>` (see below), never by reading raw captures.
-
-The summary is compact ASCII JSON. To keep it within 35 000 characters only
-`groups` are cut, from the end (the rarest); `truncated` counts them. Nothing
+To keep the summary within its budget of 35 000 characters only `groups` are
+cut, from the end (the rarest); `truncated` counts them. Nothing
 else is ever cut. When the summary does not fit even with every group cut
 (a window with very many anomalies or boots), it goes out over the limit and
 `not_checked` gets one item saying so; the full lists are in the detail file
@@ -32,11 +28,12 @@ either way.
 
 ## Summary fields
 
+Besides the shared fields (`schema_version`, `generated_at`, `summary_file`,
+`detail_file`), a summary has:
+
 | Field | Type | Meaning |
 |---|---|---|
-| `schema_version` | int | `1` |
 | `skill` | string | `"ush-events"` |
-| `generated_at` | string | ISO 8601 with offset (UTC), time of the run |
 | `window` | object | `start`, `end` (ISO 8601, UTC) and `days` (int): the time span read |
 | `sources` | list | one entry per capture pass, see below |
 | `groups` | list | level 1-3 events grouped by log, provider and Id (known noise excluded), most frequent first; ids `g1`, `g2`, ... |
@@ -47,8 +44,6 @@ either way.
 | `reliability_records` | list or null | Reliability Monitor records in the window grouped by source and Id, most frequent first; ids `r1`, `r2`, ... Never truncated. `null` when the records could not be read |
 | `dumps` | object | the memory dump settings and files, linked to bugchecks by path, see below. Always present |
 | `not_checked` | list | what could not be read or covered, see below. Always present; `[]` means nothing was skipped |
-| `summary_file` | string | absolute path of the summary file |
-| `detail_file` | string | absolute path of the detail file |
 | `truncated` | int | how many groups were left out of the summary to fit the budget (cut from the end, the least frequent). `0` when none. The full list is in the detail file |
 
 ### Group
@@ -202,14 +197,12 @@ One entry per pass:
   in the window (boots, boot type, shutdowns, sleep, crashes; most are
   level 4).
 
-Fields:
+Fields, besides the shared `status` and `reason`:
 
 | Field | Meaning |
 |---|---|
 | `log` | `System` or `Application` |
 | `pass` | `A` or `B` |
-| `status` | `read` - events were read; `empty` - read, nothing matched; `unreadable` - could not be read |
-| `reason` | error text for `unreadable` (PowerShell stderr, trimmed), otherwise `null` |
 | `event_count` | number of events read in this pass (`0` for `empty` and `unreadable`) |
 | `log_oldest_record` | time of the oldest record in the whole log (any level), or `null` if unknown or the log has no records |
 | `coverage_start` | set to `log_oldest_record` when that is later than `window.start`: the log does not cover the start of the window (cleared or overwritten). Set to `window.end` when the log holds no records at all: it covers nothing. Otherwise `null` |
@@ -217,18 +210,16 @@ Fields:
 The two Reliability Monitor jobs are not in `sources`: their statuses are
 `reliability.status` and `reliability.records_status`.
 
-`empty` is a finding ("read, nothing there"); `unreadable` is not. An `empty`
-source with a `coverage_start` covers only the time after `coverage_start`,
-so it must not be reported as "clean" for the whole window.
+`empty` means "read, nothing matched". An `empty` source with a
+`coverage_start` covers only the time after `coverage_start`, so it must not
+be reported as "clean" for the whole window.
 
-No baseline: a skill that compares with a saved baseline reports "no
-baseline yet" as a state of its own, never as "no changes". `ush-events`
-(schema_version 1) keeps no baseline, so the case does not arise here.
+`ush-events` (schema_version 1) keeps no baseline.
 
 ## not_checked
 
-Each item: `what` (string, names the log or check), `reason` (string), and for
-a time gap also `from` and `to` (ISO 8601). Items are added for:
+Items have the shared shape (`what` names the log or check). They are added
+for:
 
 - every `unreadable` source (reason = the error text);
 - an oldest-record query that could not be read;
@@ -257,17 +248,12 @@ a time gap also `from` and `to` (ISO 8601). Items are added for:
   `truncated` counts them all; nothing else was cut, the full lists are in
   the detail file).
 
-The report names each item; an empty list is reported as "nothing".
-
 ## Ids and --detail
 
 `python -B skills/ush-events/scripts/events.py --data-dir <dir> --detail <id>`
 prints the item with that id (`g..`, `n..`, `b..`, `a..`, `r..`, `d..`) from the newest
 `events-*.detail.json` in `<dir>/work/` (never from a summary file) and exits 0.
-With `--detail-file <path>` (the summary's `detail_file`) it reads that file
-instead, so the item comes from the same run as the summary.
-An unknown id, or no detail file, exits non-zero with a message on stderr.
-It does not start PowerShell.
+`--detail-file`, errors and exit codes are as in the shared contract.
 
 ## dumps.py (copying memory dumps)
 
@@ -408,24 +394,7 @@ administrator rights; `2` bad arguments.
 
 ## Recommendations (written by the model in the report)
 
-Every recommendation in any `ush-*` report carries these fields:
-
-| Field | Values / content |
-|---|---|
-| `weight` | `high`, `medium` or `low` - one scale shared by all skills |
-| `kind` | `change` (the user changes something), `observe` (watch it, run again later), `consult_service` (needs a hardware service or the vendor) |
-| `risk` | what can go wrong when acting on it |
-| `evidence` | the numbers and ids from the summary or detail items it rests on |
-| `permissions` | what it needs (e.g. none, administrator) |
-| `rollback` | how to undo it (or "nothing to undo" for `observe`) |
-
-Weights:
-
-- `high` - data loss, crashes or a failing device is likely; act soon.
-- `medium` - a real fault with limited effect; act when convenient.
-- `low` - a minor or cosmetic issue, or worth watching only.
-
-The script assigns none of these; there is no threshold in code.
+Fields and weights are in the shared contract.
 
 Archiving memory dumps (`dumps.py --copy`) is a `change` with:
 

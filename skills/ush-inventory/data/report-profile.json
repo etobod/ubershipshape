@@ -1,0 +1,19 @@
+{
+  "detail_sections": ["programs", "autostart", "changes", "components", "drivers",
+                      "additions"],
+  "id_letters": "ascfdx",
+  "path_keys": ["summary_file", "detail_file", "key", "program", "install_location",
+                "targets", "path", "expanded_path", "app", "value"],
+  "id_keys": ["id"],
+  "required_lists": ["programs", "autostart", "changes", "components", "drivers",
+                     "additions"],
+  "truncated": [
+    {"list": "programs", "prefix": "a", "count_key": "truncated"},
+    {"list": "drivers", "prefix": "d", "count_key": "truncated_drivers"},
+    {"list": "components", "prefix": "f", "count_key": "truncated_components"},
+    {"list": "additions", "prefix": "x", "count_key": "truncated_additions"}
+  ],
+  "required_keys": ["components", "component_counts", "drivers", "additions",
+                    "hosts_file"],
+  "report_prefix": "inventory-"
+}

@@ -12,7 +12,7 @@ from tests.skill_loader import load_script
 
 class CheckerTestCase(unittest.TestCase):
     def setUp(self):
-        self.check = load_script("ush-events", "check_report")
+        self.check = load_script("ush-common", "check_report")
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name).resolve()
@@ -20,7 +20,7 @@ class CheckerTestCase(unittest.TestCase):
         self.summary_file = self.root / "summary.json"
 
     def summary(self, data):
-        data = {**data, "summary_file": str(self.summary_file),
+        data = {**data, "skill": "ush-events", "summary_file": str(self.summary_file),
                 "detail_file": str(self.root / "detail.json")}
         self.summary_file.write_text(json.dumps(data), encoding="utf-8")
 
@@ -174,7 +174,7 @@ class TestLatestIgnoresOtherSkills(CheckerTestCase):
         self.run_check(NOT_CHECKED, name="events-2026-09-28-1200.md")
         (self.root / "reports" / "updates-2026-09-29-0800.md").write_text(
             "not an events report\n", encoding="utf-8")
-        code, output = self.run_argv(["--latest", "--data-dir", str(self.root)])
+        code, output = self.run_argv(["--latest", "--skill", "ush-events", "--data-dir", str(self.root)])
         self.assertEqual(code, 0, output)
         self.assertIn("events-2026-09-28-1200.md", output)
 

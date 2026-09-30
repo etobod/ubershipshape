@@ -34,7 +34,10 @@ from pathlib import Path
 
 # load_script does not put this directory on sys.path; dumpfiles lives next to this file.
 sys.path.insert(0, str(Path(__file__).absolute().parent))
+# The shared data-directory resolution lives in skills/ush-common/scripts.
+sys.path.insert(0, str(Path(__file__).absolute().parents[2] / "ush-common" / "scripts"))
 
+import datadir
 import dumpfiles
 from dumpfiles import iso
 
@@ -1158,9 +1161,7 @@ def build_parser() -> argparse.ArgumentParser:
             "a JSON summary plus a detail file. Read-only."
         ),
     )
-    parser.add_argument("--data-dir", default="ush-data",
-                        help="output directory, relative to the working directory "
-                             "(default: ush-data)")
+    parser.add_argument("--data-dir", default=None, help=datadir.HELP)
     parser.add_argument("--days", type=_positive_int, default=30,
                         help="how many days back to read (default: 30)")
     parser.add_argument("--detail", metavar="ID",
@@ -1221,11 +1222,17 @@ def main(argv=None, run_ps=None, now=None, trend_file=None, read_dumps=None) -> 
     """
     if (run_ps is None) != (read_dumps is None):
         raise TypeError("inject both run_ps and read_dumps, or neither")
-    args = build_parser().parse_args(argv)
-    work = Path(args.data_dir).absolute() / "work"
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.detail is not None and args.detail_file:
+        # The detail file is named explicitly: no data directory is needed.
+        return show_detail(Path(), args.detail, Path(args.detail_file).absolute())
+    try:
+        work = datadir.resolve(args.data_dir) / "work"
+    except datadir.DataDirError as exc:
+        parser.error(str(exc))
     if args.detail is not None:
-        detail_file = Path(args.detail_file).absolute() if args.detail_file else None
-        return show_detail(work, args.detail, detail_file)
+        return show_detail(work, args.detail)
 
     try:
         noise = load_noise()

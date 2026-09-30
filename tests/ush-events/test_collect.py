@@ -20,6 +20,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
 from itertools import count
 from pathlib import Path
+from unittest import mock
 
 from tests.skill_loader import load_script, script_path
 
@@ -620,17 +621,22 @@ class TestCli(CollectTestCase):
         os.chdir(cwd)
         self.addCleanup(os.chdir, previous)
         script_dir = script_path("ush-events", "events").parent
+        appdata_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(appdata_tmp.cleanup)
+        appdata = Path(appdata_tmp.name).resolve()
 
-        cases = ((["--data-dir", "relative-data"], cwd / "relative-data"),
-                 ([], cwd / "ush-data"))
-        for argv, expected in cases:
+        # (argv, environment or None for the unchanged one, expected data dir)
+        cases = ((["--data-dir", "relative-data"], None, cwd / "relative-data"),
+                 ([], {"LOCALAPPDATA": str(appdata)}, appdata / "ubershipshape"))
+        for argv, environ, expected in cases:
             fake = FakePowerShell({
                 "A:System": ok([
                     event("Invented-Disk-Provider", 7, 2, "2026-09-20T10:00:00.0000000+02:00"),
                 ]),
             })
             out = io.StringIO()
-            with redirect_stdout(out), redirect_stderr(io.StringIO()):
+            with redirect_stdout(out), redirect_stderr(io.StringIO()), \
+                    mock.patch.dict(os.environ, environ or {}, clear=environ is not None):
                 code = self.events.main(argv, run_ps=fake, now=NOW, read_dumps=NO_DUMPS)
             self.assertEqual(code, 0, out.getvalue()[:300])
             summary = self.parse(out.getvalue())
@@ -648,8 +654,30 @@ class TestCli(CollectTestCase):
             self.assertTrue(Path(summary["summary_file"]).is_file())
             self.assertTrue(Path(summary["detail_file"]).is_file())
 
+        # Neither USH_DATA_DIR nor LOCALAPPDATA: a usage error before PowerShell runs.
+        ps_calls = []
+
+        def no_ps(job, script, out_path):
+            ps_calls.append(job)
+            raise AssertionError("run_ps was called without a data directory")
+
+        def no_dumps():
+            ps_calls.append("read_dumps")
+            raise AssertionError("read_dumps was called without a data directory")
+
+        before = sorted(p.name for p in cwd.iterdir())
+        err = io.StringIO()
+        with redirect_stdout(io.StringIO()), redirect_stderr(err), \
+                mock.patch.dict(os.environ, {}, clear=True), \
+                self.assertRaises(SystemExit) as raised:
+            self.events.main([], run_ps=no_ps, now=NOW, read_dumps=no_dumps)
+        self.assertEqual(raised.exception.code, 2, err.getvalue()[:300])
+        self.assertEqual(ps_calls, [])
+        self.assertEqual(sorted(p.name for p in cwd.iterdir()), before)
+
         # Nothing was written next to the script.
         self.assertFalse((script_dir / "ush-data").exists())
+        self.assertFalse((script_dir / "ubershipshape").exists())
         self.assertFalse((script_dir / "relative-data").exists())
         self.assertFalse((script_dir / "work").exists())
 

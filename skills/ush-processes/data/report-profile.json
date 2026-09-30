@@ -1,0 +1,9 @@
+{
+  "detail_sections": ["groups", "ports"],
+  "id_letters": "gp",
+  "path_keys": ["summary_file", "detail_file"],
+  "id_keys": ["id", "group"],
+  "required_lists": ["groups", "ports"],
+  "truncated": {"list": "groups", "prefix": "g"},
+  "report_prefix": "processes-"
+}

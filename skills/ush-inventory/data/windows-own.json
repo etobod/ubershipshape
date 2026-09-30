@@ -1,0 +1,25 @@
+{
+ "msix_signature_kinds": ["System"],
+ "signer_organizations": ["Microsoft Corporation", "Microsoft Windows"],
+ "launchers": [
+  "rundll32.exe", "regsvr32.exe", "cmd.exe", "powershell.exe", "pwsh.exe",
+  "wscript.exe", "cscript.exe", "mshta.exe", "conhost.exe", "msiexec.exe",
+  "explorer.exe", "schtasks.exe", "reg.exe", "certutil.exe", "bitsadmin.exe",
+  "msbuild.exe", "forfiles.exe", "wmic.exe", "msdt.exe", "mavinject.exe",
+  "installutil.exe", "regasm.exe", "odbcconf.exe", "pcalua.exe", "hh.exe"
+ ],
+ "own_kinds": ["service", "task"],
+ "driver_third_party_inf": ["oem*.inf"],
+ "firewall_builtin": {"name_prefix": "@", "required_fields": ["EmbedCtxt"]},
+ "cert_windows_managed_stores": ["authroot"],
+ "cert_windows_shipped_thumbprints": [
+  {"thumbprint": "A43489159A520F0D93D032CCAF37E7FE20A8B419", "subject": "Microsoft Root Authority"},
+  {"thumbprint": "CDD4EEAE6000AC7F40C3802C171E30148030C072", "subject": "Microsoft Root Certificate Authority"},
+  {"thumbprint": "3B1EFD3A66EA28B16697394703A72CA340A05BD5", "subject": "Microsoft Root Certificate Authority 2010"},
+  {"thumbprint": "8F43288AD272F3103B6FB1428485EA3014C0BCFE", "subject": "Microsoft Root Certificate Authority 2011"},
+  {"thumbprint": "245C97DF7514E7CF2DF8BE72AE957B9E04741E85", "subject": "Copyright (c) 1997 Microsoft Corp."},
+  {"thumbprint": "18F7C1FCC3090203FD5BAA2F861A754976C8DD25", "subject": "NO LIABILITY ACCEPTED, (c)97 VeriSign, Inc."},
+  {"thumbprint": "BE36A4562FB2EE05DBB3D32323ADF445084ED656", "subject": "Thawte Timestamping CA"}
+ ],
+ "hosts_default_dir": "%SystemRoot%\\System32\\drivers\\etc"
+}

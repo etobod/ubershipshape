@@ -1,9 +1,22 @@
 # Report format (ush-events)
 
 The report is Markdown in the language the user addressed the skill in. It is
-saved as `ush-data/reports/events-<YYYY-MM-DD-HHMM>.md` and checked with
-`scripts/check_report.py`. The markers below are HTML comments: they do not
-depend on the report language and do not show in a preview. Each marker
+saved as `<data dir>/reports/events-<YYYY-MM-DD-HHMM>.md` and checked with
+`python -B skills/ush-common/scripts/check_report.py <report>` (or
+`--latest --skill ush-events` for the newest `events-*.md`), which reads the
+ush-events rules from `data/report-profile.json`.
+`<data dir>` is the data directory (`--data-dir`, else `USH_DATA_DIR`, else
+`%LOCALAPPDATA%\ubershipshape`); its absolute value is the directory
+above `work/` in the summary's `summary_file`. The report text outside code
+blocks writes it as `&lt;data dir>` in plain text, never in inline code (a
+`<` before a letter fails the check, and inline code shows `&lt;` as it
+is), and never the expanded path: it contains the account name, which a
+report must not carry. The expanded path
+appears only in the `ush:summary` marker and in code blocks.
+
+The markers below are HTML
+comments: they do not depend on the report language and do not show in a
+preview. Each marker
 stands on its own line, outside quotes and lists; no other HTML comment is
 allowed.
 

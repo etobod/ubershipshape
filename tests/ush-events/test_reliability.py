@@ -271,7 +271,7 @@ class TestIds(ReliabilityTestCase):
         self.assertEqual(json.loads(out.getvalue()), r1)
 
         # check_report knows r<n>: seven groups, no 7 in any other value.
-        check = load_script("ush-events", "check_report")
+        check = load_script("ush-common", "check_report")
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name).resolve()
@@ -289,7 +289,7 @@ class TestIds(ReliabilityTestCase):
         data = {"groups": [], "truncated": 0, "reliability_records": records}
         # Only the ids carry a 7 (the temporary paths below are not readings).
         self.assertNotIn("7", json.dumps(data).replace('"r7"', ""))
-        data.update({"summary_file": str(summary_file),
+        data.update({"skill": "ush-events", "summary_file": str(summary_file),
                      "detail_file": str(root / "detail.json")})
         summary_file.write_text(json.dumps(data), encoding="utf-8")
 

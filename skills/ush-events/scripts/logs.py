@@ -2,7 +2,7 @@
 
 Usage (from the project root):
 
-    python -B skills/ush-events/scripts/logs.py --export {System,Application} [--data-dir ush-data]
+    python -B skills/ush-events/scripts/logs.py --export {System,Application} [--data-dir DIR]
     python -B skills/ush-events/scripts/logs.py --export System --clear [--data-dir ...]
 
 ``--export`` needs no elevation and writes only under ``<data-dir>``:
@@ -53,7 +53,10 @@ from pathlib import Path
 
 # load_script does not put this directory on sys.path; the helpers live next to this file.
 sys.path.insert(0, str(Path(__file__).absolute().parent))
+# The shared data-directory resolution lives in skills/ush-common/scripts.
+sys.path.insert(0, str(Path(__file__).absolute().parents[2] / "ush-common" / "scripts"))
 
+import datadir
 import dumps
 import events
 from dumpfiles import describe, digest, iso
@@ -106,9 +109,7 @@ def build_parser() -> argparse.ArgumentParser:
         description=("Export an event log to <data-dir>/exports/ and verify the file. "
                      "With --clear, clear the log after a verified export (elevated only)."),
     )
-    parser.add_argument("--data-dir", default="ush-data",
-                        help="output directory, relative to the working directory "
-                             "(default: ush-data)")
+    parser.add_argument("--data-dir", default=None, help=datadir.HELP)
     parser.add_argument("--export", choices=LOGS, required=True,
                         help="the log to export")
     parser.add_argument("--clear", action="store_true",
@@ -371,11 +372,14 @@ def main(argv=None, run=None, is_admin=None, now=None) -> int:
         raise TypeError("inject both run and is_admin, or neither")
     parser = build_parser()
     args = parser.parse_args(argv)  # exit code 2 before anything runs
+    try:
+        data_dir = datadir.resolve(args.data_dir)
+    except datadir.DataDirError as exc:
+        parser.error(str(exc))
     run = run or default_run
     is_admin = is_admin or default_is_admin
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     stamp = now.strftime("%Y%m%d-%H%M%S")  # UTC, so names sort by time
-    data_dir = Path(args.data_dir).absolute()
     exports, work = data_dir / "exports", data_dir / "work"
     manifest_path = exports / dumps.MANIFEST
     log = args.export

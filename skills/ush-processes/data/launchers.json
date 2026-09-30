@@ -1,0 +1,29 @@
+{
+ "launchers": [
+  "rundll32.exe",
+  "regsvr32.exe",
+  "cmd.exe",
+  "powershell.exe",
+  "pwsh.exe",
+  "wscript.exe",
+  "cscript.exe",
+  "mshta.exe",
+  "conhost.exe",
+  "msiexec.exe",
+  "explorer.exe",
+  "schtasks.exe",
+  "reg.exe",
+  "certutil.exe",
+  "bitsadmin.exe",
+  "msbuild.exe",
+  "forfiles.exe",
+  "wmic.exe",
+  "msdt.exe",
+  "mavinject.exe",
+  "installutil.exe",
+  "regasm.exe",
+  "odbcconf.exe",
+  "pcalua.exe",
+  "hh.exe"
+ ]
+}

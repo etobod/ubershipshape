@@ -13,7 +13,7 @@ from tests.skill_loader import load_script
 
 class CheckerTestCase(unittest.TestCase):
     def setUp(self):
-        self.check = load_script("ush-events", "check_report")
+        self.check = load_script("ush-common", "check_report")
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name).resolve()
@@ -22,7 +22,7 @@ class CheckerTestCase(unittest.TestCase):
         self.detail_file = self.root / "detail.json"
 
     def summary(self, data):
-        data = {**data, "summary_file": str(self.summary_file),
+        data = {**data, "skill": "ush-events", "summary_file": str(self.summary_file),
                 "detail_file": str(self.detail_file)}
         self.summary_file.write_text(json.dumps(data), encoding="utf-8")
 
