@@ -22,7 +22,9 @@ unknown number stays a number.
 - ``wifi_adapter``: physical 802.11 adapters; only the driver key each device names is
   opened (enumerating ``Control\\Class`` throws ``SecurityException``).
 - ``services`` (``Get-Service`` and ``DelayedAutostart``), ``firewall``
-  (``Get-NetFirewallProfile``), ``security_center`` (``AntiVirusProduct``), ``defender``
+  (``Get-NetFirewallProfile`` of the ActiveStore for the effective state, the
+  PersistentStore for the local setting and the RSOP store for the policy; a failed
+  PersistentStore or RSOP read is kept apart from an empty one), ``security_center`` (``AntiVirusProduct``), ``defender``
   (``Get-MpComputerStatus``; ``Get-MpPreference`` fails when another antivirus runs),
   ``device_guard`` (``Win32_DeviceGuard``), ``powercfg`` (``/getactivescheme`` and
   ``/query SCHEME_CURRENT <subgroup> <setting>``, parsed here without depending on the
@@ -258,10 +260,20 @@ try {
     $local[[string]$p.Name] = [string]$p.Enabled
   }
 } catch { $local = $null }
+$policy_read = $true
+$policy = @{}
+try {
+  foreach ($p in @(Get-NetFirewallProfile -PolicyStore RSOP -ErrorAction Stop)) {
+    $policy[[string]$p.Name] = [string]$p.Enabled
+  }
+} catch { $policy_read = $false; $policy = @{} }
 $result = @(foreach ($p in @(Get-NetFirewallProfile -PolicyStore ActiveStore)) {
   $own = $null
   if ($null -ne $local -and $local.ContainsKey([string]$p.Name)) { $own = $local[[string]$p.Name] }
-  [pscustomobject]@{ profile = [string]$p.Name; enabled = [string]$p.Enabled; local_enabled = $own }
+  $pol = $null
+  if ($policy.ContainsKey([string]$p.Name)) { $pol = $policy[[string]$p.Name] }
+  [pscustomobject]@{ profile = [string]$p.Name; enabled = [string]$p.Enabled; local_enabled = $own
+                     policy_read = $policy_read; policy_enabled = $pol }
 })
 """
 
@@ -447,6 +459,18 @@ def firewall_state(value):
     if isinstance(value, bool):
         return value
     return enum_name(value, FIREWALL_ENABLED)
+
+
+def firewall_policy(policy_read, value):
+    """A firewall profile's policy (RSOP) state: None when the RSOP store was not read.
+
+    A profile the RSOP store does not have, or one it has as "NotConfigured", means no
+    policy ("NotConfigured"); otherwise the policy's ``Enabled`` as ``firewall_state``.
+    """
+    if policy_read is not True:
+        return None
+    state = firewall_state(value)
+    return "NotConfigured" if state is None else state
 
 
 def as_list(value) -> list:
@@ -900,7 +924,9 @@ class TypedReader:
         value = firewall_state(row.get("enabled"))
         if value is None:
             return self.missing(entry, job, f"the firewall profile {profile} has no state")
-        return read_value(value, local_enabled=firewall_state(row.get("local_enabled")))
+        return read_value(value, local_enabled=firewall_state(row.get("local_enabled")),
+                          policy_enabled=firewall_policy(row.get("policy_read"),
+                                                         row.get("policy_enabled")))
 
     def security_center_av(self, entry, job, rows):
         products, unknown, active = [], 0, False
@@ -1158,7 +1184,7 @@ def build_items(entries: list, found: dict, edition, elevated: bool) -> list:
             item["locations"] = result["locations"]
         if entry["read"]["type"] == "wifi_adapter_value":
             item["adapters"] = result.get("adapters") or []
-        for extra in ("products", "services_running", "local_enabled"):
+        for extra in ("products", "services_running", "local_enabled", "policy_enabled"):
             if extra in result:
                 item[extra] = result[extra]
         items.append(item)
@@ -1500,8 +1526,15 @@ def block_service(item: dict) -> tuple:
 
 def block_firewall(item: dict) -> tuple:
     # The command writes the local (persistent) setting; its effect and the rollback are
-    # sound only when that setting is what decides the effective (active) state.
+    # sound only when that setting is what decides the effective (active) state: no
+    # policy (RSOP) sets the profile, and the local value matches the effective one.
+    # Local equal to effective alone does not prove it: a policy may hold the same value.
     profile = psrun.ps_quote(item["read"]["profile"])
+    policy = item.get("policy_enabled")
+    if policy is None:
+        raise NoBlock("the firewall policy (RSOP) was not read")
+    if not same(policy, "NotConfigured"):
+        raise NoBlock(f"decided by a policy ({one_line(policy)}), not the local setting")
     previous = item.get("local_enabled")
     if previous is None:
         raise NoBlock("the local firewall setting was not read")

@@ -22,9 +22,13 @@ absolute at once):
   A settings item there also carries `rationale`, `manual`, `applies_if`,
   `read`, `apply`, `rollback_manual`, `source_location`, `locations` (every
   registry location with its `status`, `value` and `kind`), `adapters`,
-  `products`, `services_running` and `local_enabled` (a firewall profile's
-  local, persistent setting; `null` when it was not read), as far as they
-  apply.
+  `products`, `services_running`, `local_enabled` (a firewall profile's
+  local, persistent setting; `null` when it was not read) and
+  `policy_enabled` (a firewall profile's policy state from the RSOP store:
+  `"NotConfigured"` when no policy sets the profile, `true`/`false` when one
+  does, `null` when the RSOP store could not be read), as far as they apply.
+  `--block` gives a firewall block only when `policy_enabled` is
+  `"NotConfigured"`.
 - `state/ush-settings.json`, or `state/ush-settings.elevated.json` for a run
   with administrator rights - the baseline (see "Baseline").
 

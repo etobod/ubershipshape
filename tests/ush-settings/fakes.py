@@ -44,9 +44,12 @@ answer a single object instead of a list, which is read as a one-element list.
 - ``services``: ``{name, status: present|absent|unreadable, start_type: str|int,
   delayed_autostart: int|null, error}``; effective ``Automatic``, ``AutomaticDelayed``,
   ``Manual``, ``Disabled`` or ``"absent"``; numeric 2/3/4 -> Automatic/Manual/Disabled.
-- ``firewall``: ``{profile, enabled: bool|int|str, local_enabled}``; 0/1/2 ->
-  false/true/"NotConfigured"; ``enabled`` is the effective state, ``local_enabled`` the
-  local persistent setting.
+- ``firewall``: ``{profile, enabled: bool|int|str, local_enabled, policy_read: bool,
+  policy_enabled: str|null}``; 0/1/2 -> false/true/"NotConfigured"; ``enabled`` is the
+  effective state, ``local_enabled`` the local persistent setting, ``policy_enabled`` the
+  RSOP profile's ``Enabled`` as text (null when RSOP has no such profile). The item's
+  ``policy_enabled`` is null when ``policy_read`` is not true, "NotConfigured" when the
+  profile is absent or NotConfigured, else mapped like ``enabled``.
 - ``security_center``: ``{display_name, product_state: int}``; true when any product has
   bit 0x1000; ``[]`` -> false.
 - ``defender``: one row ``{AMRunningMode, RealTimeProtectionEnabled, IsTamperProtected}``;
@@ -346,14 +349,18 @@ def service_row(name, start_type, delayed=0, status="present"):
 _SAME = object()
 
 
-def firewall_rows(enabled=True, local=_SAME):
+def firewall_rows(enabled=True, local=_SAME, policy_read=True, policy=None):
     """``firewall`` rows for the three profiles.
 
     ``enabled`` is the effective (ActiveStore) state, ``local`` the local persistent
     setting (by default the same as ``enabled``; None when it could not be read).
+    ``policy_read`` says whether the RSOP store was read; ``policy`` is the RSOP profile's
+    ``Enabled`` as text (``"True"``, ``"False"``, ``"NotConfigured"``) or None when RSOP
+    has no such profile. The default is "policy read, profile absent" (no policy).
     """
     local = enabled if local is _SAME else local
-    return [{"profile": profile, "enabled": enabled, "local_enabled": local}
+    return [{"profile": profile, "enabled": enabled, "local_enabled": local,
+             "policy_read": policy_read, "policy_enabled": policy}
             for profile in ("Domain", "Private", "Public")]
 
 

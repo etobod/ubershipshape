@@ -290,6 +290,44 @@ class TestFirewallBlock(BlockTestCase):
                     self.assertIn("-Enabled True", parts.get("elevated", ""))
                     self.assertIn("-Enabled False", parts.get("rollback_elevated", ""))
 
+    def firewall_block(self, rows):
+        """Collect with ``rows`` as the firewall answer, then ask for firewall_public."""
+        entries = real_entries()
+        self.write_catalogue(entries)
+        data_dir = self.data_dir()
+        fake = FakePowerShell(clean_responses(entries, {"firewall": ok(rows)}))
+        summary = self.collect(fake, data_dir=data_dir)
+        item = self.detail_item(summary, "firewall_public")
+        self.assertIs(item.get("effective"), False, item)
+        code, stdout, _stderr = self.block(data_dir, ["firewall_public"], summary)
+        return item, code, stdout
+
+    def test_policy_equal_to_local_gives_no_block(self):
+        # Local equal to effective does not prove the local setting decides: a policy
+        # with the same value would keep the firewall off after the local change.
+        _item, code, stdout = self.firewall_block(
+            firewall_rows(False, local=False, policy_read=True, policy="False"))
+        self.assertEqual(code, 1, stdout[:500])
+        self.assertEqual(commands(stdout), [], stdout)
+        self.assertIn("policy", stdout.lower())
+
+    def test_policy_not_read_gives_no_block(self):
+        _item, code, stdout = self.firewall_block(
+            firewall_rows(False, local=False, policy_read=False, policy=None))
+        self.assertEqual(code, 1, stdout[:500])
+        self.assertEqual(commands(stdout), [], stdout)
+
+    def test_no_policy_keeps_block(self):
+        # RSOP read without the profile: no policy, so the local setting decides.
+        item, code, stdout = self.firewall_block(
+            firewall_rows(False, local=False, policy_read=True, policy=None))
+        self.assertEqual(item.get("policy_enabled"), "NotConfigured", item)
+        self.assertEqual(code, 0, stdout[:500])
+        parts = split_parts(stdout)
+        self.assertIn("-Enabled True", parts.get("elevated", ""))
+        # The rollback restores the local value (False).
+        self.assertIn("-Enabled False", parts.get("rollback_elevated", ""))
+
 
 class TestQuotedRollback(BlockTestCase):
     def test_curly_quote_in_previous_value_gives_no_block(self):

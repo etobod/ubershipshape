@@ -121,13 +121,40 @@ class TestPowercfg(PureFunctionCase):
                               "name": "Zrównoważony"})
 
 
-class TestFirewallStore(PureFunctionCase):
+class TestFirewallStore(RealCatalogueTestCase):
     def test_reads_the_effective_store(self):
         # Without -PolicyStore ActiveStore the cmdlet reads the local persistent store,
         # so a firewall turned off by a policy key would read as on.
         self.assertIn("Get-NetFirewallProfile -PolicyStore ActiveStore",
                       self.settings.FIREWALL_BODY)
         self.assertIn("Get-NetFirewallProfile -PolicyStore PersistentStore",
+                      self.settings.FIREWALL_BODY)
+
+    def test_policy_store_read(self):
+        # policy_read/policy_enabled rows -> the item's policy_enabled value.
+        cases = {
+            "read, profile absent": (True, None, "NotConfigured"),
+            "read, NotConfigured": (True, "NotConfigured", "NotConfigured"),
+            "read, False": (True, "False", False),
+            "not read": (False, None, None),
+        }
+        for case, (policy_read, policy, expected) in cases.items():
+            with self.subTest(case=case):
+                fake = self.clean_fake({"firewall": ok(firewall_rows(
+                    True, policy_read=policy_read, policy=policy))})
+                summary = self.collect(fake)
+                for entry_id in ("firewall_domain", "firewall_private", "firewall_public"):
+                    item = self.detail_item(summary, entry_id)
+                    self.assertIn("policy_enabled", item, item)
+                    if expected is None or isinstance(expected, bool):
+                        self.assertIs(item.get("policy_enabled"), expected, item)
+                    else:
+                        self.assertEqual(item.get("policy_enabled"), expected, item)
+
+    def test_policy_store_read_stops_on_error(self):
+        # Without -ErrorAction Stop a failed RSOP read gives zero profiles, which would
+        # read as "no policy" instead of "not read".
+        self.assertIn("Get-NetFirewallProfile -PolicyStore RSOP -ErrorAction Stop",
                       self.settings.FIREWALL_BODY)
 
 
