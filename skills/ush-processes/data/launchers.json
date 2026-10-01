@@ -24,6 +24,13 @@
   "regasm.exe",
   "odbcconf.exe",
   "pcalua.exe",
-  "hh.exe"
+  "hh.exe",
+  "svchost.exe",
+  "dllhost.exe",
+  "cmstp.exe",
+  "control.exe",
+  "wsl.exe",
+  "bash.exe",
+  "presentationhost.exe"
  ]
 }
