@@ -6,20 +6,41 @@
   "wscript.exe", "cscript.exe", "mshta.exe", "conhost.exe", "msiexec.exe",
   "explorer.exe", "schtasks.exe", "reg.exe", "certutil.exe", "bitsadmin.exe",
   "msbuild.exe", "forfiles.exe", "wmic.exe", "msdt.exe", "mavinject.exe",
-  "installutil.exe", "regasm.exe", "odbcconf.exe", "pcalua.exe", "hh.exe"
+  "installutil.exe", "regasm.exe", "odbcconf.exe", "pcalua.exe", "hh.exe",
+  "svchost.exe", "dllhost.exe", "cmstp.exe", "control.exe", "wsl.exe", "bash.exe",
+  "presentationhost.exe"
  ],
  "own_kinds": ["service", "task"],
  "driver_third_party_inf": ["oem*.inf"],
  "firewall_builtin": {"name_prefix": "@", "required_fields": ["EmbedCtxt"]},
  "cert_windows_managed_stores": ["authroot"],
  "cert_windows_shipped_thumbprints": [
-  {"thumbprint": "A43489159A520F0D93D032CCAF37E7FE20A8B419", "subject": "Microsoft Root Authority"},
-  {"thumbprint": "CDD4EEAE6000AC7F40C3802C171E30148030C072", "subject": "Microsoft Root Certificate Authority"},
-  {"thumbprint": "3B1EFD3A66EA28B16697394703A72CA340A05BD5", "subject": "Microsoft Root Certificate Authority 2010"},
-  {"thumbprint": "8F43288AD272F3103B6FB1428485EA3014C0BCFE", "subject": "Microsoft Root Certificate Authority 2011"},
-  {"thumbprint": "245C97DF7514E7CF2DF8BE72AE957B9E04741E85", "subject": "Copyright (c) 1997 Microsoft Corp."},
-  {"thumbprint": "18F7C1FCC3090203FD5BAA2F861A754976C8DD25", "subject": "NO LIABILITY ACCEPTED, (c)97 VeriSign, Inc."},
-  {"thumbprint": "BE36A4562FB2EE05DBB3D32323ADF445084ED656", "subject": "Thawte Timestamping CA"}
+  {"thumbprint": "A43489159A520F0D93D032CCAF37E7FE20A8B419", "subject": "Microsoft Root Authority",
+   "source": "plan 052"},
+  {"thumbprint": "CDD4EEAE6000AC7F40C3802C171E30148030C072", "subject": "Microsoft Root Certificate Authority",
+   "source": "plan 052"},
+  {"thumbprint": "3B1EFD3A66EA28B16697394703A72CA340A05BD5", "subject": "Microsoft Root Certificate Authority 2010",
+   "source": "https://www.microsoft.com/pkiops/docs/repository.htm"},
+  {"thumbprint": "8F43288AD272F3103B6FB1428485EA3014C0BCFE", "subject": "Microsoft Root Certificate Authority 2011",
+   "source": "https://www.microsoft.com/pkiops/docs/repository.htm"},
+  {"thumbprint": "245C97DF7514E7CF2DF8BE72AE957B9E04741E85", "subject": "Copyright (c) 1997 Microsoft Corp.",
+   "source": "plan 052"},
+  {"thumbprint": "18F7C1FCC3090203FD5BAA2F861A754976C8DD25", "subject": "NO LIABILITY ACCEPTED, (c)97 VeriSign, Inc.",
+   "source": "plan 052"},
+  {"thumbprint": "BE36A4562FB2EE05DBB3D32323ADF445084ED656", "subject": "Thawte Timestamping CA",
+   "source": "plan 052"},
+  {"thumbprint": "06F1AA330B927B753A40E68CDF22E34BCBEF3352", "subject": "Microsoft ECC Product Root Certificate Authority 2018",
+   "source": "https://www.microsoft.com/pkiops/docs/repository.htm"},
+  {"thumbprint": "0119E81BE9A14CD8E22F40AC118C687ECBA3F4D8", "subject": "Microsoft Time Stamp Root Certificate Authority 2014",
+   "source": "https://www.microsoft.com/pkiops/docs/repository.htm"},
+  {"thumbprint": "31F9FC8BA3805986B721EA7295C65B3A44534274", "subject": "Microsoft ECC TS Root Certificate Authority 2018",
+   "source": "https://www.microsoft.com/pkiops/docs/repository.htm"},
+  {"thumbprint": "92B46C76E13054E104F230517E6E504D43AB10B5", "subject": "Symantec Enterprise Mobile Root for Microsoft",
+   "source": "https://ccadb.my.salesforce-sites.com/microsoft/IncludedCACertificateReportForMSFT"}
+ ],
+ "cert_windows_first_run": [
+  {"subject_cn": "Microsoft Authenticode(tm) Root Authority", "serial": "01",
+   "source": "https://learn.microsoft.com/en-us/troubleshoot/windows-server/certificates-and-public-key-infrastructure-pki/trusted-root-certificates-are-required"}
  ],
  "hosts_default_dir": "%SystemRoot%\\System32\\drivers\\etc"
 }

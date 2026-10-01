@@ -83,7 +83,9 @@ own. Components (features and capabilities) are never own, so every change of
 one is listed. A firewall rule with every field of ``firewall_builtin`` and a
 ``Name`` that starts with its prefix is own; a root certificate is own in a
 store of ``cert_windows_managed_stores``, or in ``machine_root`` with a
-thumbprint of ``cert_windows_shipped_thumbprints``; hosts entries,
+thumbprint of ``cert_windows_shipped_thumbprints``, or pinned by its key after a
+first run on which it was the one certificate of ``cert_windows_first_run``
+(``windows_first_run``); hosts entries,
 Administrators members and Defender exclusions are never own. The items of these
 five sources that are not own are listed in ``additions`` (ids ``x..``).
 ``own_changes.by_source`` splits the own-only changes by source.
@@ -94,11 +96,15 @@ the detail file ``work/inventory-<UTC stamp>.detail.json`` holds every program,
 every autostart entry, every component, every driver, every addition and every
 change with the same ids. ``--detail <id>`` prints one item of the newest detail
 file. To keep the summary within ``SUMMARY_MAX_CHARS`` four lists are cut from
-their end, in this order and each only after the one before is empty:
-``programs`` (``truncated``; programs without an install date, then the oldest
-installs), ``drivers`` (``truncated_drivers``), ``components``
-(``truncated_components``), ``additions`` (``truncated_additions``; hosts
-entries first, then firewall rules).
+their end: ``programs`` (``truncated``; programs without an install date, then
+the oldest installs) down to ``PROGRAMS_MIN``, then ``drivers``
+(``truncated_drivers``), ``components`` (``truncated_components``) and
+``additions`` (``truncated_additions``; the items without a change block in
+SKILL.md first, then the ones with a block), each only after the one before is
+empty, and only then ``programs`` below ``PROGRAMS_MIN``. A listed
+program and autostart entry in the summary lack some fields the report does not
+use (``install_location``, ``display_name``, a fact's ``company``, ...); the
+detail file and the baseline keep the full items, and the comparison uses them.
 """
 
 import argparse
@@ -174,6 +180,8 @@ ADMIN_REASON = ("requires administrator rights (not read in this run, which is n
 # The lists cut to fit the budget, in this order, with the key that counts the cut items.
 CUT_LISTS = (("programs", "truncated"), ("drivers", "truncated_drivers"),
              ("components", "truncated_components"), ("additions", "truncated_additions"))
+# The newest programs kept before the other lists are cut.
+PROGRAMS_MIN = 20
 # Firewall rules: the stores (registry keys under HKLM) and the fields of a rule.
 FIREWALL_STORES = ("local", "app_iso", "policy")
 FIREWALL_FIELDS = {
@@ -188,7 +196,7 @@ FIREWALL_SUMMARY = ("store", "name", "action", "dir", "active", "protocol", "pro
                     "lport", "app")
 # Root certificates: the physical stores and the fields read from Cert:.
 CERT_STORES = ("machine_root", "machine_policy", "enterprise", "user_root", "authroot")
-CERT_DETAILS = ("subject", "issuer", "not_before", "not_after")
+CERT_DETAILS = ("subject", "issuer", "not_before", "not_after", "serial")
 CERT_SUMMARY = ("store", "subject", "not_after", "self_signed", "in_authroot")
 SUBJECT_MAX = 120
 # Defender exclusions: the lists of Get-MpPreference by their key word.
@@ -214,6 +222,11 @@ APPROVED_STATES = {2: "enabled", 3: "disabled"}
 TRIGGERS = ("MSFT_TaskLogonTrigger", "MSFT_TaskBootTrigger")
 USER_SERVICE_INSTANCE = 0x80
 INSTANCE_SUFFIX = re.compile(r"_[0-9a-f]+$", re.IGNORECASE)
+# The suffix that makes an unread service an instance when the baseline knows neither name.
+INSTANCE_GUESS_SUFFIX = re.compile(r"_[0-9a-f]{5,}$", re.IGNORECASE)
+# The registry values of a services row in the order SERVICES_BODY reads them.
+SERVICE_READ_ORDER = ("Type", "DelayedAutostart", "ServiceDll", "KeyServiceDll",
+                      "TemplateServiceDll", "TemplateKeyServiceDll", "TemplateStart")
 COMMAND_FILE = re.compile(r"^(.*?\.(?:exe|com|bat|cmd|dll|ps1|vbs|js))(?=[ ,]|$)", re.IGNORECASE)
 DRIVE_ROOT = re.compile(r"^[a-z]:$", re.IGNORECASE)
 
@@ -434,7 +447,9 @@ $result = $rows.ToArray()
 # Automatic services with the registry values of their key (raw, not
 # expanded); for a per-user instance (Type bit 0x80) also those of its
 # template, whose name is the instance name without _<hex>. A registry read
-# that fails leaves the Win32_Service fields and adds Error.
+# that fails leaves the Win32_Service fields and the values read before it, and
+# adds Error and ErrorAt, the name of the value whose read failed ($at is set
+# before each read, in SERVICE_READ_ORDER, and reset for each service).
 SERVICES_BODY = r"""$svcRoot = 'SYSTEM\CurrentControlSet\Services\'
 $hklm = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry64)
 $noExpand = [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
@@ -452,19 +467,27 @@ foreach ($s in @(Get-CimInstance -ClassName Win32_Service -Filter "StartMode = '
     ServiceDll = $null; KeyServiceDll = $null; TemplateServiceDll = $null
     TemplateKeyServiceDll = $null; TemplateStart = $null
   }
+  $at = $null
   try {
     $key = $svcRoot + $name
+    $at = 'Type'
     $row.Type = N (V $key 'Type')
+    $at = 'DelayedAutostart'
     $row.DelayedAutostart = N (V $key 'DelayedAutostart')
+    $at = 'ServiceDll'
     $row.ServiceDll = S (V ($key + '\Parameters') 'ServiceDll')
+    $at = 'KeyServiceDll'
     $row.KeyServiceDll = S (V $key 'ServiceDll')
     if ($null -ne $row.Type -and ($row.Type -band 0x80)) {
       $tkey = $svcRoot + ($name -replace '_[0-9a-f]+$', '')
+      $at = 'TemplateServiceDll'
       $row.TemplateServiceDll = S (V ($tkey + '\Parameters') 'ServiceDll')
+      $at = 'TemplateKeyServiceDll'
       $row.TemplateKeyServiceDll = S (V $tkey 'ServiceDll')
+      $at = 'TemplateStart'
       $row.TemplateStart = N (V $tkey 'Start')
     }
-  } catch { $row.Error = S $_.Exception.Message }
+  } catch { $row.Error = S $_.Exception.Message; $row.ErrorAt = $at }
   $rows.Add([pscustomobject]$row)
 }
 $hklm.Close()
@@ -485,7 +508,11 @@ $dirs = @(
   @('System32', [Environment]::SystemDirectory)
 )
 foreach ($d in $dirs) { $rows.Add([pscustomobject]@{ Kind = 'dir'; Name = $d[0]; Path = S $d[1] }) }
-$search = @([Environment]::SystemDirectory, $env:SystemRoot) + @(($env:Path -split ';') | Where-Object { $_ })
+# PATH entries are expanded and unquoted once; an empty one or one with a
+# character not allowed in a path is dropped, so it cannot fail a file's lookup.
+$search = @([Environment]::SystemDirectory, $env:SystemRoot) + @(($env:Path -split ';') |
+  ForEach-Object { [Environment]::ExpandEnvironmentVariables($_).Trim('"') } |
+  Where-Object { $_ -and $_.IndexOfAny([System.IO.Path]::GetInvalidPathChars()) -lt 0 })
 foreach ($p in $paths) {
   $path = S $p
   if (-not $path) { continue }
@@ -493,7 +520,7 @@ foreach ($p in $paths) {
     $expanded = [Environment]::ExpandEnvironmentVariables($path)
     if (-not [System.IO.Path]::IsPathRooted($expanded)) {
       foreach ($dir in $search) {
-        $candidate = [System.IO.Path]::Combine([Environment]::ExpandEnvironmentVariables($dir), $expanded)
+        $candidate = [System.IO.Path]::Combine($dir, $expanded)
         if ([System.IO.File]::Exists($candidate)) { $expanded = $candidate; break }
       }
     }
@@ -613,6 +640,7 @@ foreach ($s in $stores) {
           issuer = S $c.Issuer
           not_before = $c.NotBefore.ToUniversalTime().ToString('yyyy-MM-dd', $inv)
           not_after = $c.NotAfter.ToUniversalTime().ToString('yyyy-MM-dd', $inv)
+          serial = S $c.SerialNumber
         }
       } catch { $details = $null }
       $certs.Add([pscustomobject]@{ thumbprint = [string]$thumb; details = $details })
@@ -878,7 +906,9 @@ def load_additions_own(data: dict):
 
     ``firewall_builtin`` is ``{name_prefix, required_fields}``; the managed stores are
     a set; the shipped thumbprints a set of upper-case thumbprints (their ``subject``
-    only documents the entry); ``hosts_default_dir`` a string.
+    and ``source`` only document the entry); ``cert_windows_first_run`` a list of
+    ``{subject_cn, serial}`` with the serial in upper case (``source`` only documents
+    the entry); ``hosts_default_dir`` a string.
     """
     builtin = data.get("firewall_builtin")
     if not isinstance(builtin, dict) or not isinstance(builtin.get("name_prefix"), str) \
@@ -891,6 +921,12 @@ def load_additions_own(data: dict):
     if not isinstance(shipped, list) or not all(
             isinstance(e, dict) and isinstance(e.get("thumbprint"), str) for e in shipped):
         return None, "cert_windows_shipped_thumbprints is not a list of {thumbprint, subject}"
+    first_run = data.get("cert_windows_first_run")
+    if not isinstance(first_run, list) or not all(
+            isinstance(e, dict) and all(isinstance(e.get(k), str) and e[k].strip()
+                                        for k in ("subject_cn", "serial"))
+            for e in first_run):
+        return None, "cert_windows_first_run is not a list of {subject_cn, serial}"
     hosts_dir = data.get("hosts_default_dir")
     if not isinstance(hosts_dir, str):
         return None, "hosts_default_dir is not a string"
@@ -899,6 +935,9 @@ def load_additions_own(data: dict):
                              "required_fields": list(builtin["required_fields"])},
         "cert_windows_managed_stores": set(stores),
         "cert_windows_shipped_thumbprints": {e["thumbprint"].strip().upper() for e in shipped},
+        "cert_windows_first_run": [{"subject_cn": e["subject_cn"].strip(),
+                                    "serial": e["serial"].strip().upper()}
+                                   for e in first_run],
         "hosts_default_dir": hosts_dir,
     }, None
 
@@ -911,12 +950,13 @@ def load_own(path: Path):
     so every entry is listed: ``driver_third_party_inf`` is then None (unknown), and
     every driver is listed with ``third_party`` unread; ``firewall_builtin`` and
     ``hosts_default_dir`` are None, so no firewall rule is own and ``path_is_default``
-    is unread.
+    is unread; ``cert_windows_first_run`` is None, so no certificate is pinned anew
+    and the first-run window stays open.
     """
     empty = {name: set() for name in OWN_LISTS}
     empty.update(driver_third_party_inf=None, firewall_builtin=None,
                  cert_windows_managed_stores=set(), cert_windows_shipped_thumbprints=set(),
-                 hosts_default_dir=None)
+                 cert_windows_first_run=None, hosts_default_dir=None)
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
     except (OSError, UnicodeDecodeError, ValueError) as exc:
@@ -1160,6 +1200,7 @@ def approved_fields(raw) -> dict:
 
     First byte 2 is ``enabled``, 3 is ``disabled``, anything else ``unknown`` with
     ``approved_byte``; ``approved_raw`` is the whole value in hex, for a rollback.
+    ``enabled`` is null for ``unknown``: what the other bytes mean is not known.
     """
     if raw is None:
         return {"approved": "not_set", "enabled": True}
@@ -1171,7 +1212,7 @@ def approved_fields(raw) -> dict:
     if fields["approved"] == "unknown":
         fields["approved_byte"] = first
     fields["approved_raw"] = "".join(f"{b:02x}" for b in values) if valid else None
-    fields["enabled"] = fields["approved"] != "disabled"
+    fields["enabled"] = {"enabled": True, "disabled": False}.get(fields["approved"])
     return fields
 
 
@@ -1191,6 +1232,8 @@ def apply_approved(items: dict, slots: dict, status: str, values: dict,
             continue
         if status in READ_STATUSES:
             item.update(approved_fields(values.get((slot[0], slot[1], slot[2].casefold()))))
+            if item["enabled"] is None:
+                item["unread_fields"] = sorted(set(item.get("unread_fields") or []) | {"enabled"})
             continue
         before = previous.get(key)
         unread = set(item.get("unread_fields") or [])
@@ -1264,31 +1307,90 @@ def collect_tasks(col: Collector, previous: dict, admin: bool) -> tuple[str, dic
     return status, items
 
 
+def service_dll_names(instance: bool) -> tuple:
+    """The registry values that give the ServiceDll of svchost.exe, first match wins."""
+    names = ("ServiceDll", "KeyServiceDll")
+    if instance:
+        names = ("TemplateServiceDll", "TemplateKeyServiceDll") + names
+    return names
+
+
+def service_read_values(row: dict) -> set:
+    """The registry values of a services row that were read: all without ``Error``;
+    those before ``ErrorAt`` when it names a value of ``SERVICE_READ_ORDER``; else none."""
+    if text(row.get("Error")) is None:
+        return set(SERVICE_READ_ORDER)
+    at = row.get("ErrorAt")
+    if at not in SERVICE_READ_ORDER:
+        return set()
+    return set(SERVICE_READ_ORDER[:SERVICE_READ_ORDER.index(at)])
+
+
+def service_target_unread(row: dict, instance: bool) -> bool:
+    """Whether the ServiceDll of a svchost.exe row is unknown: a value not read comes
+    before the first non-empty one, in the order of ``service_target``."""
+    read = service_read_values(row)
+    for name in service_dll_names(instance):
+        if name not in read:
+            return True
+        if clean_path(row.get(name)) is not None:
+            return False
+    return False
+
+
 def service_target(row: dict, instance: bool):
     """The file a service starts; for svchost.exe its ServiceDll (the template's for an
     instance), else None."""
     target = target_path(row.get("PathName"))
     if file_name(target) != "svchost.exe":
         return target
-    names = ("ServiceDll", "KeyServiceDll")
-    if instance:
-        names = ("TemplateServiceDll", "TemplateKeyServiceDll") + names
-    for name in names:
+    for name in service_dll_names(instance):
         dll = clean_path(row.get(name))
         if dll is not None:
             return dll
     return None
 
 
+def guess_instance(name: str, previous: dict) -> bool:
+    """Whether a service whose ``Type`` was not read is a per-user instance.
+
+    A baseline entry under the full name wins; then one under the template decides
+    by its ``user_service``; with neither, only a name ending in
+    ``INSTANCE_GUESS_SUFFIX`` (``_`` and at least 5 hex digits) is taken for an
+    instance, so a name such as ``Agent_1`` keeps its own key.
+    """
+    template = INSTANCE_SUFFIX.sub("", name)
+    if template == name or f"service:{name}" in previous:
+        return False
+    known = previous.get(f"service:{template}")
+    if known is not None:
+        return isinstance(known, dict) and known.get("user_service") is True
+    return INSTANCE_GUESS_SUFFIX.search(name) is not None
+
+
 def collect_services(col: Collector, previous: dict) -> tuple[str, dict]:
     """``(status, {key: entry})`` of the automatic services; per-user instances by template.
 
     A service whose registry values could not be read is named in not_checked and
-    kept from the previous baseline, so a missing ``ServiceDll`` is no change; an
-    instance whose ``Type`` is unknown is keyed by the template the baseline knows.
+    kept from the previous baseline, so a missing ``ServiceDll`` is no change. The
+    reason names the value whose read failed when ``ErrorAt`` is one of
+    ``SERVICE_READ_ORDER``. Without a previous entry, when the entry's row is the one
+    not read, the values read before ``ErrorAt`` count as read (none without a known
+    ``ErrorAt``): ``delayed`` not read is null and named in ``unread_fields``; for
+    svchost.exe, whose target is a registry value, ``targets`` and ``facts`` are
+    named when a value not read comes before the first non-empty one in the order of
+    ``service_target``. A row whose ``Type`` is not a number names ``user_service``,
+    which keeps its guessed value.
+
+    When ``Type`` is not read, the key is, in this order: the full name when the
+    baseline has ``service:<full name>``; the template (the name without
+    ``INSTANCE_SUFFIX``) when the baseline has ``service:<template>`` with
+    ``user_service`` true; the full name when it has that key otherwise; the template
+    when the name ends in ``INSTANCE_GUESS_SUFFIX`` (``_`` and at least 5 hex
+    digits); else the full name.
     """
     result = col.job("services", SERVICES_BODY)
-    groups, failed = {}, set()
+    groups, failed, guessed = {}, set(), set()
     for row in result["rows"]:
         name = text(row.get("Name"))
         if name is None or (text(row.get("StartMode")) or "").casefold() != "auto":
@@ -1298,15 +1400,18 @@ def collect_services(col: Collector, previous: dict) -> tuple[str, dict]:
         if isinstance(kind, int) and not isinstance(kind, bool):
             instance = bool(kind & USER_SERVICE_INSTANCE)
         else:
-            template = INSTANCE_SUFFIX.sub("", name)
-            known = previous.get(f"service:{template}") or {}
-            instance = template != name and known.get("user_service") is True
+            instance = guess_instance(name, previous)
         entry_name = INSTANCE_SUFFIX.sub("", name) if instance else name
         key = f"service:{entry_name}"
         # The template itself may be listed next to its instances, under the same key.
         groups.setdefault(key, (entry_name, []))[1].append((instance, row))
+        if not (isinstance(kind, int) and not isinstance(kind, bool)):
+            guessed.add(key)  # user_service comes from the name, not from Type
         if error is not None:
-            col.skip(f"services {name}", f"registry values not read: {error}")
+            at = row.get("ErrorAt")
+            reason = (f"registry values not read from {at} on: {error}"
+                      if at in SERVICE_READ_ORDER else f"registry values not read: {error}")
+            col.skip(f"services {name}", reason)
             failed.add(key)
     items = {}
     for key, (entry_name, pairs) in groups.items():
@@ -1334,6 +1439,22 @@ def collect_services(col: Collector, previous: dict) -> tuple[str, dict]:
         }
         if instance:
             item["template_start"] = first.get("TemplateStart")
+        unread = set()
+        if text(first.get("Error")) is not None:
+            # Neither this run nor a baseline has the values not read, so a later
+            # clean read of them is no change; those read before the error stay.
+            # The target of svchost.exe is its ServiceDll, a registry value: when it
+            # is unknown its facts stay unread and own is null. Any other target is
+            # PathName, read from Win32_Service, and stays checked.
+            if "DelayedAutostart" not in service_read_values(first):
+                unread.add("delayed")
+                item["delayed"] = None
+            if file_name(target_path(first.get("PathName"))) == "svchost.exe"                     and service_target_unread(first, instance):
+                unread.update(("targets", "facts"))
+        if key in guessed:
+            unread.add("user_service")
+        if unread:
+            item["unread_fields"] = sorted(unread)
         items[key] = item
     status, reason = entry_status("services", result, items, 0)
     col.record("services", status, reason)
@@ -1648,13 +1769,75 @@ def collect_firewall(col: Collector, builtin) -> tuple[str, dict]:
     return result["status"], items
 
 
-def collect_certificates(col: Collector, config: dict) -> tuple[str, dict]:
+def first_run_names(subject: str, first_run: list) -> list:
+    """The entries of ``cert_windows_first_run`` whose name ``subject`` has:
+    ``CN=<subject_cn>`` or starting with ``CN=<subject_cn>,``."""
+    return [e for e in first_run if subject == f"CN={e['subject_cn']}"
+            or subject.startswith(f"CN={e['subject_cn']},")]
+
+
+def first_run_subject(item: dict, first_run: list) -> list:
+    """The entries of ``cert_windows_first_run`` whose subject a ``machine_root``
+    certificate has: self-signed, with the name as in ``first_run_names``. An unread
+    field matches nothing."""
+    subject = item.get("subject")
+    if item.get("store") != "machine_root" or item.get("self_signed") is not True \
+            or not isinstance(subject, str):
+        return []
+    return first_run_names(subject, first_run)
+
+
+def first_run_undecided(item: dict, first_run: list) -> bool:
+    """Whether a ``machine_root`` certificate's fields left ``first_run_match``
+    undecided: ``windows_first_run`` null (the list could not be used), its subject
+    unread, or the name of an entry with ``self_signed`` or the serial number unread
+    (or written before the serial number was read)."""
+    subject = item.get("subject")
+    if item.get("store") != "machine_root":
+        return False
+    if "windows_first_run" in item and item["windows_first_run"] is None:
+        return True
+    if not isinstance(subject, str):
+        return True
+    return bool(first_run_names(subject, first_run)) and (
+        item.get("self_signed") is None or not isinstance(item.get("serial"), str))
+
+
+def first_run_match(item: dict, first_run: list) -> bool:
+    """Whether a certificate is one of ``cert_windows_first_run``: its subject as in
+    ``first_run_subject`` and its serial number, in upper case, that of the entry."""
+    serial = item.get("serial")
+    if not isinstance(serial, str):
+        return False
+    return any(serial.strip().upper() == e["serial"]
+               for e in first_run_subject(item, first_run))
+
+
+def collect_certificates(col: Collector, config: dict,
+                         previous=None) -> tuple[str, dict]:
     """``(status, {key: item})`` of the five root stores.
 
     Details that ``Cert:`` did not give are null and named in ``unread_fields``.
     ``self_signed`` is subject equal to issuer; ``in_authroot`` whether the
     thumbprint is also in ``authroot``; ``own`` true in a managed store, or in
     ``machine_root`` with a shipped thumbprint.
+
+    ``previous`` is the ``root_certificates`` source of the previous baseline (None
+    when it has none, also when the baseline could not be read). A certificate that
+    matches an entry of ``cert_windows_first_run`` (``first_run_match``) carries
+    ``windows_first_run``; no other certificate has the field. It is true, with
+    ``own`` true, when the previous entry of the same key had both true (the pin
+    holds even with the details unread now), or on a first run when exactly one
+    certificate matches and, with a previous baseline, its entry there is one that
+    ``first_run_undecided`` names; several matches trust none. A first run is a
+    previous baseline without the source, or one where no entry has
+    ``windows_first_run`` and some entry is named by ``first_run_undecided``, so a
+    run that could not read the certificate leaves the next one a first run. Any
+    other match has ``windows_first_run`` false and ``own`` as the other rules give,
+    so a changed thumbprint, or a certificate added later, is listed. When the list
+    could not be used (None), every ``machine_root`` certificate that is not pinned
+    has ``windows_first_run`` null, named in ``unread_fields``, so this run does not
+    end the first run.
     """
     result = col.job("root_certificates", ROOT_CERTIFICATES_BODY)
     managed = config["cert_windows_managed_stores"]
@@ -1669,6 +1852,9 @@ def collect_certificates(col: Collector, config: dict) -> tuple[str, dict]:
                 continue
             found.append((store, thumbprint.strip().upper(), entry.get("details")))
     authroot = {thumbprint for store, thumbprint, _ in found if store == "authroot"}
+    first_run_unknown = config["cert_windows_first_run"] is None
+    first_run = config["cert_windows_first_run"] or []
+    old = previous if isinstance(previous, dict) else None
     items = {}
     for store, thumbprint, details in found:
         item = {"store": store, "thumbprint": thumbprint}
@@ -1687,6 +1873,24 @@ def collect_certificates(col: Collector, config: dict) -> tuple[str, dict]:
         if unread:
             item["unread_fields"] = unread
         items.setdefault(f"cert:{store}:{thumbprint}", item)
+    matching = [key for key, item in items.items() if first_run_match(item, first_run)]
+    old_entries = [entry for entry in (old or {}).values() if isinstance(entry, dict)]
+    fresh = old is None or (
+        not any(entry.get("windows_first_run") is not None for entry in old_entries)
+        and any(first_run_undecided(entry, first_run) for entry in old_entries))
+    for key in matching:
+        items[key]["windows_first_run"] = False
+    for key, item in items.items():
+        entry = (old or {}).get(key)
+        if isinstance(entry, dict) and entry.get("own") is True \
+                and entry.get("windows_first_run") is True:
+            item.update(own=True, windows_first_run=True)
+        elif first_run_unknown and item["store"] == "machine_root":
+            item["windows_first_run"] = None
+            item["unread_fields"] = item.get("unread_fields", []) + ["windows_first_run"]
+    if fresh and len(matching) == 1 and (
+            old is None or first_run_undecided(old.get(matching[0]) or {}, first_run)):
+        items[matching[0]].update(own=True, windows_first_run=True)
     skip_keyless(col, "root_certificates", "thumbprint", without_thumb)
     col.record("root_certificates", result["status"], result["reason"])
     return result["status"], items
@@ -1697,7 +1901,8 @@ def parse_hosts(value) -> list:
 
     Lines are numbered from 1; ``#`` starts a comment; the first word is the
     address and every further word a host name. The first line of a (host name,
-    address) pair wins; ``duplicates`` counts its later lines.
+    address) pair wins; ``duplicates`` counts every later occurrence of the pair,
+    also one in the same line.
     """
     entries = {}
     for number, line in enumerate((value or "").splitlines(), 1):
@@ -1909,7 +2114,7 @@ def collect(run_ps, work: Path, stamp: str, previous: dict, config: dict, admin:
     statuses["firewall_rules"], current["firewall_rules"] = collect_firewall(
         col, config["firewall_builtin"])
     statuses["root_certificates"], current["root_certificates"] = collect_certificates(
-        col, config)
+        col, config, previous.get("root_certificates"))
     statuses["hosts"], current["hosts"] = collect_hosts(col, config["hosts_default_dir"])
     statuses["administrators"], current["administrators"] = collect_administrators(col)
     statuses["defender_exclusions"], current["defender_exclusions"] = collect_defender(
@@ -2036,9 +2241,46 @@ def addition_order(entry: dict) -> tuple:
     return (*(field(name) for name in fields), entry["key"])
 
 
-def build_additions(current: dict) -> tuple[list, int]:
+def block_context(current: dict, defender_method) -> dict:
+    """What the change-block rules of SKILL.md need beyond one item: the method
+    of ``defender_exclusions`` and the root stores of each thumbprint."""
+    stores: dict = {}
+    for item in (current.get("root_certificates") or {}).values():
+        thumb = item.get("thumbprint")
+        if isinstance(thumb, str):
+            stores.setdefault(thumb.upper(), set()).add(item.get("store"))
+    return {"defender_method": defender_method, "cert_stores": stores}
+
+
+def has_change_block(entry: dict, context: dict) -> bool:
+    """Whether the addition goes to the group with a change block (SKILL.md,
+    "Change blocks"). Not: a firewall rule outside ``local``; a certificate outside
+    ``machine_root`` and ``user_root``, with ``in_authroot`` true or whose
+    thumbprint is also in another root store; a Defender exclusion whose
+    ``origin`` is not ``local`` (null included) or read by another method than
+    ``preference``. An Administrators member always counts as one with a block:
+    members are few and stay listed when additions are cut (plan 048), even one
+    the "Rules" of SKILL.md forbid removing."""
+    kind = entry["kind"]
+    if kind == "firewall_rule":
+        return entry.get("store") == "local"
+    if kind == "root_certificate":
+        thumb = entry.get("thumbprint")
+        stores = (context["cert_stores"].get(thumb.upper(), set())
+                  if isinstance(thumb, str) else set())
+        return (entry.get("store") in ("machine_root", "user_root")
+                and entry.get("in_authroot") is not True
+                and stores <= {entry.get("store")})
+    if kind == "defender_exclusion":
+        return entry.get("origin") == "local" and context["defender_method"] == "preference"
+    return True
+
+
+def build_additions(current: dict, defender_method=None) -> tuple[list, int]:
     """Every item of the added-to-the-system sources with an id: the listed ones
-    (``own`` not true) first, each group by kind (``ADDITION_KINDS`` order), then
+    (``own`` not true) first, the rest after them. The listed ones are in two
+    groups: those with a change block (``has_change_block``), then those without;
+    within each group and within the rest by kind (``ADDITION_KINDS`` order), then
     by the kind's own order. Returns the items and the listed count."""
     kinds = list(ADDITION_KINDS.values())
     entries = [{"key": key, "kind": kind, "source": source, **item,
@@ -2047,13 +2289,19 @@ def build_additions(current: dict) -> tuple[list, int]:
                for key, item in (current.get(source) or {}).items()]
     entries.sort(key=lambda e: (kinds.index(e["kind"]), addition_order(e)))
     listed = [e for e in entries if not e["own"]]
+    # Listed items with a change block (SKILL.md, "Change blocks") come first, so
+    # the budget cuts the ones without a block before them.
+    context = block_context(current, defender_method)
+    listed = ([e for e in listed if has_change_block(e, context)]
+              + [e for e in listed if not has_change_block(e, context)])
     rest = [e for e in entries if e["own"]]
     return [{"id": f"x{n}", **e} for n, e in enumerate(listed + rest, 1)], len(listed)
 
 
 def summary_addition(entry: dict) -> dict:
     """One listed addition as it goes to the summary: a firewall rule and a root
-    certificate with their main fields only (the subject cut to SUBJECT_MAX), any
+    certificate with their main fields only (the subject cut to SUBJECT_MAX, and
+    ``windows_first_run`` when the certificate has it), any
     other kind with every field but ``own`` (and ``unread_fields`` when there are)."""
     head = {k: entry.get(k) for k in ("id", "key", "kind")}
     if entry["kind"] == "firewall_rule":
@@ -2062,12 +2310,41 @@ def summary_addition(entry: dict) -> dict:
         fields = {k: entry.get(k) for k in CERT_SUMMARY}
         if isinstance(fields["subject"], str):
             fields["subject"] = fields["subject"][:SUBJECT_MAX]
+        if "windows_first_run" in entry:
+            fields["windows_first_run"] = entry["windows_first_run"]
     else:
         fields = {k: v for k, v in entry.items()
                   if k not in head and k not in ("own", "source", "unread_fields")}
     if entry.get("unread_fields"):
         fields["unread_fields"] = entry["unread_fields"]
     return {**head, **fields}
+
+
+def summary_program(program: dict) -> dict:
+    """One listed program as it goes to the summary: without ``install_location``,
+    ``source`` and ``own`` (the detail file keeps them)."""
+    return {k: v for k, v in program.items()
+            if k not in ("install_location", "source", "own")}
+
+
+def summary_fact(fact):
+    """One file fact as it goes to the summary: without ``company``, and without
+    ``expanded_path`` when it equals ``path``."""
+    if not isinstance(fact, dict):
+        return fact
+    return {k: v for k, v in fact.items()
+            if k != "company"
+            and not (k == "expanded_path" and v == fact.get("path"))}
+
+
+def summary_autostart(entry: dict) -> dict:
+    """One listed autostart entry as it goes to the summary: without
+    ``approved_raw`` (only for a rollback block) and ``display_name``, each fact
+    slimmed by ``summary_fact``. The detail file keeps the full entry."""
+    slim = {k: v for k, v in entry.items() if k not in ("approved_raw", "display_name")}
+    if isinstance(slim.get("facts"), list):
+        slim["facts"] = [summary_fact(fact) for fact in slim["facts"]]
+    return slim
 
 
 def facts_by_path(item: dict) -> dict:
@@ -2116,7 +2393,9 @@ def build_changes(previous: dict, current: dict, comparison: dict, own_kinds: se
 
     A change is listed when the item is not own (False or None) before or after it;
     a change of an item that is own on both sides (or on its only side) is counted
-    only, in the totals and in ``by_source`` (every source, zeros included).
+    only, in the totals and in ``by_source`` (every source, zeros included). A change
+    of ``administrators`` carries no ``name``, and its changed ``name`` field is
+    ``{"changed": true}`` without the values: a change carries no account name.
     """
     listed, own_only = [], []
     for source in SOURCES:
@@ -2145,6 +2424,12 @@ def build_changes(previous: dict, current: dict, comparison: dict, own_kinds: se
             label = "value" if name_field == "value" else "name"
             entry = {"key": key, "source": source, "change": change,
                      label: (after or before).get(name_field), "own": own}
+            if source == "administrators":
+                # A change carries no account name: it has no ``name``, and a
+                # changed name is only flagged as changed.
+                del entry["name"]
+                if fields is not None and "name" in fields:
+                    fields = {**fields, "name": {"changed": True}}
             if fields is not None:
                 entry["fields"] = fields
             (own_only if own else listed).append(entry)
@@ -2161,30 +2446,39 @@ def build_changes(previous: dict, current: dict, comparison: dict, own_kinds: se
 def fit_budget(summary: dict) -> str:
     """The summary text within SUMMARY_MAX_CHARS.
 
-    The lists of ``CUT_LISTS`` are cut from their end, in that order, each only
-    after the one before is empty: ``programs`` (programs without an install
-    date, then the oldest installs), ``drivers``, ``components``, ``additions``
-    (hosts entries, then firewall rules, ...); each count key (``truncated``,
-    ``truncated_drivers``, ``truncated_components``, ``truncated_additions``) counts
-    the cut items. ``autostart`` and ``changes`` are never cut. A summary that is still too
-    long says so in not_checked.
+    The lists of ``CUT_LISTS`` are cut from their end, in stages, each stage only
+    when the one before could not make the summary fit: ``programs`` (programs
+    without an install date, then the oldest installs) down to ``PROGRAMS_MIN``
+    (or all of them when there are fewer), then ``drivers``, ``components`` and
+    ``additions`` (the items without a change block, from the end of their group,
+    then the items with one) down to nothing, and last ``programs`` below
+    ``PROGRAMS_MIN``. Each count key (``truncated``, ``truncated_drivers``,
+    ``truncated_components``, ``truncated_additions``) counts the cut items.
+    ``autostart`` and ``changes`` are never cut. A summary that is still too long
+    is not cut at all and says so in not_checked.
     """
     text_out = dump(summary)
     originals = {name: summary.get(name) for name, _ in CUT_LISTS}
     if len(text_out) > SUMMARY_MAX_CHARS:
+        count_keys = dict(CUT_LISTS)
+        kept = {name: len(items or []) for name, items in originals.items()}
+        stages = [("programs", min(PROGRAMS_MIN, kept["programs"]))]
+        stages += [(name, 0) for name, _ in CUT_LISTS[1:]]
+        stages.append(("programs", 0))
         fitted = False
-        for name, count_key in CUT_LISTS:
-            items = originals[name]
-            if not items:
+        for name, floor in stages:
+            if floor >= kept[name]:
                 continue
+            items = originals[name]
 
-            def fits(kept: int, items=items, name=name, count_key=count_key) -> bool:
-                summary[name] = items[:kept]
-                summary[count_key] = len(items) - kept
+            def fits(count: int, items=items, name=name) -> bool:
+                summary[name] = items[:count]
+                summary[count_keys[name]] = len(items) - count
                 return len(dump(summary)) <= SUMMARY_MAX_CHARS
 
-            if fits(0):
-                low, high = 0, len(items) - 1  # the most items that fit, by bisection
+            if fits(floor):
+                # The most items that fit, by bisection; the kept count did not fit.
+                low, high = floor, kept[name] - 1
                 while low < high:
                     middle = (low + high + 1) // 2
                     if fits(middle):
@@ -2194,6 +2488,7 @@ def fit_budget(summary: dict) -> str:
                 fits(low)
                 fitted = True
                 break
+            kept[name] = floor
         if not fitted:
             # Something else is too long: cutting the lists would lose them for nothing.
             for name, count_key in CUT_LISTS:
@@ -2314,16 +2609,25 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
         skip_program=any(statuses[s] not in READ_STATUSES for s in PROGRAM_SOURCES),
     )
     programs, own_count = build_programs(current, own_kinds)
-    listed_programs = [p for p in programs if not p["own"]]
+    listed_programs = [summary_program(p) for p in programs if not p["own"]]
     autostart, own_autostart, unknown = build_autostart(current)
     if unknown:
+        # A service whose registry was not read has no known targets at all.
+        registry = sum(1 for entry in autostart if entry.get("own") is None
+                       and "targets" in (entry.get("unread_fields") or []))
+        causes = []
+        if registry:
+            causes.append(f"{registry} of them because their registry values could not "
+                          f"be read")
+        if unknown - registry:
+            causes.append(f"{unknown - registry} of them because their files could not "
+                          f"be checked")
         col.skip("autostart facts",
                  f"{unknown} autostart entries of the kinds "
-                 f"{', '.join(sorted(config['own_kinds']))} have no file facts (their files "
-                 f"could not be checked and the baseline had none), so own is null; they are "
-                 f"listed only in the detail file")
-    # approved_raw is only for a rollback block: it stays in the detail file.
-    listed_autostart = [{k: v for k, v in entry.items() if k != "approved_raw"}
+                 f"{', '.join(sorted(config['own_kinds']))} have no file facts "
+                 f"({' and '.join(causes)}, and the baseline had none), so own is null; "
+                 f"they are listed only in the detail file")
+    listed_autostart = [summary_autostart(entry)
                         for entry in autostart if entry.get("own") is False]
 
     components, listed_count = build_components(current)
@@ -2344,7 +2648,9 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
     listed_drivers = [{k: d.get(k) for k in driver_fields}
                       for d in drivers[:listed_driver_count]] if drivers_read else None
 
-    additions, listed_addition_count = build_additions(current)
+    defender_method = next((e.get("method") for e in col.sources
+                            if e["name"] == "defender_exclusions"), None)
+    additions, listed_addition_count = build_additions(current, defender_method)
     additions_read = any(statuses[s] in READ_STATUSES for s in ADDITION_SOURCES)
     listed_additions = [summary_addition(e) for e in additions[:listed_addition_count]] \
         if additions_read else None

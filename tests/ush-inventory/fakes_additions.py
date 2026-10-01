@@ -16,7 +16,7 @@ key is lowercase ASCII, as the plan names the ``hosts`` result):
 - ``root_certificates``: a list, one row per store,
   ``{store: "machine_root"|"machine_policy"|"enterprise"|"user_root"|"authroot",
   exists: bool, certificates: [{thumbprint, details}]}``; ``details`` is
-  ``{subject, issuer, not_before, not_after}`` (dates ``yyyy-MM-dd``) or ``null`` when the
+  ``{subject, issuer, not_before, not_after, serial}`` (dates ``yyyy-MM-dd``) or ``null`` when the
   ``Cert:`` provider had no such certificate or threw. ``certificates`` may be a single
   object.
 - ``hosts``: one object ``{raw_dir, expanded_dir, exists, text}``; ``text`` is ``null``
@@ -146,8 +146,12 @@ def firewall_result(local=(), app_iso=(), policy=None):
 # --- root_certificates ----------------------------------------------------------------
 
 def cert(thumbprint, subject="CN=Invented Root", issuer=None, not_before="2024-01-01",
-         not_after="2034-01-01", details=True):
-    """One certificate subkey; ``details=False`` means ``Cert:`` gave nothing."""
+         not_after="2034-01-01", details=True, serial="4F2A"):
+    """One certificate subkey; ``details=False`` means ``Cert:`` gave nothing.
+
+    ``serial`` is the serial number as ``Cert:`` gives it (hex text); ``serial=None`` is a
+    serial number that was not read (plan 083, M2).
+    """
     if not details:
         return {"thumbprint": thumbprint, "details": None}
     return {
@@ -157,6 +161,7 @@ def cert(thumbprint, subject="CN=Invented Root", issuer=None, not_before="2024-0
             "issuer": subject if issuer is None else issuer,
             "not_before": not_before,
             "not_after": not_after,
+            "serial": serial,
         },
     }
 

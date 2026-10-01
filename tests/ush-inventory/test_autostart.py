@@ -683,5 +683,123 @@ class TestSources(AutostartTestCase):
             self.assertEqual(self.changes(second), [])
 
 
+class TestApprovedUnknown(AutostartTestCase):
+    """A ``StartupApproved`` value of unknown meaning leaves ``enabled`` unread
+    (plan 074, milestone M2, criteria K2-K4)."""
+
+    ODD_TARGET = "C:\\Invented\\Odd\\odd.exe"
+    ODD = run_value("InventedOdd", ODD_TARGET)
+
+    def odd_responses(self, approved_rows):
+        responses = clean_responses(extra_files=[file_row(self.ODD_TARGET, signer=VENDOR)])
+        responses["run_keys"] = ok([self.ODD])
+        responses["startup_approved"] = ok(approved_rows)
+        return responses
+
+    def test_unknown_value_leaves_enabled_unread(self):
+        with self.subTest(case="first byte 6"):
+            summary = self.collect(FakePowerShell(self.odd_responses(
+                [approved("InventedOdd", 6)])))
+            odd = self.entry(summary, run_key("InventedOdd"))
+            self.assertEqual(odd.get("approved"), "unknown", odd)
+            self.assertEqual(odd.get("approved_byte"), 6, odd)
+            self.assertIn("enabled", odd, odd)
+            self.assertIsNone(odd["enabled"], odd)
+            self.assertIn("enabled", odd.get("unread_fields") or [], odd)
+
+        with self.subTest(case="value not binary"):
+            summary = self.collect(FakePowerShell(self.odd_responses(
+                [{"Hive": "hkcu", "Key": "Run", "Name": "InventedOdd", "Bytes": None}])))
+            odd = self.entry(summary, run_key("InventedOdd"))
+            self.assertEqual(odd.get("approved"), "unknown", odd)
+            self.assertIn("enabled", odd, odd)
+            self.assertIsNone(odd["enabled"], odd)
+            self.assertIn("enabled", odd.get("unread_fields") or [], odd)
+
+    def test_known_values_have_no_unread_fields(self):
+        targets = {
+            "InventedOn": "C:\\Invented\\On\\on.exe",
+            "InventedOff": "C:\\Invented\\Off\\off.exe",
+            "InventedPlain": "C:\\Invented\\Plain\\plain.exe",
+        }
+        responses = clean_responses(
+            extra_files=[file_row(path, signer=VENDOR) for path in targets.values()])
+        responses["run_keys"] = ok([run_value(name, path) for name, path in targets.items()])
+        responses["startup_approved"] = ok([approved("InventedOn", 2),
+                                            approved("InventedOff", 3)])
+        summary = self.collect(FakePowerShell(responses))
+        self.assertEqual(self.source(summary, "startup_approved").get("status"), "read")
+
+        for name, state, enabled in (("InventedOn", "enabled", True),
+                                     ("InventedOff", "disabled", False),
+                                     ("InventedPlain", "not_set", True)):
+            with self.subTest(entry=name):
+                entry = self.entry(summary, run_key(name))
+                self.assertEqual(entry.get("approved"), state, entry)
+                self.assertIs(entry.get("enabled"), enabled, entry)
+                self.assertFalse(entry.get("unread_fields"), entry)
+
+    def test_unknown_value_is_no_change(self):
+        data_dir = self.data_dir()
+        key = run_key("InventedOdd")
+        self.collect(FakePowerShell(self.odd_responses([approved("InventedOdd", 2)])),
+                     data_dir=data_dir, now=NOW)
+        second = self.collect(FakePowerShell(self.odd_responses([approved("InventedOdd", 6)])),
+                              data_dir=data_dir, now=NOW + timedelta(days=1))
+
+        self.assertEqual(self.comparison(second).get("run_keys"), "compared",
+                         self.comparison(second))
+        self.assertEqual(self.entry(second, key).get("approved_byte"), 6)
+        enabled_changes = [c for c in self.changes(second)
+                           if c.get("key") == key or "enabled" in (c.get("fields") or {})]
+        self.assertEqual(enabled_changes, [], enabled_changes)
+
+
+class TestNewLaunchers(AutostartTestCase):
+    """Microsoft-signed programs that run any code are launchers (plan 074, M2, K5-K6)."""
+
+    def test_control_task_is_listed(self):
+        control = "C:\\Windows\\System32\\control.exe"
+        key = "task:\\Invented\\InventedControlTask"
+        responses = clean_responses(extra_files=[file_row(control)])
+        responses["scheduled_tasks"] = ok(list(responses["scheduled_tasks"][1]) + [
+            task("InventedControlTask",
+                 [exec_action(control, "C:\\Invented\\Panel\\invented.cpl")],
+                 triggers=(LOGON,)),
+        ])
+        summary = self.collect(FakePowerShell(responses))
+
+        entry = self.entry(summary, key)
+        fact = self.first_fact(entry)
+        self.assertEqual(fact.get("path"), control, fact)
+        self.assertIs(fact.get("exists"), True, fact)
+        self.assertEqual(fact.get("signature_status"), "Valid", fact)
+        self.assertEqual(fact.get("signer"), MS, fact)
+        self.assertIs(entry.get("own"), False, entry)
+
+        listed = self.listed(summary)
+        self.assertIn(key, listed, listed)
+        self.assertIs(listed[key].get("own"), False, listed[key])
+
+    def test_svchost_service_stays_own(self):
+        host = "C:\\WINDOWS\\system32\\svchost.exe -k InventedNetGroup -p"
+        dll = "%SystemRoot%\\System32\\inventednet.dll"
+        key = "service:InventedNetSvc"
+        responses = clean_responses(extra_files=[
+            file_row(dll, expanded="C:\\Windows\\System32\\inventednet.dll"),
+            file_row("C:\\WINDOWS\\system32\\svchost.exe"),
+        ])
+        responses["services"] = ok(list(responses["services"][1]) + [
+            service("InventedNetSvc", host, type_=SHARE_PROCESS, service_dll=dll),
+        ])
+        summary = self.collect(FakePowerShell(responses))
+
+        entry = self.entry(summary, key)
+        self.assertEqual(entry.get("targets"), [dll], entry)
+        self.assertIs(entry.get("own"), True, entry)
+        self.assertNotIn(key, self.listed(summary))
+        self.assertEqual(summary.get("autostart"), [])
+
+
 if __name__ == "__main__":
     unittest.main()

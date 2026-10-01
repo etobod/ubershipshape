@@ -44,11 +44,19 @@ shared by all skills (see `skills/ush-health/references/report-format.md`,
   and a Defender exclusion's `value`, also of type `ip` or `extension` (the
   profile's `path_keys`). Name an item by its id and `name`, not by its
   `key`; a value of these keys may appear only in a fenced code block.
+- The summary leaves out some fields of a listed item: a program's
+  `install_location`, a service's `display_name`, a fact's `company`, and a
+  fact's `expanded_path` when it equals `path`. When the report needs one,
+  fetch the item with `--detail <id>` and name it in an `ush:detail` line.
 - Item ids (`a1`, `s2`, `f3`, `d4`, `x5`, `c6`) are not numbers when they
   name an item of the summary, an item named in `ush:detail` or an item cut
   from the summary (`truncated`, `truncated_drivers`,
   `truncated_components`, `truncated_additions`). A word of that shape that
   is no such id is checked as a number.
+- Write every number in digits: a number word (`dwa`, `trzy`, `two`, in any
+  case or form) outside code fails the check unless the same word is in a
+  text value of the summary (a name). `ten`, `jeden`, `one` and `oba` are
+  not number words.
 - No numbered lists: use `-` bullets. A numbered heading (`## 2. Programs`)
   is fine when the numbering of its level counts from 1 in order. The first
   cell of a table row is ignored when it equals the row's position among the
@@ -128,11 +136,19 @@ is of an older shape and fails with
      (`c..`) with its `change`, `name`, `source` and, for `changed`, each
      field of `fields` with `before` and `after`. A Defender exclusion change
      has `value` (a path) in place of `name`: name it by its id and `source`.
-     An `administrators` change is named by its id, `source` and `change`,
-     never by `name` (an account name, see "Account names"); for a changed
-     `name` field say only that the name changed. A changed `app` of a
+     An `administrators` change has no `name` (an account name, see
+     "Account names"): name it by its id, `source` and `change`. Its changed
+     `name` field is `{"changed": true}` without `before` and `after`: say
+     only that the name changed. A changed `enabled` has `before` and
+     `after` as any other field. A changed `app` of a
      firewall rule goes, `before` and `after`, in a fenced code block under
-     the change's line, a profile folder written as `%USERPROFILE%`. Then
+     the change's line, a profile folder written as `%USERPROFILE%`. A fact
+     change (field `facts[<path>].<field>`) is named in the text by its id,
+     `source` and the field name after the last `].` (e.g. `signer`), never
+     by the full `facts[...]` key; the file name of the path goes in a
+     fenced code block under the change's line (as a firewall rule's `app`),
+     because its digits (e.g. `rundll32.exe`) back no number. Its `before`
+     and `after` are written as for any other field. Then
      `own_changes` as written, one line: "Changes of Windows' own items: <added> added,
      <removed> removed, <changed> changed" (only in the detail file).
    - Programs: every program (`a..`) with `name`, `version`, `publisher`
@@ -178,7 +194,8 @@ is of an older shape and fails with
      `administrator` (`object_class`, `principal_source`, `enabled`,
      `is_current`; never its `name`, see "Account names"),
      `defender_exclusion` (`type`, `value`, `origin`), `root_certificate`
-     (`store`, `subject`, `not_after`, `self_signed`, `in_authroot`),
+     (`store`, `subject`, `not_after`, `self_signed`, `in_authroot`,
+     `windows_first_run` when present),
      `firewall_rule` (`store`, `name`, `action`, `dir`, `active`,
      `protocol_name` or `protocol`, `lport`, `app`), `hosts_entry`
      (`hostname`, `address`, `line`, `duplicates`). A rule's `app` and an
@@ -192,8 +209,19 @@ is of an older shape and fails with
      <own_counts.firewall_rules.app_iso>, policy
      <own_counts.firewall_rules.policy>" and "Windows root certificates
      (not listed): <own_counts.root_certificates>"; a `null` count is "not
-     read". When `truncated_additions` > 0: how many were cut and their ids
-     (hosts entries are cut first, then firewall rules).
+     read". A certificate with `windows_first_run` `true` is Windows' own
+     because it was there at the first run; a listed certificate with
+     `windows_first_run` `false` has the subject and serial number of that
+     Windows certificate but is not trusted: a changed thumbprint, one added
+     after the first run, or one of several such certificates on a first run.
+     `windows_first_run` `null` means `windows-own.json` could not be used;
+     say it was not checked. When `truncated_additions` > 0: how many were cut and their ids
+     (the items without a change block are cut first, from the end of their
+     group: firewall rules outside `local`, certificates outside
+     `machine_root` and `user_root`, with `in_authroot` `true` or also in another
+     root store, Defender exclusions not added locally or not read by
+     `preference`; then the items with a block, Administrators members among
+     them).
 
    In "Comparison", after the `own_changes` line, give
    `own_changes.by_source` for each source whose three counts are not all
@@ -269,9 +297,10 @@ no `$` or backtick.
 - `from_baseline` `true`: the item is the previous run's, not read now; say
   so and make no change block for it. `facts_from_baseline` `true`: the file
   facts are the previous run's.
-- A service named in a `not_checked` item `services <name>`: its `delayed`,
-  `user_service`, `template_start` and a `null` `svchost.exe` target were
-  not read; treat them as unknown and make no change block for it.
+- A service named in a `not_checked` item `services <name>`: only the
+  fields named in its `unread_fields`, and `template_start` when it is
+  `null`, were not read; treat them as unknown and make no change block for
+  it.
 - A component with `state` `null` (`unread_fields` `["state"]`): its state
   was not read; a feature gives the raw `install_state` (4 is "unknown" to
   Windows). It counts as `unread` in `component_counts`.
@@ -309,8 +338,9 @@ Never report missing data as "no changes" or "clean":
   entry gets a change block: its `approved` may be the previous run's
   without any flag on the entry.
 - `own_counts.unknown` > 0 (item `autostart facts`): that many services or
-  tasks were not listed because their files could not be checked; they are
-  in the detail file.
+  tasks were not listed because their files could not be checked or, for a
+  service, its registry values could not be read (the item's reason says
+  which); they are in the detail file.
 - `windows-own.json` in "Not checked": nothing was classed as Windows' own,
   so the lists are long; say so.
 - `scheduled_tasks visibility` (a normal run): tasks of other accounts or

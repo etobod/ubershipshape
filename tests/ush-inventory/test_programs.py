@@ -284,11 +284,12 @@ class TestMsix(InventoryTestCase):
         programs = self.by_key(summary.get("programs"))
         self.assertNotIn("msix:Invented.SystemApp_0abc1def2ghj3", programs)
         self.assertIn("msix:Invented.StoreApp_0abc1def2ghj3", programs)
-        self.assertIs(programs["msix:Invented.StoreApp_0abc1def2ghj3"].get("own"), False)
         self.assertEqual(summary.get("own_counts", {}).get("programs"), 1, summary.get("own_counts"))
 
         last_summary_id = max(id_number(p.get("id"), "a") for p in programs.values())
         detail = self.by_key(self.detail(summary).get("programs"))
+        # own is not in the summary item (plan 074, M1): read it from the detail file.
+        self.assertIs(detail["msix:Invented.StoreApp_0abc1def2ghj3"].get("own"), False)
         own = detail.get("msix:Invented.SystemApp_0abc1def2ghj3")
         self.assertIsNotNone(own, sorted(detail))
         self.assertIs(own.get("own"), True, own)

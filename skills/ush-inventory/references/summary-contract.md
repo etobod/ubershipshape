@@ -24,9 +24,12 @@ contract):
   programs, autostart entries, drivers, firewall rules and certificates
   that are part of Windows, the entries with `own: null`, the components
   that are not listed, the changes of own items, the fields the summary
-  drops (`approved_raw`, a driver's `inf_name`, `third_party` and `own`,
-  the other fields of a firewall rule and a certificate), and the whole
-  certificate subject.
+  drops (a program's `install_location`, `source` and `own`; an autostart
+  entry's `approved_raw` and `display_name`, a fact's `company`, and a
+  fact's `expanded_path` when it equals `path`; a driver's `inf_name`,
+  `third_party` and `own`; the other fields of a firewall rule and a
+  certificate), and the whole certificate subject. The baseline also keeps
+  the full items, and the comparison and `own` are computed from them.
 - `state/ush-inventory.json`, or `state/ush-inventory.elevated.json` for a
   run with administrator rights - the baseline (shared contract,
   "Baseline"). It is the only file the script keeps between runs.
@@ -37,15 +40,16 @@ and the list of target files to `work/inventory-<stamp>.file_facts.input.json`
 and exits 0; a `.lnk` shortcut is only read, never saved.
 
 To keep the summary within its budget of 35 000 characters four lists may
-be cut from their end, in this order, each only after the one before it is
-empty:
+be cut from their end, in these stages, each only when the one before it
+did not make the summary fit:
 
-| List | Count key | Cut first |
-|---|---|---|
-| `programs` | `truncated` | programs without an install date, then the oldest installs |
-| `drivers` | `truncated_drivers` | the end of the provider order |
-| `components` | `truncated_components` | capabilities (they follow the features), then features, each from the end of the name order |
-| `additions` | `truncated_additions` | hosts entries, then firewall rules, then certificates |
+| Stage | List | Count key | Cut first |
+|---|---|---|---|
+| 1 | `programs`, down to the 20 newest (all of them when there are fewer) | `truncated` | programs without an install date, then the oldest installs |
+| 2 | `drivers` | `truncated_drivers` | the end of the provider order |
+| 3 | `components` | `truncated_components` | capabilities (they follow the features), then features, each from the end of the name order |
+| 4 | `additions` | `truncated_additions` | the items without a change block, from the end of their group, then the items with one (see "Additions") |
+| 5 | `programs`, below the 20 newest | `truncated` | as in stage 1 |
 
 Each count key is always in the summary, `0` when nothing was cut. The
 detail file keeps every item, with ids that follow the last one in the
@@ -72,7 +76,7 @@ the summary goes out over the limit and `not_checked` gets the item
 | `capabilities` | `Get-WindowsCapability -Online`, only with administrator rights; without them the job is not run and the source is `unreadable` with the reason `requires administrator rights (not read in this run, which is not elevated); this is not an empty list` | components (`capability`) |
 | `drivers` | `Win32_PnPSignedDriver`, one row per device; a row without `InfName` (a device without a driver) is no item, only counted in `component_counts.drivers_without_inf` | drivers |
 | `firewall_rules` | the rule values of three `FirewallRules` keys under `HKLM`: `local` (`SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules`), `app_iso` (`...\FirewallPolicy\RestrictedServices\AppIso\FirewallRules`, rules of Store apps) and `policy` (`SOFTWARE\Policies\Microsoft\WindowsFirewall\FirewallRules`) | additions (`firewall_rule`) |
-| `root_certificates` | the thumbprint subkeys of five physical root stores in the registry: `machine_root` (`HKLM\SOFTWARE\Microsoft\SystemCertificates\ROOT`), `machine_policy` (`HKLM\SOFTWARE\Policies\Microsoft\SystemCertificates\Root`), `enterprise` (`HKLM\SOFTWARE\Microsoft\EnterpriseCertificates\Root`), `user_root` (`HKCU\Software\Microsoft\SystemCertificates\Root`), `authroot` (`HKLM\SOFTWARE\Microsoft\SystemCertificates\AuthRoot`); subject, issuer and dates from `Cert:` | additions (`root_certificate`) |
+| `root_certificates` | the thumbprint subkeys of five physical root stores in the registry: `machine_root` (`HKLM\SOFTWARE\Microsoft\SystemCertificates\ROOT`), `machine_policy` (`HKLM\SOFTWARE\Policies\Microsoft\SystemCertificates\Root`), `enterprise` (`HKLM\SOFTWARE\Microsoft\EnterpriseCertificates\Root`), `user_root` (`HKCU\Software\Microsoft\SystemCertificates\Root`), `authroot` (`HKLM\SOFTWARE\Microsoft\SystemCertificates\AuthRoot`); subject, issuer, dates and serial number from `Cert:` | additions (`root_certificate`) |
 | `hosts` | the `hosts` file in the folder of `HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\DataBasePath` (a missing value fails the job; a missing file is read and holds no entries) | additions (`hosts_entry`), `hosts_file` |
 | `administrators` | the members of Administrators (`S-1-5-32-544`) by `Get-LocalGroupMember`, with `Enabled` from `Get-LocalUser` for local and Microsoft accounts; when `Get-LocalGroupMember` fails, ADSI. The source entry has `method`: `local_group_member` or `adsi` (`null` when the job gave nothing) | additions (`administrator`) |
 | `defender_exclusions` | only with administrator rights (same reason as `capabilities` otherwise): `Get-MpPreference`, or, when it fails (e.g. another antivirus is active), the value names of `HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\*`; in both cases the value names of the policy keys `HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Exclusions\*`. The source entry has `method`: `preference`, `registry` or `null` (not run or nothing given). A value Defender hides (`N/A: ...`) makes the source `unreadable` | additions (`defender_exclusion`) |
@@ -139,12 +143,12 @@ Besides the shared fields (`schema_version`, `skill` = `"ush-inventory"`,
 | `baseline` | object | shared contract, "Baseline": `status` (`none`, `compared`, `unreadable`), `created_at`, `age_days`, `saved`, `reason` |
 | `comparison` | object | per item source (`win32_programs`, `msix_programs`, `run_keys`, `startup_folders`, `scheduled_tasks`, `services`, `optional_features`, `capabilities`, `drivers`, `firewall_rules`, `root_certificates`, `hosts`, `administrators`, `defender_exclusions`): `compared`, `no_baseline` or `not_read` (shared contract). A source added to the skill after the baseline was made is `no_baseline` on the first run |
 | `truncated_drivers`, `truncated_components`, `truncated_additions` | int | the items cut from `drivers`, `components` and `additions` (see "Files and output"), `0` when none |
-| `programs` | list | the programs with `own: false`, newest `install_date` first, no date last, then by name; ids `a..`. Cut to the budget (`truncated`) |
-| `autostart` | list | the autostart entries with `own: false`, by source and key; ids `s..`. Never cut. `approved_raw` is left out |
+| `programs` | list | the programs with `own: false`, newest `install_date` first, no date last, then by name; ids `a..`. Each item is without `install_location`, `source` and `own` (in the detail file). Cut to the budget (`truncated`) |
+| `autostart` | list | the autostart entries with `own: false`, by source and key; ids `s..`. Never cut. `approved_raw` and `display_name` are left out, and each fact is without `company`, and without `expanded_path` when it equals `path` (all in the detail file) |
 | `components` | list or `null` | the listed components: features with `state` `enabled` and capabilities with `state` `Installed`, features first, each by name; ids `f..`. Each item has only `id`, `key`, `kind` (`feature`, `capability`), `name` and `state`. `null` when neither `optional_features` nor `capabilities` was read. Cut to the budget (`truncated_components`) |
 | `component_counts` | object | `feature`: `{enabled, disabled, absent, <any other state>, unread}` counts of all features (`enabled`, `disabled` and `absent` always present; `unread` counts `state` `null`), or `null` when `optional_features` was not read; `capability`: `{<state>: number, ..., unread}` of all capabilities, or `null` when `capabilities` was not read; `drivers_without_inf`: the rows of `Win32_PnPSignedDriver` without `InfName` (devices without a driver), or `null` when `drivers` was not read |
 | `drivers` | list or `null` | the drivers whose `own` is not `true` (a third-party `.inf`, or unknown), by `provider`, then `device_name`, `null` last; ids `d..`. Each item has only `id`, `key`, `device_name`, `class`, `provider`, `version`, `date` and `signer`. `null` when `drivers` was not read. Cut to the budget (`truncated_drivers`) |
-| `additions` | list or `null` | the items of the five added-to-the-system sources whose `own` is not `true`, by kind in this order: `administrator`, `defender_exclusion`, `root_certificate`, `firewall_rule`, `hosts_entry`; ids `x..` (see "Additions"). `null` when none of the five sources was read. Cut to the budget (`truncated_additions`) |
+| `additions` | list or `null` | the items of the five added-to-the-system sources whose `own` is not `true`: first those with a change block, then those without, each group by kind in this order: `administrator`, `defender_exclusion`, `root_certificate`, `firewall_rule`, `hosts_entry`; ids `x..` (see "Additions"). `null` when none of the five sources was read. Cut to the budget (`truncated_additions`) |
 | `hosts_file` | object | `{exists, path_is_default}` and, when any is `null`, `unread_fields` naming it (see "hosts_file") |
 | `own_counts` | object | `programs`: the number of programs with `own: true`; `autostart`: `{kind: number}` of the entries with `own: true`, per `kind`; `unknown`: the number of entries with `own: null`; `drivers`: the drivers with `own: true` (`null` when not read); `firewall_rules`: `{local, app_iso, policy}` numbers of rules with `own: true` per store (`null` when not read); `root_certificates`: the certificates with `own: true` (`null` when not read) |
 | `changes` | list | the changes since the baseline whose item is not own on at least one side; ids `c..`. Never cut |
@@ -160,11 +164,11 @@ and a detail-only item has an id after the last one of its list.
 
 | Field | Meaning |
 |---|---|
-| `key`, `source` | the item key and its source (`win32_programs`, `msix_programs`) |
-| `own` | `true` only for an MSIX app whose `signature_kind` is listed in `windows-own.json`; always `false` for a Win32 program |
+| `key`, `source` | the item key and its source (`win32_programs`, `msix_programs`); `source` only in the detail file |
+| `own` | `true` only for an MSIX app whose `signature_kind` is listed in `windows-own.json`; always `false` for a Win32 program. Only in the detail file (a summary program is always not own) |
 | `name`, `version`, `publisher` | as read; for MSIX `publisher` is the `O=` value of the package `Publisher`, else its `CN=` value |
 | `install_date` | `YYYY-MM-DD` or `null`. Win32: the registry `InstallDate` when it is `YYYYMMDD`; any other format or no value is `null`, never a guessed date. MSIX: PowerShell 5.1 has no install date, so this is the UTC creation date of the `InstallLocation` folder, which is the install **or the last update** of the current version; `null` when the folder is not there. Not compared |
-| `install_location` | the program's folder, or `null` |
+| `install_location` | the program's folder, or `null`. Only in the detail file |
 | `scope` | Win32 only: `machine` (`HKLM`) or `user` (`HKCU`) |
 | `system_component` | Win32 only: `true` when `SystemComponent` = 1 (hidden in Settings), otherwise `false` |
 | `signature_kind` | MSIX only: `Store`, `System`, `Developer` and so on, as read |
@@ -180,15 +184,15 @@ and a detail-only item has an id after the last one of its list.
 | `name` | the value name, the file name, the task name, or the service name (the template name for a per-user service) |
 | `command` | raw: the registry value as stored, `<target> <arguments>` of a shortcut, the task actions joined by `; ` (`Execute Arguments`, or `ComHandler <CLSID>`), the service's `PathName` |
 | `value_kind` | `run` and `run_once` only: the registry value kind (`String`, `ExpandString`, ...), for a rollback |
-| `enabled` | `run`, `run_once`, `startup_folder`: `approved` is not `disabled`. `task`: `State` is not `Disabled`. `service`: always `true` |
+| `enabled` | `run`, `run_once`, `startup_folder`: `true` for `approved` `enabled` and `not_set`, `false` for `disabled`, `null` in `unread_fields` for `unknown`. `task`: `State` is not `Disabled`. `service`: always `true` |
 | `approved`, `approved_byte`, `approved_raw` | `run`, `run_once`, `startup_folder` only; see "approved" |
 | `state` | `task` and `service`: as read (`Ready`, `Disabled`, `Running`, `Stopped`, ...). For a per-user service `Running` when any instance runs, else the state of the first instance by name. Not compared |
-| `display_name`, `delayed`, `user_service`, `template_start` | `service` only: the display name; `delayed` `true` when `DelayedAutostart` = 1; `user_service` `true` for a per-user service; `template_start` the `Start` value of the template key (per-user services only; `null` when not read) |
+| `display_name`, `delayed`, `user_service`, `template_start` | `service` only: the display name (only in the detail file); `delayed` `true` when `DelayedAutostart` = 1; `user_service` `true` for a per-user service; `template_start` the `Start` value of the template key (per-user services only; `null` when not read). A service whose registry values could not be read and that the previous baseline does not have names in `unread_fields` only the fields whose values were not read before the error: `delayed` (then `null`) when `DelayedAutostart` was not read, `user_service` when `Type` was not read; when it runs in `svchost.exe` (its target is a registry value) and its `ServiceDll` is unknown also `targets` and `facts`, and `own` `null`: then it is counted in `own_counts.unknown` and listed only in the detail file (see "Values not read") |
 | `targets` | the target files as text, in action order, as taken from `command` before variables are expanded; `null` for a target that cannot be named |
-| `facts` | one fact per target, in the same order: `{path, expanded_path, exists, signature_status, signer, company, program}` |
+| `facts` | one fact per target, in the same order: `{path, expanded_path, exists, signature_status, signer, company, program}`. In the summary a fact has no `company`, and no `expanded_path` when it equals `path`; the detail file has every field |
 | `facts_from_baseline` | `true` when facts are the previous baseline's, because `file_facts` (or one file) could not be read |
 | `own` | see "own and windows-own.json"; always `false` in the summary list |
-| `unread_fields` | the fields whose value is unknown in this run (`["approved", "enabled"]`, `["facts"]`); they are never compared |
+| `unread_fields` | the fields whose value is unknown in this run (`["approved", "enabled"]`, `["enabled"]` for an `unknown` `approved`, `["facts"]`); they are never compared |
 | `from_baseline` | `true` when the entry could not be read in this run and is the previous baseline's |
 
 Targets, per kind:
@@ -257,9 +261,23 @@ Every item has `id`, `key` and `kind`. In the summary a `firewall_rule`
 keeps only `store`, `name`, `action`, `dir`, `active`, `protocol`,
 `protocol_name`, `lport` and `app`, and a `root_certificate` only `store`,
 `subject` (cut to 120 characters), `not_after`, `self_signed` and
-`in_authroot`; the other kinds keep every field but `own` and `source`.
+`in_authroot`, plus `windows_first_run` when the certificate has that field;
+the other kinds keep every field but `own` and `source`.
 `unread_fields` is kept when there are any. The detail file has every field
-(plus `source` and `own`). Within a kind the order is: `administrator` by
+(plus `source` and `own`).
+
+The listed items are in two groups. The first holds the items for which
+`SKILL.md` ("Change blocks") gives a block: every item except those of the
+second group. The second holds the items without a block: a `firewall_rule`
+with a `store` other than `local`; a `root_certificate` with a `store` other
+than `machine_root` and `user_root`, with `in_authroot` `true`, or whose
+thumbprint is also in another root store; a `defender_exclusion` with an
+`origin` other than `local` (`null` included) or read under a `method` other
+than `preference`. An `administrator` is always in the first group, even one
+the "Rules" of `SKILL.md` forbid removing: members are few and stay listed.
+Each group is ordered by kind, then within a kind; the ids follow that
+order, so a cut to the budget takes the second group first, from its end.
+Within a kind the order is: `administrator` by
 `name`; `defender_exclusion` by `value`; `root_certificate` by `subject`,
 then `thumbprint`; `firewall_rule` by `store`, then `name`; `hosts_entry`
 by `hostname`, then `address` (text case-insensitive, `null` last, the key
@@ -291,6 +309,8 @@ breaks ties).
 | `not_before`, `not_after` | UTC `YYYY-MM-DD` (`not_before` detail file only) |
 | `self_signed` | `subject` equals `issuer`; `null` in `unread_fields` when either is unknown |
 | `in_authroot` | the thumbprint is also in `authroot` |
+| `serial` | the serial number as `Cert:` gives it (hex text, detail file only) |
+| `windows_first_run` | only on a certificate that matches an entry of `cert_windows_first_run` (store `machine_root`, `self_signed` `true`, `subject` `CN=<subject_cn>` or starting with `CN=<subject_cn>,`, `serial` in upper case equal to the entry's; an unread field matches nothing) or that is pinned. `true` with `own` `true`: the certificate is pinned by its key, because the previous baseline had the same key with `own` and `windows_first_run` both `true` (even when its details are unread now), or this is a first run, it is the only matching certificate and, with a previous baseline, its entry there could not be matched. `false`: it matches but is not pinned (a changed thumbprint, one added after the first run, or several matches on a first run); `own` then follows the other rules and the certificate is listed. `null`, named in `unread_fields`: `cert_windows_first_run` could not be used on this run, on every `machine_root` certificate that is not pinned; such an entry keeps the next run a first run. Absent on every other certificate |
 
 A field `Cert:` did not give (no such certificate, or an error) is `null`
 and in `unread_fields`.
@@ -336,9 +356,9 @@ keeps what was read and `path_is_default` is `null`. The detail file adds
 |---|---|
 | `key`, `source` | the item that changed |
 | `change` | `added`, `removed` or `changed` |
-| `name` | the item's name (after the change, or before it for `removed`): `name`, for a driver `device_name`, for a certificate `subject`, for a hosts entry `hostname`. A Defender exclusion has no `name`: its path is in `value` (a path key) |
+| `name` | the item's name (after the change, or before it for `removed`): `name`, for a driver `device_name`, for a certificate `subject`, for a hosts entry `hostname`. A Defender exclusion has no `name`: its path is in `value` (a path key). An `administrators` change has no `name`: a change carries no account name (the account names of the members are only in `additions`) |
 | `own` | `true` only when the item is own on every side it has; such changes are only in the detail file |
-| `fields` | `changed` only: `{field: {before, after}}` of the compared fields that differ |
+| `fields` | `changed` only: `{field: {before, after}}` of the compared fields that differ. For `administrators` a changed `name` is `{"changed": true}` without `before` and `after`; `enabled` keeps `before` and `after` |
 
 Within a source the order is added, removed, changed, then by key. Only a
 source whose `comparison` is `compared` gives changes.
@@ -389,7 +409,7 @@ the `StartupApproved` value of the same name (matched case-insensitively):
 | `enabled` | first byte 2 |
 | `disabled` | first byte 3; `enabled` is `false` |
 | `not_set` | no such value; Task Manager treats it as enabled |
-| `unknown` | any other first byte, given in `approved_byte`; or a value that is not binary, with `approved_byte` `null` (and the `not_checked` item `startup_approved <hive>\<key>:<name>`, reason `the value is not binary`) |
+| `unknown` | `enabled` is `null` and in `unread_fields`: what the byte means is not known. Any other first byte, given in `approved_byte`; or a value that is not binary, with `approved_byte` `null` (and the `not_checked` item `startup_approved <hive>\<key>:<name>`, reason `the value is not binary`) |
 
 An entry with a `StartupApproved` value also has `approved_raw`: the whole
 value as lowercase hex without separators (for example
@@ -412,7 +432,8 @@ Windows, never what is unneeded:
 | `driver_third_party_inf` | `fnmatch` patterns of a third-party `.inf` name (`["oem*.inf"]`, case-insensitive); a driver whose `inf_name` matches is `third_party` and listed, any other driver is own |
 | `firewall_builtin` | `{name_prefix, required_fields}` (`"@"`, `["EmbedCtxt"]`): a rule with every field of `required_fields` in its text and a `Name` that starts with `name_prefix` is own |
 | `cert_windows_managed_stores` | stores whose every certificate is own (`["authroot"]`: Windows updates it by itself) |
-| `cert_windows_shipped_thumbprints` | `[{thumbprint, subject}]`: a certificate in `machine_root` with one of these thumbprints is own; `subject` only documents the entry. The list holds public values, never values read from a machine |
+| `cert_windows_shipped_thumbprints` | `[{thumbprint, subject, source}]`: a certificate in `machine_root` with one of these thumbprints is own; `subject` and `source` (the public Microsoft page that gives the thumbprint, or the plan that added it) only document the entry. The list holds public values, never values read from a machine |
+| `cert_windows_first_run` | `[{subject_cn, serial, source}]`: a certificate recognised without a thumbprint, by its subject and serial number (`source`, the public Microsoft page that names it, only documents the entry). It is own only when it was there at a first run: a previous baseline without a `root_certificates` source (none, deleted, or a baseline that could not be read, since this run starts a new one), or one where no entry has `windows_first_run` `true` or `false` and a `machine_root` entry could not be matched: `windows_first_run` `null`, its subject unread, or the entry's name (`CN=<subject_cn>`) with `self_signed` or `serial` unread or without a `serial` key (written before the serial number was read). So a run that could not read the certificate leaves the next run a first run; on such a run only a certificate whose entry in the previous baseline was one of those unmatched entries can be pinned, so one added later, or one left of several matches, is listed. On such a run exactly one matching certificate is own and pinned by its key (`windows_first_run` `true`); several matches trust none. Later runs keep the pin by key; any other matching certificate (a changed thumbprint, or one added after the pinned one was removed) is not own and is listed with `windows_first_run` `false`. A bad shape (not a list of objects with non-empty text `subject_cn` and `serial`) is a `not_checked` item `windows-own.json`, and nothing is classified as part of Windows except a certificate pinned by the previous baseline, whose pin holds; such a run does not end the first run (`windows_first_run` `null`). An entry added to this list later is not trusted on a machine whose baseline already holds that certificate read, since that baseline is no longer a first run; such a machine needs a new baseline |
 | `hosts_default_dir` | the default folder of the hosts file (`%SystemRoot%\System32\drivers\etc`), for `hosts_file.path_is_default` |
 
 An autostart entry is `own: true` only when its `kind` is in `own_kinds` and
@@ -422,9 +443,10 @@ it has at least one target, every target is non-null, and for every target
 `expanded_path` is in `launchers`. Anything else is `own: false`: no file,
 no signature, another signer, a `null` target, a launcher. When the facts of
 an entry of `own_kinds` could not be read and the baseline had none
-(`unread_fields` has `facts`), it is `own: null`: listed only in the detail
-file, counted in `own_counts.unknown`, with the `not_checked` item
-`autostart facts` giving how many. `run`, `run_once` and `startup_folder`
+(`unread_fields` has `facts`: its files could not be checked, or, for a
+service, its registry values could not be read), it is `own: null`: listed
+only in the detail file, counted in `own_counts.unknown`, with the
+`not_checked` item `autostart facts` giving how many and naming the cause. `run`, `run_once` and `startup_folder`
 entries are always `own: false` and always listed, also when they point to a
 Microsoft file (OneDrive, Teams, Edge). Win32 programs are never own.
 Uncertainty never hides an entry.
@@ -461,7 +483,8 @@ case:
   `enabled` `null` and `unread_fields: ["approved", "enabled"]`.
 - A `StartupApproved` value that is not binary: `approved: unknown`,
   `approved_byte: null`, `approved_raw: null` (a reading, not an unread
-  field; `enabled` stays `true`), and a `not_checked` item.
+  field), `enabled` `null` with `unread_fields: ["enabled"]`, and a
+  `not_checked` item.
 - `file_facts` not read: each target's fact comes from the previous baseline
   by its `path` (`facts_from_baseline: true`, `program` matched again); a
   target without a previous fact makes the entry's `facts` unread
@@ -476,13 +499,34 @@ case:
   item `startup_folders <key>` or `scheduled_tasks <key>`; the entry is the
   previous baseline's with `from_baseline: true`, or is left out.
 - A service whose registry values could not be read: the `not_checked` item
-  `services <name>`, reason `registry values not read: ...`; the entry is the
-  previous baseline's with `from_baseline: true`. Without a previous entry
-  it is built from `Win32_Service` alone, and its registry-derived fields
-  (`delayed`, `user_service`, `template_start`, the `ServiceDll` target of a
-  `svchost.exe` service) are not readings: `delayed` shows `false` and such
-  a target `null` although neither was read. Treat them as unknown for every
-  entry named in such an item.
+  `services <name>`, reason `registry values not read from <value name> on:
+  ...` when the value whose read failed (`ErrorAt`) is known, else
+  `registry values not read: ...`; the entry is the previous baseline's with
+  `from_baseline: true`. Without a previous entry it is built from
+  `Win32_Service` and the registry values read before `ErrorAt` (none when
+  the error has no known `ErrorAt`); the values read are `Type`,
+  `DelayedAutostart`, `ServiceDll`, `KeyServiceDll`, `TemplateServiceDll`,
+  `TemplateKeyServiceDll`, `TemplateStart`, in this order. Fields whose values
+  were not read are named in `unread_fields`, so they are not compared and a
+  later clean read is no change: `delayed` is `null` and named when
+  `DelayedAutostart` was not read; `user_service` is named when `Type` was
+  not read (see below) and is never `null`. A service that runs in
+  `svchost.exe` has its target in the registry (`ServiceDll`): when a value
+  not read comes before the first non-empty one (for an instance the
+  template's values first), `unread_fields` also names `targets` and `facts`
+  and `own` is `null`: the entry is counted in `own_counts.unknown`, listed
+  only in the detail file, and the reason of the `autostart facts` item
+  names the registry as the cause. A target read before the error is
+  checked as usual, as is any other service's target, its `PathName`.
+- A service whose `Type` is not a number (not read, also without an error):
+  `user_service` is guessed from the name and named in `unread_fields`. Its
+  key is, in this order: the full name when the previous baseline has
+  `service:<full name>`; the template (the name without its `_<hex>`
+  ending) when the baseline has `service:<template>` with `user_service`
+  `true`; the full name when the baseline has `service:<template>`
+  otherwise; the template when the name ends in `_` and at least 5 hex
+  digits (e.g. `_1a2b3`, not `_1` or `_64`); else the full name. With the
+  template's entry in the baseline any `_<hex>` ending is enough.
 
 An entry with `from_baseline: true` keeps its previous `facts` and `own`.
 
