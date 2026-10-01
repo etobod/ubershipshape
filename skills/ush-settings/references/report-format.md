@@ -40,6 +40,10 @@ shared by all skills (see `skills/ush-health/references/report-format.md`,
   summary, an item named in `ush:detail` or a usage item cut from the summary
   (`truncated`). A word of that shape that is no such id is checked as a
   number.
+- Write every number in digits: a number word (`dwa`, `trzy`, `two`, in any
+  case or form) outside code fails the check unless the same word is in a
+  text value of the summary (a name). `ten`, `jeden`, `one` and `oba` are
+  not number words.
 - No numbered lists: use `-` bullets. A numbered heading (`## 2. Privacy`)
   is fine when the numbering of its level counts from 1 in order. The first
   cell of a table row is ignored when it equals the row's position among the

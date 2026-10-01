@@ -33,6 +33,10 @@ numbers this way:
   So dates and times may be written in local format and a decimal comma is
   fine, but write counts without a thousands separator (`1234`, not `1 234`):
   its parts are rarely in the JSON on their own.
+- Write every number in digits: a number word (`dwa`, `trzy`, `two`, in any
+  case or form) outside code fails the check unless the same word is in a
+  text value of the summary (a name). `ten`, `jeden`, `one` and `oba` are
+  not number words.
 - No numbered lists: use `-` bullets.
   A number at the start of a line (`1. `, `412. `, `- 4. `, `> 3. `) is
   checked like any other number, so a numbered list fails unless its

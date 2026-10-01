@@ -76,6 +76,17 @@ Rules:
   read), requires nothing. Items of other lists, items cut from the summary
   and ``ush:detail`` items are not required: the report selects or
   summarises them.
+- Write every number in digits. Outside code blocks and inline code (a run
+  of backticks up to the next run of the same length in the line; a run
+  without one hides nothing), and outside the marker lines, a word of
+  ``skills/ush-common/data/number-words.json`` (``dwa``, ``trzy``, ``two``,
+  in any case and in the forms listed) is an error, unless the same word
+  stands in a string value of the summary or of an ``ush:detail`` item (a
+  name like "Invented Two Sync"), read as for numbers; keys back no word. A
+  word counts only whole: a letter, a digit, ``_`` or a hyphen next to it
+  (``two-factor``) makes it another word. The list leaves out words with
+  other meanings (``jeden``, ``one``, ``ten``, ``oba``). A missing or
+  malformed list is an error (exit 2), not an empty one.
 - No HTML and no links. Outside code blocks, only the ush: marker lines hold
   an HTML comment: a marker is the whole line (not in a quote or a list item)
   with one ``<!--`` and one ``-->`` and nothing after it. Any other ``<!--``,
@@ -86,9 +97,11 @@ Rules:
 
 JSON files are tokenized from their parsed values (strings, numbers and keys),
 not from the raw text, so ``\\u0105`` escapes cannot supply numbers. The values
-of the profile's ``path_keys`` and ``id_keys`` supply none either, nor does a
-key that holds a backslash (a field named by a file path, such as
-``facts[C:\\x\\y.exe].signer``) or its value. A hex token
+of the profile's ``path_keys`` and ``id_keys`` supply none either. A key named
+by a file path (one shaped ``<name>[<item>].<field>``, such as
+``facts[C:\\x\\y.exe].signer`` or ``facts[y.exe].signer``, or any other key that
+holds a backslash) supplies no number from its own text, but its value is read,
+unless its ``<field>`` is one of those skipped keys. A hex token
 is backed only by a hex value and a decimal token only by a decimal one. The
 ``ush:not-checked`` line must stand directly before or after a heading.
 ``--latest --skill <name>`` takes the newest ``<report_prefix>*.md`` of that
@@ -97,8 +110,9 @@ another skill is an error.
 
 The script counts; it does not judge whether a number is right, only whether
 it is backed by the JSON, nor whether an item is described well, only whether
-its id is there. Exit codes: 0 OK, 1 numbers not backed, summary items not named
-or required summary keys missing, 2 the report, its JSON or its profile could not be checked.
+its id is there. Exit codes: 0 OK, 1 numbers not backed, number words, summary
+items not named or required summary keys missing, 2 the report, its JSON, its
+profile or the number word list could not be checked.
 """
 
 import argparse
@@ -117,6 +131,8 @@ import datadir
 # never an output path).
 SKILLS_DIR = Path(__file__).absolute().parents[2]
 PROFILE_FILE = Path("data") / "report-profile.json"
+# The number words a report may not use outside code (an input, never an output path).
+NUMBER_WORDS_FILE = Path(__file__).absolute().parents[1] / "data" / "number-words.json"
 SKILL_NAME = re.compile(r"^ush-[a-z]+$")
 ID_LETTERS = re.compile(r"^[a-z]+$")
 REPORT_PREFIX = re.compile(r"^[a-z]+-$")
@@ -133,6 +149,11 @@ TOKEN = re.compile(
 HEADING_NUMBER = re.compile(
     r"^ {0,3}(?P<level>#{1,6})(?:[ \t]+(?P<number>[0-9]+)[.)](?=[ \t]|$)|(?=[ \t]|$))"
 )
+# One entry of the number-word list: a single lowercase word of letters only.
+WORD_ENTRY = re.compile(r"^[^\W\d_]+$")
+# A run of backticks: inline code opens on one and closes on the next run of the
+# same length in the same line.
+BACKTICKS = re.compile(r"`+")
 # Row number in the first cell of a table row: "| 3 | ...".
 TABLE_ROW_NUMBER = re.compile(r"^\s*\|\s*(?P<number>[0-9]+)\s*(?=\|)")
 TABLE_ROW = re.compile(r"^\s*\|")
@@ -283,13 +304,29 @@ def tokens(text: str):
             yield match.group("dec"), ("dec", int(match.group("dec")))
 
 
+# A field of an item named by a file path, with or without a folder:
+# ``facts[C:\x\y.exe].signer``, ``facts[y.exe].signer``.
+PATH_NAMED_KEY = re.compile(r"^\w+\[.*\]\.(?P<field>[^.\]]+)$", re.DOTALL)
+
+
+def path_named_field(key: str) -> str | None:
+    """The field a key named by a file path stands for: the part after the
+    last ``].``, "" for another key that holds a backslash, None for an
+    ordinary key."""
+    match = PATH_NAMED_KEY.match(key)
+    if match:
+        return match.group("field")
+    return "" if "\\" in key else None
+
+
 def json_values(data, skip_keys: frozenset[str]) -> set[tuple[str, int]]:
     """Number tokens of every key, string and number in parsed JSON.
 
     The values of ``skip_keys`` (the profile's path_keys and id_keys) are
     skipped: a file path or an item id is not a reading, and its digits would
-    back numbers the report made up. So are a key that holds a backslash (a
-    field named by a file path) and its value.
+    back numbers the report made up. A key named by a file path backs no
+    number with its own text; its value is read unless the field it names is
+    in ``skip_keys`` (see ``path_named_field``).
     """
     found: set[tuple[str, int]] = set()
     stack = [data]
@@ -297,10 +334,13 @@ def json_values(data, skip_keys: frozenset[str]) -> set[tuple[str, int]]:
         item = stack.pop()
         if isinstance(item, dict):
             for key, value in item.items():
-                if "\\" in str(key):
-                    continue
-                found.update(value for _, value in tokens(str(key)))
-                if key not in skip_keys:
+                key = str(key)
+                field = path_named_field(key)
+                if field is None:
+                    found.update(value for _, value in tokens(key))
+                    if key not in skip_keys:
+                        stack.append(value)
+                elif field not in skip_keys:
                     stack.append(value)
         elif isinstance(item, list):
             stack.extend(item)
@@ -309,6 +349,67 @@ def json_values(data, skip_keys: frozenset[str]) -> set[tuple[str, int]]:
         elif isinstance(item, (int, float, str)):
             found.update(value for _, value in tokens(str(item)))
     return found
+
+
+def load_number_words() -> re.Pattern:
+    """A pattern matching any word of ``NUMBER_WORDS_FILE`` as a whole word.
+
+    The file is ``{"words": [<lowercase word>, ...]}``. A missing or unreadable
+    file, or a list of another shape, is a CheckError: a silently empty list
+    would switch the rule off. The pattern ignores case; a letter, a digit,
+    ``_`` or a hyphen next to the word makes it no match (``two-factor``).
+    """
+    path = NUMBER_WORDS_FILE
+    if not path.is_file():
+        raise CheckError(f"number word list {path} does not exist")
+    data = read_json(path, "number word list")
+    words = data.get("words") if isinstance(data, dict) else None
+    if not isinstance(words, list) or not words:
+        raise CheckError(f"number word list {path}: words must be a non-empty list")
+    for word in words:
+        if not (isinstance(word, str) and WORD_ENTRY.match(word) and word == word.lower()):
+            raise CheckError(f"number word list {path}: {word!r} is not one lowercase word")
+    alternatives = "|".join(re.escape(w) for w in sorted(set(words), key=len, reverse=True))
+    return re.compile(rf"(?<![\w-])(?:{alternatives})(?![\w-])", re.IGNORECASE)
+
+
+def json_words(data, skip_keys: frozenset[str], pattern: re.Pattern) -> set[str]:
+    """The number words (lowercased) in the string values of parsed JSON.
+
+    The same values as in ``json_values`` back words, except that keys back
+    none: a name like "Invented Two Sync" backs "two" in the report.
+    """
+    found: set[str] = set()
+    stack = [data]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            for key, value in item.items():
+                field = path_named_field(str(key))
+                if (str(key) if field is None else field) not in skip_keys:
+                    stack.append(value)
+        elif isinstance(item, list):
+            stack.extend(item)
+        elif isinstance(item, str):
+            found.update(match.lower() for match in pattern.findall(item))
+    return found
+
+
+def strip_inline_code(line: str) -> str:
+    """``line`` with its inline code spans blanked: a run of backticks up to the
+    next run of the same length. A run without such a partner hides nothing."""
+    out, at = [], 0
+    while (opening := BACKTICKS.search(line, at)):
+        closing = next((m for m in BACKTICKS.finditer(line, opening.end())
+                        if len(m.group()) == len(opening.group())), None)
+        if closing is None:
+            out.append(line[at:opening.end()])
+            at = opening.end()
+            continue
+        out.append(line[at:opening.start()] + " ")
+        at = closing.end()
+    out.append(line[at:])
+    return "".join(out)
 
 
 def read_text(path: Path, what: str) -> str:
@@ -351,9 +452,11 @@ def detail_items(summary, ids: list[str], profile: Profile) -> list:
     return [by_id[item_id] for item_id in ids]
 
 
-def check(report: Path, skill: str | None = None) -> tuple[list[str], int, list[str]]:
+def check(report: Path, skill: str | None = None
+          ) -> tuple[list[str], int, list[str], list[str]]:
     """Return (unbacked-number messages, number of checked tokens,
-    messages for the summary items the report does not name).
+    messages for the summary items the report does not name,
+    number-word messages).
 
     With ``skill``, a report whose summary is of another skill is an error.
     """
@@ -399,14 +502,17 @@ def check(report: Path, skill: str | None = None) -> tuple[list[str], int, list[
             named.extend(detail.group("ids").split())
     ids = list(dict.fromkeys(named))  # several markers are allowed; keep first order
 
+    number_word = load_number_words()
     allowed = json_values(summary, profile.skip_keys)
+    backed_words = json_words(summary, profile.skip_keys, number_word)
     for item in detail_items(summary, ids, profile) if ids else []:
         allowed |= json_values(item, profile.skip_keys)
+        backed_words |= json_words(item, profile.skip_keys, number_word)
 
     known_ids = item_ids(summary, profile) | set(ids)
 
     in_order = _heading_numbers(lines)
-    problems, checked = [], 0
+    problems, checked, words = [], 0, []
     mentioned: set[str] = set()
     position = 0  # data-row position in the current table; 0 outside a table
     row = 0  # row index in the current table: 0 header, 1 delimiter row
@@ -421,6 +527,9 @@ def check(report: Path, skill: str | None = None) -> tuple[list[str], int, list[
             position = row = 0
         if NOT_CHECKED_LINE.match(line) or DETAIL_LINE.match(line):
             continue
+        words += [f'line {number}: "{word}" is a number word; write the number in digits'
+                  for word in number_word.findall(strip_inline_code(line))
+                  if word.lower() not in backed_words]
         numbering = HEADING_NUMBER.match(line) if number - 1 in in_order else None
         if not numbering and position:
             cell = TABLE_ROW_NUMBER.match(line)
@@ -442,7 +551,7 @@ def check(report: Path, skill: str | None = None) -> tuple[list[str], int, list[
     missing += [f"not named in the report: {item_id} ({where})"
                 for item_id, where in required_ids(summary, profile)
                 if item_id not in mentioned]
-    return problems, checked, missing
+    return problems, checked, missing, words
 
 
 def required_ids(summary, profile: Profile) -> list[tuple[str, str]]:
@@ -697,21 +806,23 @@ def main(argv=None) -> int:
             report = latest_report(data_dir, args.skill)
         else:
             report = Path(args.report).absolute()
-        problems, checked, missing = check(report, args.skill)
+        problems, checked, missing, words = check(report, args.skill)
     except CheckError as exc:
         print(f"FAILED: {exc}", file=sys.stderr)
         return EXIT_ERROR
-    for line in problems + missing:
+    for line in problems + words + missing:
         print(line)
     if problems:
         print(f"FAILED: {report}: {len(problems)} of {checked} numbers are not backed by the JSON")
+    if words:
+        print(f"FAILED: {report}: {len(words)} number words")
     missing_keys = sum(1 for line in missing if line.startswith("required key missing"))
     if missing_keys:
         print(f"FAILED: {report}: {missing_keys} required summary keys missing")
     if len(missing) > missing_keys:
         print(f"FAILED: {report}: {len(missing) - missing_keys} summary items not named "
               f"in the report")
-    if problems or missing:
+    if problems or words or missing:
         return EXIT_NUMBERS
     print(f"OK: {report}: {checked} numbers checked")
     return EXIT_OK

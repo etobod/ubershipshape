@@ -43,6 +43,17 @@ shared by all skills; its rules in short:
   summary (`truncated`); the `id` values back no number, so a count next to
   an id must come from a reading. A word of that shape that is no such id is
   checked as a number.
+- Write every number in digits. A number word from
+  `skills/ush-common/data/number-words.json` (Polish cardinals from 2 to
+  20, the tens and the hundreds in every case, e.g. `dwa`, `dwie`, `trzema`,
+  `sto`, `stu`, and the singular of the word for thousand; English `two` to
+  `twenty`, the tens, `hundred` and `thousand`) fails the check outside code blocks and
+  inline code, in any case. A word counts only whole: a letter, a digit,
+  `_` or a hyphen next to it makes it another word (`two-factor`). A word
+  that also stands in a text value of the summary or of an `ush:detail`
+  item (a name like `Invented Two Sync`) is fine; keys and the path and id
+  keys back no word, as for digits. `ten`, `jeden`, `one`, `oba`, `both`,
+  ordinals and collective numerals are not on the list.
 - No numbered lists: use `-` bullets. A numbered heading (`## 2. Volumes`) is
   fine when the numbering of its level counts from 1 in order; write every
   heading with `#`. The first cell of a table row is ignored when it equals
