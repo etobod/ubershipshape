@@ -214,8 +214,10 @@ is of an older shape and fails with
      `windows_first_run` `false` has the subject and serial number of that
      Windows certificate but is not trusted: a changed thumbprint, one added
      after the first run, or one of several such certificates on a first run.
-     `windows_first_run` `null` means `windows-own.json` could not be used;
-     say it was not checked. When `truncated_additions` > 0: how many were cut and their ids
+     `windows_first_run` `null` means the decision file
+     `ush-inventory.first-run.json` could not be read; say it was not checked.
+     A `first-run certificates` item in "Not checked" names that file and the
+     reason; deleting the file starts a new first run. When `truncated_additions` > 0: how many were cut and their ids
      (the items without a change block are cut first, from the end of their
      group: firewall rules outside `local`, certificates outside
      `machine_root` and `user_root`, with `in_authroot` `true` or also in another
@@ -341,8 +343,9 @@ Never report missing data as "no changes" or "clean":
   tasks were not listed because their files could not be checked or, for a
   service, its registry values could not be read (the item's reason says
   which); they are in the detail file.
-- `windows-own.json` in "Not checked": nothing was classed as Windows' own,
-  so the lists are long; say so.
+- `windows-own.json` in "Not checked": nothing was classed as Windows' own
+  except certificates trusted by the decisions kept in
+  `ush-inventory.first-run.json`, so the lists are long; say so.
 - `scheduled_tasks visibility` (a normal run): tasks of other accounts or
   of the system may be missing without an error; offer an elevated run.
 - No administrator rights (`elevated` `false`): `capabilities` and
@@ -376,5 +379,6 @@ Never report missing data as "no changes" or "clean":
   "Not checked" means the summary is over the budget and nothing was cut.
 - `windows-own.json` in "Not checked": besides the longer lists, every
   driver is listed with `third_party` in `unread_fields`, every firewall
-  rule and every certificate (also of `authroot`) is listed, and
+  rule and every certificate (also of `authroot`) is listed except those
+  trusted by `ush-inventory.first-run.json`, and
   `hosts_file.path_is_default` is unread.

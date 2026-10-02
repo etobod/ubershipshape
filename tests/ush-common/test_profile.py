@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -27,11 +28,31 @@ def _profile(**overrides):
     profile.update(overrides)
     return profile
 
+# A temporary path must not supply an id the tests assert on: x or y with a digit,
+# or a lone c.
+ID_LIKE = re.compile(r"[xy]\d|\bc\b")
+
+
+def clean_temp_dir(make=None, attempts=20):
+    """A temporary directory whose resolved path holds no id-like part.
+
+    A colliding directory is cleaned up at once and another is drawn; when every
+    attempt collides (e.g. the parent path itself does), the test fails with the path.
+    """
+    make = make or tempfile.TemporaryDirectory
+    for _ in range(attempts):
+        tmp = make()
+        path = str(Path(tmp.name).resolve())
+        if not ID_LIKE.search(path):
+            return tmp
+        tmp.cleanup()
+    raise AssertionError(f"every temporary directory has an id-like part: {path}")
+
 
 class CheckerTestCase(unittest.TestCase):
     def setUp(self):
         self.check = load_script("ush-common", "check_report")
-        tmp = tempfile.TemporaryDirectory()
+        tmp = clean_temp_dir()
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name).resolve()
         self.reports_dir = self.root / "reports"
@@ -416,6 +437,59 @@ class TestLatest(CheckerTestCase):
             self.assertEqual(code, 2, output)
             self.assertNotIn("OK", output)
             self.assertTrue(output.strip(), "expected a message")
+
+
+class _FakeTemp:
+    """A temporary directory stand-in: a fixed name and a recorded cleanup."""
+
+    def __init__(self, name, make_dir=False):
+        self.name = str(name)
+        self.cleaned = False
+        if make_dir:
+            Path(self.name).mkdir()
+
+    def cleanup(self):
+        self.cleaned = True
+
+
+class TestCleanTempDir(unittest.TestCase):
+    """Tests K1-K3: the temporary root never holds an id-like part."""
+
+    def test_colliding_name_is_drawn_again(self):
+        made = [_FakeTemp(Path("C:/ush-fake/tmpx4ab12cd")),
+                _FakeTemp(Path("C:/ush-fake/tmpab12cd34"))]
+        queue = list(made)
+        tmp = clean_temp_dir(make=lambda: queue.pop(0))
+        self.assertIs(tmp, made[1])
+        self.assertTrue(made[0].cleaned)
+        self.assertFalse(made[1].cleaned)
+
+    def test_all_colliding_fails_clearly(self):
+        made = []
+
+        def make():
+            made.append(_FakeTemp(Path(f"C:/ush-fake/tmpy3{len(made):06d}")))
+            return made[-1]
+
+        with self.assertRaises(AssertionError) as caught:
+            clean_temp_dir(make=make, attempts=5)
+        self.assertEqual(len(made), 5)
+        self.assertIn("tmpy3", str(caught.exception))
+        self.assertTrue(all(t.cleaned for t in made))
+
+    def test_setup_uses_clean_dir(self):
+        parent = clean_temp_dir()
+        self.addCleanup(parent.cleanup)
+        names = ["tmpx4ab12cd", "tmpab12cd34"]
+
+        def make():
+            return _FakeTemp(Path(parent.name) / names.pop(0), make_dir=True)
+
+        case = CheckerTestCase("setUp")
+        with mock.patch.object(tempfile, "TemporaryDirectory", make):
+            case.setUp()
+        self.addCleanup(case.doCleanups)
+        self.assertNotIn("x4", str(case.root))
 
 
 if __name__ == "__main__":

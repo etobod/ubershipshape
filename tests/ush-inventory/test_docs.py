@@ -66,5 +66,56 @@ class TestDocs(unittest.TestCase):
             self.assertIn('"$env:USERPROFILE\\', text)
 
 
+REFERENCES = REPO_ROOT / "skills" / "ush-inventory" / "references"
+FIRST_RUN_FILE = "ush-inventory.first-run.json"
+
+
+def _flat(text):
+    """The text with every run of whitespace made one space."""
+    return " ".join(text.split())
+
+
+class TestFirstRunFileDocs(unittest.TestCase):
+    """Test K16 (plan 092): the documents describe the first-run decision file."""
+
+    def test_first_run_file_documented(self):
+        contract = _flat((REFERENCES / "summary-contract.md").read_text(encoding="utf-8"))
+        report = _flat((REFERENCES / "report-format.md").read_text(encoding="utf-8"))
+
+        with self.subTest("contract names the file"):
+            self.assertIn(FIRST_RUN_FILE, contract)
+
+        with self.subTest("contract: unusable windows-own.json keeps decisions"):
+            match = re.search(r"When `windows-own.json` cannot be read(.*?)(?=\. [A-Z`#]|\Z)",
+                              contract)
+            self.assertIsNotNone(match, "paragraph on an unusable windows-own.json")
+            end = contract.find("`not_checked` has the item", match.start())
+            self.assertNotEqual(end, -1, "end of the paragraph")
+            paragraph = contract[match.start():end]
+            self.assertIn(FIRST_RUN_FILE, paragraph)
+
+        with self.subTest("contract: not_checked table"):
+            row = re.search(r"\| `windows-own.json` \|([^|]*)\|", contract)
+            self.assertIsNotNone(row, "windows-own.json row")
+            self.assertIn(FIRST_RUN_FILE, row.group(1))
+            self.assertIn("| `first-run certificates` |", contract)
+
+        bullets =[m.start() for m in
+                   re.finditer(re.escape('- `windows-own.json` in "Not checked"'), report)]
+        self.assertTrue(bullets, 'no "windows-own.json in Not checked" item')
+        for start in bullets:
+            with self.subTest("report format: windows-own.json in Not checked", at=start):
+                end = report.find(" - ", start + 2)
+                bullet = report[start:end if end != -1 else len(report)]
+                self.assertIn(FIRST_RUN_FILE, bullet)
+
+        with self.subTest("report format: null means an unreadable decision file"):
+            start = report.find("`windows_first_run` `null` means")
+            self.assertNotEqual(start, -1)
+            sentence = report[start:report.find(";", start)]
+            self.assertIn(FIRST_RUN_FILE, sentence)
+            self.assertNotIn("windows-own.json", sentence)
+
+
 if __name__ == "__main__":
     unittest.main()

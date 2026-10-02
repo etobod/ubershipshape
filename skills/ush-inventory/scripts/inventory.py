@@ -83,9 +83,9 @@ own. Components (features and capabilities) are never own, so every change of
 one is listed. A firewall rule with every field of ``firewall_builtin`` and a
 ``Name`` that starts with its prefix is own; a root certificate is own in a
 store of ``cert_windows_managed_stores``, or in ``machine_root`` with a
-thumbprint of ``cert_windows_shipped_thumbprints``, or pinned by its key after a
-first run on which it was the one certificate of ``cert_windows_first_run``
-(``windows_first_run``); hosts entries,
+thumbprint of ``cert_windows_shipped_thumbprints``, or trusted by the decision
+of the first run that read it, kept per entry of ``cert_windows_first_run`` in
+``state/ush-inventory.first-run.json`` (``windows_first_run``); hosts entries,
 Administrators members and Defender exclusions are never own. The items of these
 five sources that are not own are listed in ``additions`` (ids ``x..``).
 ``own_changes.by_source`` splits the own-only changes by source.
@@ -112,6 +112,7 @@ import copy
 import fnmatch
 import json
 import ntpath
+import os
 import re
 import sys
 from collections import Counter
@@ -127,6 +128,8 @@ import psrun
 from psrun import dump, ps_script, run_job
 
 SKILL = "ush-inventory"
+FIRST_RUN_FILE = "ush-inventory.first-run.json"
+FIRST_RUN_SCHEMA = 1
 SCHEMA_VERSION = 1
 SUMMARY_MAX_CHARS = 35000
 DETAIL_SECTIONS = ("programs", "autostart", "components", "drivers", "additions", "changes")
@@ -950,8 +953,8 @@ def load_own(path: Path):
     so every entry is listed: ``driver_third_party_inf`` is then None (unknown), and
     every driver is listed with ``third_party`` unread; ``firewall_builtin`` and
     ``hosts_default_dir`` are None, so no firewall rule is own and ``path_is_default``
-    is unread; ``cert_windows_first_run`` is None, so no certificate is pinned anew
-    and the first-run window stays open.
+    is unread; ``cert_windows_first_run`` is None, so no new first-run decision is
+    made and the recorded ones still apply.
     """
     empty = {name: set() for name in OWN_LISTS}
     empty.update(driver_third_party_inf=None, firewall_builtin=None,
@@ -1788,15 +1791,12 @@ def first_run_subject(item: dict, first_run: list) -> list:
 
 
 def first_run_undecided(item: dict, first_run: list) -> bool:
-    """Whether a ``machine_root`` certificate's fields left ``first_run_match``
-    undecided: ``windows_first_run`` null (the list could not be used), its subject
-    unread, or the name of an entry with ``self_signed`` or the serial number unread
-    (or written before the serial number was read)."""
+    """Whether a ``machine_root`` certificate's fields leave ``first_run_match``
+    undecided: its subject unread, or the name of an entry with ``self_signed`` or
+    the serial number unread."""
     subject = item.get("subject")
     if item.get("store") != "machine_root":
         return False
-    if "windows_first_run" in item and item["windows_first_run"] is None:
-        return True
     if not isinstance(subject, str):
         return True
     return bool(first_run_names(subject, first_run)) and (
@@ -1813,8 +1813,94 @@ def first_run_match(item: dict, first_run: list) -> bool:
                for e in first_run_subject(item, first_run))
 
 
-def collect_certificates(col: Collector, config: dict,
-                         previous=None) -> tuple[str, dict]:
+def _thumb_list(value) -> bool:
+    return isinstance(value, list) and all(isinstance(t, str) for t in value)
+
+
+def first_run_reason(data) -> str | None:
+    """None when ``data`` has the shape of the first-run file, else what is wrong."""
+    if not isinstance(data, dict):
+        return "it is not a JSON object"
+    if data.get("schema_version") != FIRST_RUN_SCHEMA:
+        return f"schema_version is {data.get('schema_version')!r}, not {FIRST_RUN_SCHEMA}"
+    entries = data.get("entries")
+    if not isinstance(entries, list):
+        return "entries is not a list"
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict) \
+                or not all(isinstance(entry.get(field), str)
+                           for field in ("subject_cn", "serial", "decided_at")) \
+                or not _thumb_list(entry.get("matched")) \
+                or not _thumb_list(entry.get("unchecked")):
+            return f"entry {index} does not have the expected fields"
+    return None
+
+
+def load_first_run(state_dir) -> dict:
+    """Read ``<state_dir>/ush-inventory.first-run.json``, never changing it.
+
+    ``{"status": "none" | "read" | "unreadable", "entries": [...], "reason"}``: none
+    when the file does not exist, unreadable (with the reason) when it cannot be read
+    or has the wrong shape; entries only when read.
+    """
+    path = Path(state_dir).absolute() / FIRST_RUN_FILE
+    if not path.exists():
+        return {"status": "none", "entries": [], "reason": None}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        return {"status": "unreadable", "entries": [], "reason": str(exc)}
+    reason = first_run_reason(data)
+    if reason is not None:
+        return {"status": "unreadable", "entries": [], "reason": reason}
+    return {"status": "read", "entries": data["entries"], "reason": None}
+
+
+def save_first_run(state_dir, data, read_back=None) -> None:
+    """Write ``data`` as ``<state_dir>/ush-inventory.first-run.json``.
+
+    Through ``<name>.tmp``: it is read back (``read_back(path) -> str``, default a
+    UTF-8 read) and compared before ``os.replace`` puts it in place, so a failed
+    write leaves the old file as it was. Raises OSError or ValueError.
+    """
+    reason = first_run_reason(data)
+    if reason is not None:
+        raise ValueError(f"first-run data has the wrong shape: {reason}")
+    state = Path(state_dir).absolute()
+    tmp = state / f"{FIRST_RUN_FILE}.tmp"
+    content = json.dumps(data, ensure_ascii=True, indent=1)
+    read_back = read_back or (lambda path: path.read_text(encoding="utf-8"))
+    try:
+        state.mkdir(parents=True, exist_ok=True)
+        with open(tmp, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(content)
+        if json.loads(read_back(tmp)) != json.loads(content):
+            raise ValueError(f"{tmp.name} does not read back what was written")
+        os.replace(tmp, state / FIRST_RUN_FILE)
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+
+
+def first_run_trusted(entry: dict, matching: list, items: dict) -> list:
+    """The keys an entry of the first-run file trusts: every ``machine_root``
+    certificate with its one ``matched`` thumbprint; with none matched, the one
+    certificate of ``matching`` whose thumbprint is in ``unchecked``, if exactly one."""
+    if len(entry["matched"]) == 1:
+        pinned = entry["matched"][0].strip().upper()
+        return [key for key, item in items.items()
+                if item["store"] == "machine_root" and item["thumbprint"] == pinned]
+    if entry["matched"]:
+        return []
+    unchecked = {thumbprint.strip().upper() for thumbprint in entry["unchecked"]}
+    found = [key for key in matching if items[key]["thumbprint"] in unchecked]
+    return found if len(found) == 1 else []
+
+
+def collect_certificates(col: Collector, config: dict, first_run: dict) -> tuple[str, dict]:
     """``(status, {key: item})`` of the five root stores.
 
     Details that ``Cert:`` did not give are null and named in ``unread_fields``.
@@ -1822,22 +1908,21 @@ def collect_certificates(col: Collector, config: dict,
     thumbprint is also in ``authroot``; ``own`` true in a managed store, or in
     ``machine_root`` with a shipped thumbprint.
 
-    ``previous`` is the ``root_certificates`` source of the previous baseline (None
-    when it has none, also when the baseline could not be read). A certificate that
-    matches an entry of ``cert_windows_first_run`` (``first_run_match``) carries
-    ``windows_first_run``; no other certificate has the field. It is true, with
-    ``own`` true, when the previous entry of the same key had both true (the pin
-    holds even with the details unread now), or on a first run when exactly one
-    certificate matches and, with a previous baseline, its entry there is one that
-    ``first_run_undecided`` names; several matches trust none. A first run is a
-    previous baseline without the source, or one where no entry has
-    ``windows_first_run`` and some entry is named by ``first_run_undecided``, so a
-    run that could not read the certificate leaves the next one a first run. Any
-    other match has ``windows_first_run`` false and ``own`` as the other rules give,
-    so a changed thumbprint, or a certificate added later, is listed. When the list
-    could not be used (None), every ``machine_root`` certificate that is not pinned
-    has ``windows_first_run`` null, named in ``unread_fields``, so this run does not
-    end the first run.
+    ``first_run`` is ``{"dir", "loaded", "decided_at"}``: the state directory, what
+    ``load_first_run`` gave and the time of a new decision. The first-run file holds,
+    per entry of ``cert_windows_first_run`` (subject and serial number), the decision
+    of the first run that read the certificates: ``matched``, the thumbprints that
+    matched, and ``unchecked``, those whose details left the match undecided. One
+    file serves both modes and an entry is never changed. The entries in force are
+    the file's entries on the list (all of them when the list could not be used).
+    A certificate that matches an entry in force (``first_run_match``) carries
+    ``windows_first_run``, false unless the entry trusts it (``first_run_trusted``):
+    then it is true and ``own`` true, also with the details unread now. A list entry
+    without a record gets a new decision only when the list could be used, the
+    certificates were read and the file was read or absent; a failed write is named
+    in ``not_checked`` and the decision still applies to this run. When the file
+    cannot be read nothing is decided or written, and every certificate matching the
+    list has ``windows_first_run`` null, named in ``unread_fields``.
     """
     result = col.job("root_certificates", ROOT_CERTIFICATES_BODY)
     managed = config["cert_windows_managed_stores"]
@@ -1852,9 +1937,6 @@ def collect_certificates(col: Collector, config: dict,
                 continue
             found.append((store, thumbprint.strip().upper(), entry.get("details")))
     authroot = {thumbprint for store, thumbprint, _ in found if store == "authroot"}
-    first_run_unknown = config["cert_windows_first_run"] is None
-    first_run = config["cert_windows_first_run"] or []
-    old = previous if isinstance(previous, dict) else None
     items = {}
     for store, thumbprint, details in found:
         item = {"store": store, "thumbprint": thumbprint}
@@ -1873,27 +1955,63 @@ def collect_certificates(col: Collector, config: dict,
         if unread:
             item["unread_fields"] = unread
         items.setdefault(f"cert:{store}:{thumbprint}", item)
-    matching = [key for key, item in items.items() if first_run_match(item, first_run)]
-    old_entries = [entry for entry in (old or {}).values() if isinstance(entry, dict)]
-    fresh = old is None or (
-        not any(entry.get("windows_first_run") is not None for entry in old_entries)
-        and any(first_run_undecided(entry, first_run) for entry in old_entries))
-    for key in matching:
-        items[key]["windows_first_run"] = False
-    for key, item in items.items():
-        entry = (old or {}).get(key)
-        if isinstance(entry, dict) and entry.get("own") is True \
-                and entry.get("windows_first_run") is True:
-            item.update(own=True, windows_first_run=True)
-        elif first_run_unknown and item["store"] == "machine_root":
-            item["windows_first_run"] = None
-            item["unread_fields"] = item.get("unread_fields", []) + ["windows_first_run"]
-    if fresh and len(matching) == 1 and (
-            old is None or first_run_undecided(old.get(matching[0]) or {}, first_run)):
-        items[matching[0]].update(own=True, windows_first_run=True)
+    apply_first_run(col, items, config["cert_windows_first_run"], first_run,
+                    result["status"] in READ_STATUSES)
     skip_keyless(col, "root_certificates", "thumbprint", without_thumb)
     col.record("root_certificates", result["status"], result["reason"])
     return result["status"], items
+
+
+def apply_first_run(col: Collector, items: dict, listed, first_run: dict,
+                    read: bool) -> None:
+    """Set ``windows_first_run`` (and ``own`` when trusted) on ``items`` from the
+    first-run file, as ``collect_certificates`` describes; ``listed`` is
+    ``cert_windows_first_run`` (None when the list could not be used), ``read``
+    whether the certificates were read."""
+    loaded = first_run["loaded"]
+    if loaded["status"] == "unreadable":
+        col.skip("first-run certificates",
+                 f"{FIRST_RUN_FILE} in the state directory could not be read "
+                 f"({loaded['reason']}), so no certificate is trusted as Windows' "
+                 f"first-run certificate and no decision is written; deleting the "
+                 f"file starts a new first run")
+        for item in items.values():
+            if first_run_match(item, listed or []):
+                item["windows_first_run"] = None
+                item["unread_fields"] = item.get("unread_fields", []) + ["windows_first_run"]
+        return
+    recorded = {(e["subject_cn"], e["serial"]): e for e in loaded["entries"]}
+    can_decide = listed is not None and read
+    new, trusted = [], set()
+    for entry in (list(recorded.values()) if listed is None else listed):
+        matching = [key for key, item in items.items() if first_run_match(item, [entry])]
+        for key in matching:
+            items[key]["windows_first_run"] = False
+        record = recorded.get((entry["subject_cn"], entry["serial"]))
+        if record is None:
+            if not can_decide:
+                continue
+            record = {
+                "subject_cn": entry["subject_cn"],
+                "serial": entry["serial"],
+                "decided_at": first_run["decided_at"],
+                "matched": [items[key]["thumbprint"] for key in matching],
+                "unchecked": [item["thumbprint"] for key, item in items.items()
+                              if key not in matching and first_run_undecided(item, [entry])],
+            }
+            new.append(record)
+        trusted.update(first_run_trusted(record, matching, items))
+    for key in trusted:
+        items[key].update(own=True, windows_first_run=True)
+    if not new:
+        return
+    try:
+        save_first_run(first_run["dir"], {"schema_version": FIRST_RUN_SCHEMA,
+                                          "entries": loaded["entries"] + new})
+    except (OSError, ValueError) as exc:
+        col.skip("first-run certificates",
+                 f"the first-run decision could not be saved to {FIRST_RUN_FILE} "
+                 f"({exc}); it applies to this run only")
 
 
 def parse_hosts(value) -> list:
@@ -2071,7 +2189,8 @@ def collect_defender(col: Collector, admin: bool) -> tuple[str, dict]:
     return status, items
 
 
-def collect(run_ps, work: Path, stamp: str, previous: dict, config: dict, admin: bool):
+def collect(run_ps, work: Path, stamp: str, previous: dict, config: dict, admin: bool,
+            first_run: dict):
     """Run every source: ``(statuses, {source: {key: item}}, collector)``.
 
     ``statuses`` and the returned map also hold ``file_facts`` (its directories), so
@@ -2114,7 +2233,7 @@ def collect(run_ps, work: Path, stamp: str, previous: dict, config: dict, admin:
     statuses["firewall_rules"], current["firewall_rules"] = collect_firewall(
         col, config["firewall_builtin"])
     statuses["root_certificates"], current["root_certificates"] = collect_certificates(
-        col, config, previous.get("root_certificates"))
+        col, config, first_run)
     statuses["hosts"], current["hosts"] = collect_hosts(col, config["hosts_default_dir"])
     statuses["administrators"], current["administrators"] = collect_administrators(col)
     statuses["defender_exclusions"], current["defender_exclusions"] = collect_defender(
@@ -2595,7 +2714,10 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
     previous = loaded["sources"] if loaded["status"] == "read" else {}
 
     config, own_reason = load_own(DEFAULT_OWN_FILE)
-    statuses, current, col = collect(run_ps, work, stamp, previous, config, admin)
+    first_run = {"dir": state, "loaded": load_first_run(state),
+                 "decided_at": now.isoformat(timespec="seconds")}
+    statuses, current, col = collect(run_ps, work, stamp, previous, config, admin,
+                                     first_run)
     if own_reason is not None:
         col.skip("windows-own.json", f"nothing is classified as part of Windows: "
                                      f"{own_reason}")
