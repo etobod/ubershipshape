@@ -1,0 +1,12 @@
+{
+  "detail_sections": ["children", "firewall_ports"],
+  "id_letters": "hw",
+  "path_keys": ["summary_file", "detail_file", "program_path"],
+  "id_keys": [],
+  "required_lists": ["children", "firewall_ports"],
+  "truncated": [
+    {"list": "firewall_ports", "prefix": "w", "count_key": "truncated"}
+  ],
+  "required_keys": ["children", "firewall_ports", "firewall_ports_counts"],
+  "report_prefix": "runall-"
+}
