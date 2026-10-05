@@ -1,0 +1,42 @@
+{
+  "sources": [
+    {
+      "id": "release-info",
+      "url": "https://learn.microsoft.com/windows/release-health/windows11-release-information",
+      "kind": "release-info",
+      "domains": ["learn.microsoft.com", "support.microsoft.com"]
+    },
+    {
+      "id": "msrc",
+      "url": "https://api.msrc.microsoft.com/cvrf/v3.0/updates",
+      "kind": "cvrf",
+      "domains": [
+        "msrc.microsoft.com",
+        "api.msrc.microsoft.com",
+        "support.microsoft.com",
+        "learn.microsoft.com"
+      ]
+    },
+    {
+      "id": "kev",
+      "url": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
+      "kind": "kev",
+      "domains": ["cisa.gov"]
+    },
+    {
+      "id": "release-health",
+      "url": "https://learn.microsoft.com/windows/release-health/",
+      "kind": "release-health",
+      "domains": ["learn.microsoft.com"]
+    }
+  ],
+  "firmware_domains": [
+    {"manufacturer_prefix": "ASUS", "domains": ["asus.com"]},
+    {"manufacturer_prefix": "Dell", "domains": ["dell.com"]},
+    {"manufacturer_prefix": "HP", "domains": ["hp.com"]},
+    {"manufacturer_prefix": "Hewlett-Packard", "domains": ["hp.com"]},
+    {"manufacturer_prefix": "Lenovo", "domains": ["lenovo.com"]},
+    {"manufacturer_prefix": "Acer", "domains": ["acer.com"]},
+    {"manufacturer_prefix": "Micro-Star", "domains": ["msi.com"]}
+  ]
+}
