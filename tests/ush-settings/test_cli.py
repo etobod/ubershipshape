@@ -67,10 +67,11 @@ class TestDetail(SettingsTestCase):
             registry_entry("invented_second", [SECOND], expected=[0], default=1),
         ])
         data_dir = self.data_dir()
-        # Older run: only invented_first differs, so it is e1 there.
+        # Older run: only invented_first differs, so it is e1 and invented_second e2.
         older = FakePowerShell({"registry_values": registry(
             present(FIRST, 1), present(SECOND, 0))})
-        # Newer run: only invented_second differs, so it is e1 in the newest detail file.
+        # Newer run: only invented_second differs; ids are stable (plan 108), so it keeps
+        # e2, now with the value 1 that only the newest detail file holds.
         newer = FakePowerShell({"registry_values": registry(
             present(FIRST, 0), present(SECOND, 1))})
         self.collect(older, data_dir=data_dir, now=minutes(0))
@@ -78,14 +79,15 @@ class TestDetail(SettingsTestCase):
 
         detail_fake = FakePowerShell()
         code, stdout, stderr = self.run_main(data_dir, detail_fake, now=minutes(2),
-                                             extra=["--detail", "e1"])
+                                             extra=["--detail", "e2"])
         self.assertEqual(code, 0, stderr[:300])
         self.assertEqual(detail_fake.calls, [])
-        self.assertIn('"e1"', stdout)
+        self.assertIn('"e2"', stdout)
         item = self.parse(stdout)
         self.assertIsInstance(item, dict, stdout[:300])
-        self.assertEqual(item.get("id"), "e1", item)
+        self.assertEqual(item.get("id"), "e2", item)
         self.assertEqual(item.get("entry"), "invented_second", item)
+        self.assertEqual(item.get("effective"), 1, item)
         self.assertNotIn("invented_first", stdout)
 
         code, stdout, stderr = self.run_main(data_dir, detail_fake, now=minutes(2),

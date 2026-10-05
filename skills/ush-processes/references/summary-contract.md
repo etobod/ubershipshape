@@ -6,9 +6,9 @@ budget, `sources`, `not_checked`, ids, recommendations, the report profile) is
 in `skills/ush-common/references/summary-contract.md`; the report checker
 reads the ush-processes rules from `data/report-profile.json`.
 
-ush-processes is a snapshot of one moment: it keeps no baseline, compares
-with no earlier run and writes nothing in `state/`. It only reads the
-ush-inventory baseline there.
+ush-processes is a snapshot of one moment: it keeps no baseline and compares
+with no earlier run. In `state/` it reads the ush-inventory baseline and
+writes only its id map `state/ush-processes.ids.json` (see "Groups").
 
 ## Files and output
 
@@ -24,11 +24,17 @@ contract):
   `sorted_by`, `inventory`, and the full lists `processes`, `groups`,
   `ports` and `udp_endpoints` (never truncated). Its groups hold all their
   pids, all their services and their process items (`processes`); command
-  lines are only here, never in the summary.
+  lines are only here, never in the summary. `listed` is
+  `{"groups": [id, ...], "ports": [id, ...]}`, the ids of all groups and
+  ports before the budget cut, and `summary_file` is the summary of the same
+  run; `--cut` reads both.
 
-The PowerShell jobs write their results to `work/processes-<stamp>.<job>.json`
-and the list of group paths to `work/processes-<stamp>.file_facts.input.json`
-(raw captures: never read them). The script changes nothing on the machine
+The PowerShell jobs write their results to `work/processes-<stamp>.<job>.json`,
+the list of group paths to `work/processes-<stamp>.file_facts.input.json` and
+the processes asked for a fallback path to
+`work/processes-<stamp>.image_paths.input.json` (raw captures: never read
+them). The `image_paths` job also points `TMP` and `TEMP` at `work/` before it
+compiles its helper, so the compiler's temporary files stay there. The script changes nothing on the machine
 and exits 0 when the collection ran, also when jobs failed.
 
 `--detail <id>` prints the group (`g..`, with its process items) or the TCP
@@ -38,9 +44,19 @@ with a message on stderr. With `--detail-file <path>` (the summary's
 `detail_file`) it reads that file instead, so the item comes from the same run
 as the summary.
 
+`--cut` prints `{detail_file, summary_file, cut}` for the newest detail file
+(or the one given with `--detail-file`, which needs no data directory):
+`cut` is a list of `{id, list, name}`, the ids in the detail file's `listed`
+that the summary of `summary_file` does not hold. A group's `name` is the
+group name; a port's `name` is its protocol, port and process name. It starts
+no machine job. A detail file without `listed` or `summary_file`, or a summary
+that cannot be read, makes `--cut` exit 1 with the missing field or file on
+stderr. `--detail` and `--cut` cannot be used together.
+
 ## Sources
 
-`sources` is a list of `{name, status, reason}`, one per job, in this order:
+`sources` is a list of `{name, status, reason}`, one per job that ran, in this
+order (`image_paths` is there only when it ran):
 
 | Source | What is read | Gives |
 |---|---|---|
@@ -49,15 +65,31 @@ as the summary.
 | `owners` | `GetOwner` of every process, each in its own try/catch (`{pid, return_value, domain, user}` or `{pid, error}`) | `owner` |
 | `memory` | `Win32_OperatingSystem`: `TotalVisibleMemorySize`, `FreePhysicalMemory`, `TotalVirtualMemorySize`, `FreeVirtualMemory` (KB) | `memory` |
 | `services` | `Win32_Service` with `ProcessId` > 0 (`Name`, `DisplayName`, `ProcessId`, `StartMode`) and `Type` from the service's registry key | group `services` |
+| `network_profiles` | `Get-NetConnectionProfile`: only `NetworkCategory` of each profile, as text (`{Category}`); no interface name or index | `network_categories` |
+| `image_paths` | for every process whose `ExecutablePath` is empty, that is not a pseudo-process and has a `started_at` (input `{ProcessId, CreationDate}`): `OpenProcess` with `PROCESS_QUERY_LIMITED_INFORMATION`, then `QueryFullProcessImageName` (flag 0, a Win32 path as WMI gives it) and `GetProcessTimes` on the same handle; rows `{ProcessId, Path, CreationTime, Error}`, the time in UTC. Runs only when there is such a process | a process `path` with `path_source` `query_image` |
 | `file_facts` | for every group path: exists, Authenticode status as text, signer (`O=` of the certificate subject), company (`VersionInfo.CompanyName`); plus the expanded `%ProgramFiles%`, `%ProgramFiles(x86)%`, `%SystemRoot%` and `System32` | group file facts and the folder rule of `program` |
 | `tcp_listeners` | `Get-NetTCPConnection -State Listen`: `LocalAddress`, `LocalPort`, `OwningProcess` | `ports` |
 | `udp_endpoints` | `Get-NetUDPEndpoint`: the same fields | `udp_bound`, detail `udp_endpoints` |
 
-Both network cmdlets fail when they find nothing; a failure whose
+Both port cmdlets fail when they find nothing; a failure whose
 FullyQualifiedErrorId starts with `CmdletizationQuery_NotFound` (in any
 system language) is `empty`, not `unreadable`. Each job has its own status:
 a failed `udp_endpoints` does not hide the TCP ports, and the other way
 round.
+
+`network_profiles` without a connection: Windows PowerShell 5.1 throws an
+error of category `ObjectNotFound` with an id starting with
+`CmdletizationQuery_NotFound`, which the job turns into no rows (`empty`);
+any other error fails the job, including a missing command
+(`CommandNotFoundException`, also `ObjectNotFound`).
+
+A row of `image_paths` gives a process its path only when the row has a
+full `Path` (with a drive or UNC prefix; a process without an image file
+gives a bare name) and a `CreationTime` less than 1 second from the process's
+`started_at`; a later or earlier time means the pid was reused by another
+process, and the path is not taken. A row with `Error` (e.g. a protected
+process without administrator rights), no row, an `empty` job or a failed
+job leave the path unread; the paths from WMI never change.
 
 Without administrator rights about two thirds of the processes come with an
 empty path and command line and no error, and `GetOwner` works only for the
@@ -75,6 +107,7 @@ Top level, besides the shared fields (`schema_version`, `skill`
 | `elevated` | bool | the run had administrator rights |
 | `sorted_by` | string | `memory_private_bytes` when `perf` is `read`, else `working_set_bytes`: the order of `groups`, and the memory column of the report |
 | `memory` | object | memory of the machine, below |
+| `network_categories` | object or null | network profiles counted per category (`{"Public": 2, "Private": 1}`); `{}` when there is no profile (no connection); `null` when `network_profiles` is `unreadable` |
 | `inventory` | object | the ush-inventory baseline read, below |
 | `counts` | object | counts over all processes, groups and endpoints, below |
 | `groups` | list | groups `g..`, cut from the end to fit the budget (`truncated`) |
@@ -88,10 +121,13 @@ Top level, besides the shared fields (`schema_version`, `skill`
 `commit_used_bytes`, `listed_private_bytes`, and the same values in GB
 (`total_gb`, `available_gb`, `used_gb`, `commit_total_gb`,
 `commit_available_gb`, `commit_used_gb`, `listed_private_gb`; bytes /
-1024^3, rounded to 1 decimal place). The report writes only the `_gb` values.
+1024^3, rounded to 1 decimal place). `used_percent` and
+`commit_used_percent` are `used / total * 100`, rounded to 1 decimal place,
+`null` when a part is missing (or the total is 0). The report writes only the
+`_gb` and `_percent` values.
 
 When `memory` is not `read` (`unreadable`, or `empty`), all values except
-`listed_private_*` are `null`. `listed_private_bytes` is the sum of
+`listed_private_*` are `null`, the percentages included. `listed_private_bytes` is the sum of
 `memory_private_bytes` of the groups in the summary (after the cut; a group
 with `null` counts 0), and `null` (never 0) when `perf` is not `read` or no group in the summary has
 a read value (e.g. a failed `processes` job).
@@ -133,7 +169,8 @@ mixed). It is only read, never changed.
 |---|---|
 | `pid`, `name`, `session_id`, `started_at` | from `Win32_Process`; `started_at` is ISO 8601 text or `null` |
 | `path_kind` | `"none"` for a pseudo-process, else `"file"` (below) |
-| `path`, `command_line` | `null` when empty; then named in `unread_fields`, except for a pseudo-process |
+| `path`, `command_line` | `null` when empty; then named in `unread_fields`, except for a pseudo-process. An empty `path` may be filled from `image_paths` (Sources) |
+| `path_source` | `wmi` (from `ExecutablePath`), `query_image` (from `image_paths`), or `null` when no path was read (also for a pseudo-process) |
 | `owner` | `domain\user` when `GetOwner` returned 0 and a user; else `null` and `owner` in `unread_fields` (also for an `{pid, error}` row, a missing row, or a failed `owners` job) |
 | `memory_private_bytes` | `WorkingSetPrivate` from `perf`; `null` and unread when there is no row for the pid |
 | `working_set_bytes`, `commit_bytes` | `WorkingSetSize`, `PrivatePageCount`; `null` and unread when missing |
@@ -163,14 +200,34 @@ the start-time check (`parent_gone` `false`).
 ## Groups
 
 Processes are grouped by their path, case-insensitive. Processes whose path
-was not read form a group per name, `"<name> (path not read)"`, never merged
-with a group of a known path. Pseudo-processes form a group per name without
-that ending. Groups are ordered by `sorted_by` descending (`null` last), then
-name, then first pid; ids `g1...` follow that order.
+was not read form a group per name with `path_read` `false`, never merged
+with a group of a known path; `name` is the bare process name, so two groups
+may share a name (one with a read path, one without): tell them apart by `id`
+and `path_read`. Pseudo-processes form a group per name with `path_read`
+`true`. Groups are ordered by `sorted_by` descending (`null` last), then
+name, then first pid.
+
+The `g` ids are stable between runs (shared contract, "Ids and --detail"):
+the number belongs to the group's key (its kind `path`, `none` or `unread`
+and the path or name, case-insensitive), not to its position in the list, so
+the summary may have gaps (`g1`, `g5`, ...) and the id of a group that is only
+in the detail file does not follow from the list. The map from key to number
+is kept in `<data dir>/state/ush-processes.ids.json` (the same file for a run
+with and without administrator rights; a process whose path only an
+administrator reads is in an `unread` group without rights and in a `path`
+group with them, so it has another `g` id); a new group takes a number higher
+than any given before, and the number of a group that went away is not given
+again. A map that cannot be read starts the numbering again and gives a
+`stable ids` item in `not_checked`; a map that is not saved gives
+`stable ids save`; items whose key came twice in one run get ids kept for that
+run only and a `stable ids <letter>` item. Ports `p` are numbered by position
+in each run.
 
 | Field | Meaning |
 |---|---|
-| `id`, `name`, `path`, `path_kind` | as above; `path` `null` for both "path not read" and pseudo-process groups |
+| `id`, `name`, `path`, `path_kind` | as above; `name` is the process name of the first pid; `path` `null` for both a group with `path_read` `false` and a pseudo-process group |
+| `path_read` | `false` only for a group of processes whose path was not read; `true` for a group with a path and for a pseudo-process group |
+| `path_source` | `path_source` of the group's first process (by pid): `wmi`, `query_image` or `null` |
 | `count` | processes in the group |
 | `pids` | at most 20 in the summary, all in the detail file |
 | `memory_private_bytes`, `working_set_bytes`, `commit_bytes` | sums of the known values; `null` (and unread) when none is known |
@@ -187,7 +244,7 @@ name, then first pid; ids `g1...` follow that order.
 | `program` | `{key, name}` or `null`, below |
 | `exists`, `signature_status`, `signer`, `company` | file facts, below |
 | `started_by` | `service`, `autostart`, `parent`, `unknown` or `null`, below |
-| `unread_fields` | fields of the group that were not read: `path` for a "path not read" group, a memory sum that is `null`, `services`, `autostart`, `program`, the file facts, `started_by` |
+| `unread_fields` | fields of the group that were not read: `path` for a group with `path_read` `false`, a memory sum that is `null`, `services`, `autostart`, `program`, the file facts, `started_by` |
 | `processes` | detail file only: the process items |
 
 ### services
@@ -319,16 +376,22 @@ Besides every `unreadable` source (item `job <source>`):
 | `launchers.json` | the data file could not be read (only when the baseline was read); no autostart entry is linked |
 | `file_facts files` | the job was read but some group paths have no facts (an error row or no row) |
 | `job file_facts` | the job returned no rows at all (`empty`), not even its folders |
+| `job image_paths` | the job returned no rows (`empty`) although processes were sent; the reason gives their number. A failed job is the usual `job image_paths` item; a run without such processes has none |
+| `network_profiles rows` | rows without a category text were left out of `network_categories` |
 | `tcp_listeners rows`, `udp_endpoints rows` | rows without a usable address, port or process id were left out |
 | `groups cut from the summary` | `truncated` > 0 |
+| `stable ids` | `state/ush-processes.ids.json` could not be read, so the numbering started again; the file is kept as `.unreadable-<stamp>.json` when the new map is saved |
+| `stable ids save` | the id map was not saved; this run's ids hold, the next run may give other ones (when the reason starts with "the id map was saved", only its previous copy was not replaced and the next run keeps these ids) |
+| `stable ids <letter>` | items whose key came twice in this run; the later ones got ids kept for this run only, named in the reason |
 | `ports cut from the summary` | ports were cut, with their number (below) |
 | `summary budget` | the summary exceeds the budget and was not cut |
 
 ## Budget
 
 The summary stays within 35 000 characters. `groups` is cut from its end
-(the groups with the least memory); `truncated` counts the cut groups, whose
-ids follow the last one in the summary and are in the detail file. The
+(the groups with the least memory); `truncated` counts the cut groups. They
+are in the detail file. The id of a cut group is a stable number that does
+not follow from the list; `--cut` lists the cut groups (and any cut ports). The
 fields that depend on the cut (`memory.listed_private_*`,
 `ports[].group_in_summary`, `udp_bound`, `counts.udp_bound_outside_summary`)
 are computed for each size tried, before its length is measured. Only when

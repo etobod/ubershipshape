@@ -308,7 +308,8 @@ class TestFacts(LinksTestCase):
         self.assert_unread(self.group_with_pid(summary, 620), "signature_status")
         self.assert_unread(self.group_with_pid(summary, 630), "signature_status")
 
-        ghost = self.group_named(self.groups(summary), "ghost.exe (path not read)")
+        ghost = self.group_named(self.groups(summary), "ghost.exe",
+                                 path_read=False)
         self.assert_not_unread(ghost, "signature_status")
 
         with self.subTest("file_facts failed"):

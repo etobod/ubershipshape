@@ -77,8 +77,17 @@ and is named in `not_checked`. When `capability_usage` is `unreadable`,
   was not read (item `EditionID` in `not_checked`).
 - `sources`, `not_checked` (`{what, reason}`), `summary_file`,
   `detail_file`, `truncated`.
-- `baseline`: `{status, created_at, age_days, saved, reason}`; `status` is
-  `compared`, `none` or `unreadable`.
+- `baseline`: `{status, created_at, age_days, saved, reason, reference,
+  reference_file}`; `status` is `compared`, `none` or `unreadable`.
+  `reference` is `latest` or the `--compare-to` value (e.g. `7d`),
+  `reference_file` the history copy compared with, or `null` (shared
+  contract, "Baseline"). `created_at` and `age_days` are those of the state
+  compared with. With `--compare-to` only `changes` and `comparison` use the
+  copy; the saved baseline is built from the latest one. `not_checked` items
+  of the baseline: `baseline` (the latest baseline could not be read),
+  `reference baseline` (the history copy could not be read, so nothing was
+  compared), `baseline history` ("history not kept", or "the day copy was kept, but old copies were not removed: ..." when only the cleanup
+  failed) and `baseline save`.
 - `comparison`: `{settings, capability_usage}`, each `compared`,
   `no_baseline` or `not_read`.
 - `counts`: `{by_state: {<state>: n}, by_area: {<area>: {<state>: n}}}` over
@@ -92,6 +101,17 @@ Summary fields: `id` (`e1`...), `entry` (the catalogue id), `area`,
 `level`, `title`, `state`, `effective`, `expected`, `source`,
 `from_policy_on_home`, `reason`, `has_block`, and in an elevated run
 `hkcu_elevated`.
+
+The `e` ids are stable between runs: the number belongs to the catalogue entry
+(`entry`), not to the item's position in the list, so the summary may have gaps
+(`e1`, `e4`, ...). The map from the entry to its number is kept in
+`<data dir>/state/ush-settings.ids.json` (the same file for a run with and
+without administrator rights). On the first run with a map the numbers are the
+places after sorting; later a new entry takes a number higher than any given
+before, and the number of an entry that left the catalogue is not given again.
+A map that cannot be read starts the numbering again and gives a `stable ids`
+item in `not_checked`; a map that is not saved gives `stable ids save` (when the reason starts with "the id map was saved", only its previous copy was not replaced and the next run keeps these ids). The
+`u` and `c` ids stay numbered by position in each run.
 
 States, in this order:
 
@@ -167,7 +187,9 @@ parts, each headed by a comment:
   read in that run, written back; where no command can restore a state (an
   app), a comment gives the manual step.
 
-A registry key is created only inside `if (-not (Test-Path ...))`; texts are
+A registry key is created only inside `if (-not (Test-Path ...))`, printed
+once per key in each part (before its first value; no block removes a key),
+and only printed lines count as commands; texts are
 quoted with `psrun.ps_quote`. An item without a block gives a `# <id>
 <entry>: no block: <reason>` comment: already as expected, not read, does not
 apply, set by a policy above the target, no scripted change, a previous

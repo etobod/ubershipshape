@@ -21,6 +21,7 @@ Every value is invented; PowerShell never starts.
 
 import re
 import unittest
+from unittest import mock
 
 from tests.skill_loader import load_script
 
@@ -347,6 +348,111 @@ class TestQuotedRollback(BlockTestCase):
                 self.assertEqual(code, 1, stdout[:500])
                 self.assertEqual(commands(stdout), [], stdout)
                 self.assertNotIn("Start-Process", stdout)
+
+
+class TestBlockPerKey(BlockTestCase):
+    """One key guard per registry key and part (plan 107, M4, K8)."""
+
+    SHARED_PATH = "SOFTWARE\\InventedVendor\\PerKeyShared"
+    ALPHA_PATH = "SOFTWARE\\InventedVendor\\PerKeyAlpha"
+    BETA_PATH = "SOFTWARE\\InventedVendor\\PerKeyBeta"
+
+    @staticmethod
+    def guards_for(lines, path):
+        """Indexes of the ``Test-Path`` guard lines naming ``path``."""
+        return [i for i, line in enumerate(lines)
+                if "Test-Path" in line and path in line]
+
+    @staticmethod
+    def writes_for(lines, path):
+        """Indexes of the ``New-ItemProperty`` lines naming ``path`` (guards excluded)."""
+        return [i for i, line in enumerate(lines)
+                if "New-ItemProperty" in line and "Test-Path" not in line and path in line]
+
+    def machine_block(self, locations):
+        """Catalogue with one HKLM entry per location, all values absent; block for all."""
+        entries = [
+            registry_entry(f"invented_per_key_{n}", [location], expected=[1], default=0,
+                           apply=DWORD_1)
+            for n, location in enumerate(locations, start=1)
+        ]
+        self.write_catalogue(entries)
+        data_dir = self.data_dir()
+        summary = self.collect(FakePowerShell({"registry_values": registry(
+            *(absent(location) for location in locations))}), data_dir=data_dir)
+        ids = [entry["id"] for entry in entries]
+        for entry_id in ids:
+            self.assertEqual(self.detail_item(summary, entry_id).get("state"), "differs")
+        code, stdout, stderr = self.block(data_dir, ids, summary)
+        self.assertEqual(code, 0, stderr[:300])
+        return stdout
+
+    def assert_one_guard_per_key_in_every_part(self, stdout, paths):
+        for name, text in split_parts(stdout).items():
+            lines = commands(text)
+            for path in paths:
+                self.assertLessEqual(len(self.guards_for(lines, path)), 1,
+                                     f"{name}: {path}\n{text}")
+
+    def test_one_test_path_per_key(self):
+        shared = [
+            loc("HKLM", self.SHARED_PATH, "InventedFirstToggle", "preference"),
+            loc("HKLM", self.SHARED_PATH, "InventedSecondToggle", "preference"),
+        ]
+        separate = [
+            loc("HKLM", self.ALPHA_PATH, "InventedAlphaToggle", "preference"),
+            loc("HKLM", self.BETA_PATH, "InventedBetaToggle", "preference"),
+        ]
+
+        shared_stdout = self.machine_block(shared)
+        shared_elevated = commands(split_parts(shared_stdout).get("elevated", ""))
+
+        with self.subTest(case="two values under one key: one guard before both writes"):
+            guards = self.guards_for(shared_elevated, self.SHARED_PATH)
+            self.assertEqual(len(guards), 1, "\n".join(shared_elevated))
+            self.assertIn("if (-not (Test-Path", shared_elevated[guards[0]])
+            writes = self.writes_for(shared_elevated, self.SHARED_PATH)
+            self.assertEqual(len(writes), 2, "\n".join(shared_elevated))
+            for name in ("InventedFirstToggle", "InventedSecondToggle"):
+                self.assertEqual(
+                    sum(name in shared_elevated[i] for i in writes), 1, writes)
+            for index in writes:
+                self.assertLess(guards[0], index, "\n".join(shared_elevated))
+            self.assert_one_guard_per_key_in_every_part(shared_stdout, [self.SHARED_PATH])
+
+        with self.subTest(case="values under two keys: two guards"):
+            separate_stdout = self.machine_block(separate)
+            elevated = commands(split_parts(separate_stdout).get("elevated", ""))
+            all_guards = [line for line in elevated if "Test-Path" in line]
+            self.assertEqual(len(all_guards), 2, "\n".join(elevated))
+            for path in (self.ALPHA_PATH, self.BETA_PATH):
+                guards = self.guards_for(elevated, path)
+                self.assertEqual(len(guards), 1, f"{path}\n" + "\n".join(elevated))
+                writes = self.writes_for(elevated, path)
+                self.assertEqual(len(writes), 1, f"{path}\n" + "\n".join(elevated))
+                self.assertLess(guards[0], writes[0], "\n".join(elevated))
+            self.assert_one_guard_per_key_in_every_part(
+                separate_stdout, [self.ALPHA_PATH, self.BETA_PATH])
+
+        with self.subTest(case="command count is one less than one guard per value"):
+            # The count render_block returns covers only the printed command lines:
+            # one guard and two writes, not a guard for each write.
+            counts = []
+            original = self.settings.render_block
+
+            def spy(items, elevated=False):
+                text, count = original(items, elevated)
+                counts.append(count)
+                return text, count
+
+            with mock.patch.object(self.settings, "render_block", spy):
+                stdout = self.machine_block(shared)
+            parts = split_parts(stdout)
+            printed = sum(len(commands(parts.get(name, ""))) for name in ("normal", "elevated"))
+            writes = len(self.writes_for(shared_elevated, self.SHARED_PATH))
+            self.assertEqual(writes, 2, "\n".join(shared_elevated))
+            self.assertEqual(counts, [printed], stdout)
+            self.assertEqual(printed, writes + 1, stdout)
 
 
 class TestElevatedDetail(BlockTestCase):

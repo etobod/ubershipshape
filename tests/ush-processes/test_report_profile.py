@@ -144,8 +144,8 @@ def _clean_summary(summary_file, detail_file):
 def _cut_summary(summary_file, detail_file):
     """The same two groups, with 3 more groups cut from the summary.
 
-    No count of all groups here: a total of 5 would back the digit of g5 by
-    itself, and the test must show that g3 to g5 are known as cut ids.
+    No count of all groups here: a total would back the digits of a cut id by
+    itself, and the test must show that the cut ids are known from the detail file.
     """
     return _summary_data(
         summary_file, detail_file, truncated=3,
@@ -243,11 +243,14 @@ class TestProfile(unittest.TestCase):
         self.assertTrue(profile.is_file(),
                         f"the ush-processes report profile is missing: {profile}")
 
-    def _write_summary(self, name, builder):
+    def _write_summary(self, name, builder, cut=None):
+        """Write the summary and its detail file; ``cut`` adds items cut from the summary
+        to detail sections ({section: [item, ...]})."""
         summary_file = self.work / f"{name}-summary.json"
         detail_file = self.work / f"{name}-detail.json"
         summary = builder(summary_file, detail_file)
-        detail = {section: summary[section] for section in DETAIL_SECTIONS}
+        detail = {section: list(summary[section]) + list((cut or {}).get(section, []))
+                  for section in DETAIL_SECTIONS}
         detail_file.write_text(json.dumps(detail), encoding="utf-8")
         summary_file.write_text(json.dumps(summary), encoding="utf-8")
         return summary_file, summary
@@ -312,16 +315,25 @@ class TestProfile(unittest.TestCase):
 
     def test_cut_groups_are_known(self):
         self._assert_real_profile()
-        summary_file, summary = self._write_summary("processes-cut", _cut_summary)
+        # Group ids are stable: the cut ones are known from the detail file,
+        # not from the positions after the list.
+        cut = []
+        for item_id, name in (("g14", "editor.exe"), ("g17", "sync.exe"), ("g23", "tray.exe")):
+            group = _host_group()
+            group.update({"id": item_id, "name": name,
+                          "path": f"C:\\Apps\\Invented Tools\\{name}"})
+            cut.append(group)
+        summary_file, summary = self._write_summary("processes-cut", _cut_summary,
+                                                    cut={"groups": cut})
         self.assertEqual(len(summary["groups"]), 2)
         self.assertEqual(summary["truncated"], 3)
-        # g4 and g5 are backed only by being known ids, not by their digits.
-        self.assertNotIn(4, _numbers(summary))
-        self.assertNotIn(5, _numbers(summary))
+        # g14, g17 and g23 are backed only by being known ids, not by their digits.
+        for number in (14, 17, 23):
+            self.assertNotIn(number, _numbers(summary))
 
         lines = _clean_report_lines(
             summary_file,
-            group_lines=("- 3 more groups were cut from the summary: g3, g4, g5.",),
+            group_lines=("- 3 more groups were cut from the summary: g14, g17, g23.",),
         )
         code, output = self._run(self._write_report(lines, "processes-2026-09-30-0814.md"))
         self.assertEqual(code, 0, f"output:\n{output}")

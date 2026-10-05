@@ -32,8 +32,8 @@ these.
 ## Rules
 
 - **Read-only, no change blocks.** `processes.py` changes nothing on the
-  machine, writes only to `<data dir>/work/` and never to `state/`; it only
-  reads the ush-inventory baseline. The report gives no block that ends a
+  machine, writes to `<data dir>/work/` and, in `state/`, only its id map
+  `ush-processes.ids.json`; it reads the ush-inventory baseline there. The report gives no block that ends a
   process, stops a service or turns autostart off.
 - **Nothing leaves the machine.** No web search, no upload, no online tool,
   also not to look up a process, a port or a file.
@@ -52,9 +52,11 @@ these.
   from a detail item you fetched with `--detail` and named in the report's
   `<!-- ush:detail ... -->` line. Do not count processes or ports, add up
   memory or compute an age yourself.
-- **Memory only from the `_gb` and `_mb` fields.** Write `memory.*_gb` and
-  the groups' `memory_private_mb` (or `working_set_mb`, see `sorted_by`) as
-  the JSON has them; never convert bytes, never add groups up.
+- **Memory only from the `_gb`, `_mb` and `_percent` fields.** Write
+  `memory.*_gb`, `memory.used_percent`, `memory.commit_used_percent` and the
+  groups' `memory_private_mb` (or `working_set_mb`, see `sorted_by`) as the
+  JSON has them; never convert bytes, never compute a percent, never add
+  groups up.
 - **`unread_fields` means "not read", never "none".** A field named there is
   unknown in this run: `path` `null` with `path` in `unread_fields` is a path
   Windows did not give this account, not a process without a file.
@@ -109,8 +111,20 @@ these.
    ```
 
    `<detail_file>` is the summary's `detail_file`, so the item comes from the
-   same run as the summary. Ids: `g..` groups, `p..` TCP ports.
-   Remember every id you fetched and used.
+   same run as the summary. Ids: `g..` groups (stable between runs, not
+   places in the list), `p..` TCP ports. Remember every id you fetched and
+   used.
+
+   The id of a group or port cut from the summary (`truncated`, or a
+   `ports cut from the summary` item) cannot be guessed. Find the cut items
+   with:
+
+   ```
+   python -B skills/ush-processes/scripts/processes.py --cut --detail-file <detail_file>
+   ```
+
+   It prints `cut`, a list of `{id, list, name}`, and starts no machine job.
+   Fetch a cut item with `--detail` before you name it in the report.
 
 3. Judge the findings: which groups hold the memory and why they run, which
    group runs without a reason you can name, which listening ports stand
@@ -149,7 +163,8 @@ these.
 
    ```
    # Runs the same read-only process snapshot with administrator rights. It
-   # changes nothing on the machine and writes only to <data dir>\work\.
+   # changes nothing on the machine and writes only to <data dir>\work\ and
+   # its id map in <data dir>\state\.
    Set-Location "<absolute project root>"
    python -B skills/ush-processes/scripts/processes.py --data-dir "<absolute data dir>"
    ```

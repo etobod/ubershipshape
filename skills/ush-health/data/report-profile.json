@@ -1,9 +1,11 @@
 {
-  "detail_sections": ["disks", "volumes", "devices", "update_failures"],
-  "id_letters": "kvpu",
-  "path_keys": ["summary_file", "detail_file", "device_id", "instance_id"],
-  "id_keys": ["id"],
-  "required_lists": ["disks", "volumes", "devices", "updates.failures"],
+  "detail_sections": ["disks", "volumes", "devices", "update_failures", "changes"],
+  "id_letters": "kvpuc",
+  "path_keys": ["summary_file", "detail_file", "device_id", "instance_id", "unique_id",
+                "reference_file"],
+  "id_keys": ["id", "item"],
+  "required_lists": ["disks", "volumes", "devices", "updates.failures", "changes"],
+  "required_keys": ["baseline", "changes"],
   "truncated": {"list": "updates.failures", "prefix": "u"},
   "report_prefix": "health-"
 }

@@ -5,14 +5,18 @@ saved as `<data dir>/reports/settings-<YYYY-MM-DD-HHMM>.md` (local time of
 the run) and checked with
 `python -B skills/ush-common/scripts/check_report.py <report>` (or
 `--latest --skill ush-settings` for the newest `settings-*.md`), which reads
-the ush-settings rules from `data/report-profile.json`. `<data dir>` is the
+the ush-settings rules from `data/report-profile.json`. Follow
+`skills/ush-common/references/report-style.md`: it says how every report is
+written (time, numbers, dash, recommendation layout, language); this file
+says what the ush-settings report contains. `<data dir>` is the
 data directory (`--data-dir`, else `USH_DATA_DIR`, else
 `%LOCALAPPDATA%\ubershipshape`); its absolute value is the directory above
 `work/` in the summary's `summary_file`. The report text outside code blocks
 writes it as `&lt;data dir>` in plain text, never in inline code, and never
 the expanded path: it contains the account name, which a report must not
 carry. The expanded path appears only in the `ush:summary` marker and as the
-`--data-dir` value of a block for an elevated shell.
+`--data-dir` value of every block that runs a skill script (rule 9 of
+`report-style.md`).
 
 The markers below are HTML comments: they do not depend on the report
 language and do not show in a preview. Each marker stands on its own line,
@@ -28,7 +32,8 @@ shared by all skills (see `skills/ush-health/references/report-format.md`,
 "Numbers", for the full list); in short:
 
 - Every run of digits is a separate number: `2026-05-07` is 2026, 5 and 7.
-  Write a number exactly as the JSON has it.
+  Write a number with the same digits and precision as the JSON, with
+  the decimal separator of the report language (rule 2 of `report-style.md`).
 - Names back their own digits: an entry's `title` and `entry`, a usage
   item's `app`, and the other text values of the summary. `summary_file` and
   `detail_file` are paths and back no number (the profile's `path_keys`).
@@ -74,7 +79,8 @@ required.
    <!-- ush:summary <absolute summary_file path> -->
    ```
 
-2. Title and one line: when the summary was made (`generated_at`, UTC),
+2. Title and one line: when the summary was made (`generated_at`, rule 1
+   of `report-style.md`),
    whether the run was elevated (`elevated`) and the edition (`edition_id`).
 
 3. Dashboard: a table with exactly one row per numbered section below
@@ -94,18 +100,20 @@ required.
 
 4. Legend, under the dashboard:
 
-   - 🔧 change - a setting the user may want to change; the section gives
+   - 🔧 change — a setting the user may want to change; the section gives
      the block or the manual step.
-   - 🔍 observe or check - not read, not clear yet, or worth a look.
-   - ✅ fine - read and as expected.
-   - ❌ problem found - something the user cannot fix with a block from this
+   - 🔍 observe or check — not read, not clear yet, or worth a look.
+   - ✅ fine — read and as expected.
+   - ❌ problem found — something the user cannot fix with a block from this
      skill; the section says who can help.
 
 5. Sections, each `## <n>. <name>` in order from 1:
 
    - Changes since the last run: first the baseline: `Compared with the
-     baseline of <created_at date>, <baseline.age_days> days old.`, or "no
-     comparison" with the reason (see "Degradation cases"). Then every change
+     baseline of <created_at as in rule 1 of report-style.md>, <baseline.age_days> days old.`, or "no
+     comparison" with the reason (see "Degradation cases"). With
+     `baseline.reference` other than `latest`, say it is the saved state from
+     `reference_file`, not the latest run. Then every change
      (`c..`) with its `title` (or `capability` and `app` for usage), `change`,
      and for `changed` its `before` and `after`. Then, when not both 0,
      `catalogue_changes`: "The catalogue gained <added> and lost <removed>
@@ -115,8 +123,9 @@ required.
      policy, `from_policy_on_home`. Then the `not_read` and `default_unknown`
      entries with their `reason`, then the `info` entries (read, with no
      expected value). Each finding gets a recommendation with `weight`,
-     `kind`, `risk`, `evidence`, `permissions` and `rollback`
-     (`skills/ush-common/references/summary-contract.md`). A `change` with a
+     `kind`, `risk`, `evidence`, `permissions` and `rollback` in the layout
+     of rule 4 of `skills/ush-common/references/report-style.md` (the fields
+     are in `skills/ush-common/references/summary-contract.md`). A `change` with a
      block puts the `--block` output into a ```` ```powershell ```` code
      block and says which part goes to which shell and that the skill is run
      again in a normal shell to read the value back; one without a block
@@ -189,6 +198,19 @@ Never report missing data as "no changes" or "fine":
   `reason`.
 - `baseline.saved` `false` (item `baseline save`): the next run compares
   with the older baseline.
+- `baseline.reference` other than `latest` (the run had `--compare-to`):
+  say that the comparison is with the saved state from `reference_file`,
+  `age_days` days old, not with the latest run. `status` `none` then means
+  "there is no saved state from at least N days ago" (give the `reason`), not
+  a first run and never "no changes". `status` `unreadable` with the item
+  `reference baseline` in "Not checked": that copy could not be read, so
+  nothing was compared; give the `reason`. A latest baseline that could not be
+  read (item `baseline`, "the latest baseline could not be read") does not
+  stop that comparison: say that sources not read in this run keep nothing.
+- Item `baseline history` ("history not kept"): this run's baseline has no
+  day copy, so a later `--compare-to` may not find it. With the reason "the
+  day copy was kept, but old copies were not removed": the copy is there;
+  only older copies stay longer than 31 days. Not a missing history.
 - `comparison` `not_read` or `no_baseline` for `settings` or
   `capability_usage`: no comparison for that source this time.
 - No administrator rights (`elevated` `false`): `vss_max_space` is

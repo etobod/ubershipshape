@@ -1,7 +1,7 @@
 {
   "detail_sections": ["settings", "changes", "usage"],
   "id_letters": "ecu",
-  "path_keys": ["summary_file", "detail_file"],
+  "path_keys": ["summary_file", "detail_file", "reference_file"],
   "id_keys": ["id"],
   "required_lists": ["settings", "changes", "usage"],
   "truncated": {"list": "usage", "prefix": "u"},

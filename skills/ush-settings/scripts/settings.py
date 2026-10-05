@@ -80,6 +80,7 @@ sys.path.insert(0, str(Path(__file__).absolute().parent))
 import baseline  # called as baseline.save(...), so tests can patch it
 import catalogue
 import datadir
+import ids
 import psrun
 from psrun import dump, ps_script, run_job
 
@@ -1143,18 +1144,24 @@ def policy_on_home(source, edition):
 
 
 # --- summary items -------------------------------------------------------------
-def build_items(entries: list, found: dict, edition, elevated: bool) -> list:
-    """Every entry as a detail item with an id: listed states first, then the rest."""
+def build_items(entries: list, found: dict, edition, elevated: bool,
+                numbering=None) -> list:
+    """Every entry as a detail item with an id: listed states first, then the rest.
+
+    The id is the stable number of the catalogue entry id (``numbering``, an
+    ``ids.Numbering``); without one, or on the first run with a map, it is the place
+    after sorting.
+    """
     order = {state: n for n, state in enumerate(STATES)}
     ranked = sorted(
         enumerate(entries),
         key=lambda pair: (order[found[pair[1]["id"]]["state"]],
                           LEVEL_ORDER.get(pair[1]["level"], 9), pair[0]))
     items = []
-    for number, (_, entry) in enumerate(ranked, 1):
+    for _, entry in ranked:
         result = found[entry["id"]]
         item = {
-            "id": f"e{number}",
+            "id": None,
             "entry": entry["id"],
             "area": entry["area"],
             "level": entry["level"],
@@ -1188,6 +1195,9 @@ def build_items(entries: list, found: dict, edition, elevated: bool) -> list:
             if extra in result:
                 item[extra] = result[extra]
         items.append(item)
+    if numbering is None:
+        numbering = ids.Numbering.fresh(SKILL)
+    numbering.assign("e", items, lambda item: item["entry"])
     return items
 
 
@@ -1655,6 +1665,18 @@ def apply_label(item: dict) -> str:
     return "removed" if apply.get("remove") else one_line(apply)
 
 
+KEY_GUARD_PREFIX = "if (-not (Test-Path -LiteralPath "
+
+
+def add_lines(part: list, lines: list) -> None:
+    """Append ``lines`` to ``part``, leaving out a key guard the part already
+    has: one ``Test-Path`` per key is enough, since no block removes a key."""
+    for line in lines:
+        if line.startswith(KEY_GUARD_PREFIX) and line in part:
+            continue
+        part.append(line)
+
+
 def render_block(items: list, elevated: bool = False) -> tuple:
     """``(text, number of commands)`` of the paste-ready block for ``items``."""
     notes = []
@@ -1668,10 +1690,10 @@ def render_block(items: list, elevated: bool = False) -> tuple:
             continue
         parts[shell].append(f"# {label}: {one_line(item.get('effective'))} -> "
                             f"{apply_label(item)}")
-        parts[shell].extend(change)
+        add_lines(parts[shell], change)
         parts[f"rollback_{shell}"].append(f"# {label}: back to "
                                           f"{one_line(item.get('effective'))}")
-        parts[f"rollback_{shell}"].extend(rollback)
+        add_lines(parts[f"rollback_{shell}"], rollback)
     lines = list(notes)
     for name, header in PARTS:
         if parts[name]:
@@ -1760,6 +1782,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--detail-file", metavar="PATH",
                         help="with --detail or --block: read this detail file (the "
                              "summary's detail_file) instead of the newest one")
+    parser.add_argument("--compare-to", metavar="<N>d", help=baseline.COMPARE_TO_HELP)
     return parser
 
 
@@ -1797,6 +1820,12 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
         parser.error("--detail and --block cannot be used together")
     if args.detail_file and args.detail is None and args.block is None:
         parser.error("--detail-file needs --detail or --block")
+    compare_days = None
+    if args.compare_to is not None:
+        compare_days = baseline.parse_compare_to(args.compare_to)
+        if compare_days is None:
+            parser.error(f"--compare-to takes <N>d with N from 1 to "
+                         f"{baseline.HISTORY_DAYS - 1}, e.g. 7d: {args.compare_to!r}")
     if args.detail_file:
         # The detail file is named explicitly: no data directory is needed.
         detail_file = Path(args.detail_file).absolute()
@@ -1833,6 +1862,14 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
     previous = loaded["sources"] if loaded["status"] == "read" else {}
     previous_items = previous.get(BASELINE_SOURCE) or {}
     previous_usage = previous.get(USAGE_SOURCE) or {}
+    # The state compared with: the latest baseline, or a history copy with --compare-to.
+    # Only the changes and comparison_state use it; the items to save are built from the
+    # latest baseline (``previous``).
+    reference = baseline.reference_for(state, SKILL, admin, loaded, args.compare_to,
+                                       compare_days, now)
+    reference_sources = reference["sources"]
+    reference_items = reference_sources.get(BASELINE_SOURCE) or {}
+    reference_usage = reference_sources.get(USAGE_SOURCE) or {}
 
     col = Collector(run_ps, work, stamp)
     registry = collect_registry(col, entries)
@@ -1841,7 +1878,11 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
     typed = TypedReader(collect_typed(col, entries, admin), registry, col)
     usage_result = collect_usage(col)
     found = evaluate(entries, registry, wifi, typed)
-    items = build_items(entries, found, edition, admin)
+    id_map, map_reason = ids.load_map(state, SKILL)
+    if map_reason is not None:
+        col.skip(*ids.load_note(map_reason))
+    numbering = ids.Numbering(id_map, now.date().isoformat())
+    items = build_items(entries, found, edition, admin, numbering)
     usage = (build_usage(usage_result, col)
              if usage_result["status"] in READ_STATUSES else [])
     if admin:
@@ -1859,12 +1900,14 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
     usage_items, usage_saved = usage_baseline(usage, previous_usage)
     usage_status = usage_result["status"]
     comparison = {
-        BASELINE_SOURCE: baseline.comparison_state(previous, BASELINE_SOURCE, status),
-        USAGE_SOURCE: baseline.comparison_state(previous, USAGE_SOURCE, usage_status),
+        BASELINE_SOURCE: baseline.comparison_state(reference_sources, BASELINE_SOURCE,
+                                                   status),
+        USAGE_SOURCE: baseline.comparison_state(reference_sources, USAGE_SOURCE,
+                                                usage_status),
     }
-    changes, catalogue_changes = settings_changes(previous_items, compare_items,
+    changes, catalogue_changes = settings_changes(reference_items, compare_items,
                                                   comparison[BASELINE_SOURCE], items)
-    changes += usage_changes(previous_usage, usage_items, comparison[USAGE_SOURCE])
+    changes += usage_changes(reference_usage, usage_items, comparison[USAGE_SOURCE])
     changes = psrun.with_ids(changes, "c")
     for item in usage:
         del item["key"]
@@ -1893,23 +1936,32 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
             previous, {BASELINE_SOURCE: save_items, USAGE_SOURCE: usage_saved},
             {BASELINE_SOURCE: status, USAGE_SOURCE: usage_status}),
     }
-    save_reason = baseline.save(state, baseline.baseline_name(SKILL, admin), new_baseline)
+    state_name = baseline.baseline_name(SKILL, admin)
+    save_reason = baseline.save(state, state_name, new_baseline)
+    history_reason = baseline.archive(state, state_name, now)
+    if history_reason is not None:
+        col.skip("baseline history", baseline.history_note(history_reason))
+    map_save_reason = ids.save_map(state, SKILL, id_map, now.date().isoformat())
+    if map_save_reason is not None:
+        col.skip(*ids.save_note(map_save_reason))
+    for what, reason in numbering.repeated_notes():
+        col.skip(what, reason)
 
-    compared = loaded["status"] == "read"
-    reasons = []
-    if loaded["status"] == "unreadable":
-        reasons.append(loaded["reason"])
-        col.skip("baseline", f"the baseline could not be read, so nothing was compared "
-                             f"(the file is kept): {loaded['reason']}")
+    for what, reason in reference["notes"]:
+        col.skip(what, reason)
+    reasons = list(reference["info"]["reason"])
     if save_reason is not None:
         reasons.append(f"not saved: {save_reason}")
         col.skip("baseline save", f"this run's baseline was not saved: {save_reason}")
+    info = reference["info"]
     baseline_info = {
-        "status": "compared" if compared else loaded["status"],
-        "created_at": loaded["created_at"] if compared else None,
-        "age_days": baseline.age_days(loaded["created_at"], now) if compared else None,
+        "status": info["status"],
+        "created_at": info["created_at"],
+        "age_days": info["age_days"],
         "saved": save_reason is None,
         "reason": "; ".join(reasons) if reasons else None,
+        "reference": info["reference"],
+        "reference_file": info["reference_file"],
     }
 
     summary = {

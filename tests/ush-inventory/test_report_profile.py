@@ -18,7 +18,8 @@ from tests.skill_loader import load_script
 SKILL = "ush-inventory"
 # Keys whose values supply no numbers (the profile's path_keys and id_keys).
 SKIP_KEYS = frozenset({"summary_file", "detail_file", "key", "program", "install_location",
-                       "targets", "path", "expanded_path", "app", "value", "id"})
+                       "targets", "path", "expanded_path", "app", "value", "reference_file",
+                       "id"})
 
 GENERATED_AT = "2026-09-30T08:10:00+00:00"
 TARGET = "C:\\Apps\\Invented Editor 652\\v658\\tray.exe"
@@ -323,13 +324,16 @@ class TestProfile(unittest.TestCase):
         self.assertTrue(profile.is_file(),
                         f"the ush-inventory report profile is missing: {profile}")
 
-    def _write_summary(self, name, builder):
+    def _write_summary(self, name, builder, cut=None):
+        """Write the summary and its detail file; ``cut`` adds items cut from the summary
+        to detail sections ({section: [item, ...]})."""
         summary_file = self.work / f"{name}-summary.json"
         detail_file = self.work / f"{name}-detail.json"
         summary = builder(summary_file, detail_file)
         # Every detail section is written, also the 052 ones, so that no test can fail
         # on a missing detail section instead of what it asserts.
-        detail = {section: summary.get(section) or [] for section in DETAIL_SECTIONS}
+        detail = {section: list(summary.get(section) or []) + list((cut or {}).get(section, []))
+                  for section in DETAIL_SECTIONS}
         detail_file.write_text(json.dumps(detail), encoding="utf-8")
         summary_file.write_text(json.dumps(summary), encoding="utf-8")
         return summary_file, summary
@@ -456,12 +460,20 @@ class TestProfile(unittest.TestCase):
                             "unknown": 0},
             )
 
-        summary_file, summary = self._write_summary("inventory-cut", cut_summary)
+        # Program ids are stable: the cut ones are known from the detail file,
+        # not from the positions after the list.
+        cut = [
+            _program("a14", "Invented Mapper", "1.0", "Example Soft", "2026-01-20"),
+            _program("a17", "Sample Clock", "2.0", "Sample Works", "2026-02-11"),
+            _program("a23", "Invented Player", "3.1", "Example Soft", "2026-01-20"),
+        ]
+        summary_file, summary = self._write_summary("inventory-cut", cut_summary,
+                                                    cut={"programs": cut})
         self.assertEqual(len(summary["programs"]), 2)
         self.assertEqual(summary["truncated"], 3)
-        # a4 and a5 are backed only by being known ids, not by their digits.
-        self.assertNotIn(4, _numbers(summary))
-        self.assertNotIn(5, _numbers(summary))
+        # a14, a17 and a23 are backed only by being known ids, not by their digits.
+        for number in (14, 17, 23):
+            self.assertNotIn(number, _numbers(summary))
 
         lines = [
             f"<!-- ush:summary {summary_file} -->",
@@ -474,7 +486,7 @@ class TestProfile(unittest.TestCase):
             "## Programs",
             "- a1: Invented Viewer 3.1 by Example Soft, installed 2026-01-20.",
             "- a2: Sample Notes 2.0.6 by Sample Works, installed 2026-02-11.",
-            "- 3 more programs were cut from the summary: a3, a4, a5.",
+            "- 3 more programs were cut from the summary: a14, a17, a23.",
             "- Windows programs: 12.",
             "",
             "## Autostart",
@@ -559,14 +571,26 @@ class TestProfile(unittest.TestCase):
             self.assertEqual(code, 1, f"output:\n{output}")
             self.assertIn("additions", output)
 
-        with self.subTest("truncated_drivers 2: d2 and d3 are known"):
+        with self.subTest("truncated_drivers 2: d27 and d36 from the detail file are known"):
+            # Driver ids are stable: the cut ones come from the detail file.
+            cut_drivers = [
+                {"id": "d27", "key": "driver:PCI\\VEN_1AAA&DEV_0031\\0031",
+                 "device_name": "Invented Audio Device", "class": "Media"},
+                {"id": "d36", "key": "driver:USB\\VID_1AAA&PID_0032\\0032",
+                 "device_name": "Invented Card Reader", "class": "USB"},
+            ]
             cut_file, cut = self._write_summary(
                 "inventory-cut-drivers",
-                lambda s, d: _summary_052(s, d, truncated_drivers=2))
+                lambda s, d: _summary_052(s, d, truncated_drivers=2),
+                cut={"drivers": cut_drivers})
             self.assertEqual(len(cut["drivers"]), 1)
+            # d27 and d36 are backed only by being known ids, not by their digits.
+            for number in (27, 36):
+                self.assertNotIn(number, _numbers(cut))
             lines = _report_052_lines(cut_file)
             at = lines.index("- Windows drivers (not listed): 118.")
-            lines.insert(at, "- d2 and d3 were cut from the summary; they are in the detail file.")
+            lines.insert(at,
+                         "- d27 and d36 were cut from the summary; they are in the detail file.")
             code, output = self._run_guarded(self._write_report(lines, "cut-drivers.md"))
             self.assertEqual(code, 0, f"output:\n{output}")
             self.assertIn("OK", output)

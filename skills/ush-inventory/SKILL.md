@@ -50,11 +50,13 @@ driver, fixing anything automatically. Say so if the user asks for these.
   code (a `<` before a letter fails the check, and inline code shows `&lt;`
   as it is), and never the expanded path: it contains the account name,
   which a report must not carry. The expanded path appears only in the
-  `ush:summary` marker and in the `--data-dir` of an elevated-shell block
-  (`references/report-format.md`), and in the backup path of a
-  certificate or hosts block. A block for an elevated shell
-  that runs a script always passes `--data-dir "<absolute data dir>"`: an
-  elevated shell of another account has a different `%LOCALAPPDATA%`.
+  `ush:summary` marker and in the `--data-dir` of every block that runs a
+  skill script (`references/report-format.md`), and in the backup path of a
+  certificate or hosts block. Every block that runs a skill script starts
+  with `Set-Location "<absolute project root>"` and passes
+  `--data-dir "<absolute data dir>"` (rule 9 of
+  `skills/ush-common/references/report-style.md`): an elevated shell of
+  another account has a different `%LOCALAPPDATA%`.
 - **Every number in the report comes from the JSON**: from the summary, or
   from a detail item you fetched with `--detail` and named in the report's
   `<!-- ush:detail ... -->` line. Do not count items, add up the Windows-own
@@ -126,6 +128,15 @@ driver, fixing anything automatically. Say so if the user asks for these.
    `<data dir>/work/`, and saves the new baseline to `<data dir>/state/`.
    The field meanings are in `references/summary-contract.md`.
 
+   When the user asks about changes over a longer period ("what changed this
+   month", "since last week"), add `--compare-to <N>d` (N from 1 to 30, e.g.
+   `--compare-to 7d`): the run then compares with the saved state at least N
+   days old instead of the latest run (`baseline.reference`,
+   `baseline.reference_file`). Without such a question run it without the
+   flag. The flag changes nothing but the data directory; every run, with or
+   without it, also keeps a day copy of the baseline in
+   `<data dir>/state/history/` (30 days).
+
 2. Read the summary. If you need one item in full (a program cut by
    `truncated`, the `approved_raw` of an entry for a rollback block, a
    Windows-own item, a change of an own item), fetch it:
@@ -136,6 +147,18 @@ driver, fixing anything automatically. Say so if the user asks for these.
 
    `<detail_file>` is the `detail_file` value from the summary, so the item
    comes from the same run that the report checker checks against.
+
+   Ids are stable between runs, not places in the list, so the id of an
+   item cut from the summary (`truncated`, `truncated_drivers`,
+   `truncated_components`, `truncated_additions`) cannot be guessed. Find
+   the cut items with:
+
+   ```
+   python -B skills/ush-inventory/scripts/inventory.py --cut --detail-file <detail_file>
+   ```
+
+   It prints `cut`, a list of `{id, list, name}`, and starts no machine job.
+   Fetch a cut item with `--detail` before you name it in the report.
 
    Ids: `a..` programs, `s..` autostart entries, `f..` components
    (features and capabilities), `d..` drivers, `x..` additions, `c..`
@@ -191,7 +214,7 @@ driver, fixing anything automatically. Say so if the user asks for these.
    ```
    # Runs the same read-only inventory with administrator rights. It changes
    # nothing on the machine and writes only to <data dir>\work\ and
-   # <data dir>\state\ (a separate elevated baseline).
+   # <data dir>\state\ (a separate elevated baseline and the id map).
    Set-Location "<absolute project root>"
    python -B skills/ush-inventory/scripts/inventory.py --data-dir "<absolute data dir>"
    ```

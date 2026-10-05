@@ -12,7 +12,20 @@ see ``skills/ush-common/scripts/psrun.py``):
   ``WorkingSetPrivate``, the "Memory" column of Task Manager), without ``_Total``.
 - ``owners``: ``GetOwner`` of every process, each in its own try/catch, so one
   process that ended between the jobs does not spoil the others.
-- ``memory``: ``Win32_OperatingSystem`` (physical and commit memory, in KB).
+- ``memory``: ``Win32_OperatingSystem`` (physical and commit memory, in KB);
+  the summary adds ``used_percent`` and ``commit_used_percent`` (``used/total*100``,
+  one decimal, null when a part is missing).
+- ``network_profiles``: ``Get-NetConnectionProfile``, only the category of each
+  profile as text (5.1 writes the enum as a number); the summary counts them in
+  ``network_categories``: ``{}`` when there is no connection (the cmdlet's
+  ``ObjectNotFound``), null when the job failed.
+- ``image_paths``: the fallback path of a process whose ``ExecutablePath`` is empty,
+  that is not a file-less process and has a ``CreationDate``. A C# helper (compiled by
+  ``Add-Type`` with ``TMP``/``TEMP`` set to the ``work`` directory) opens the process
+  with ``PROCESS_QUERY_LIMITED_INFORMATION`` and reads ``QueryFullProcessImageName``
+  (flag 0, a Win32 path) and ``GetProcessTimes`` on that handle. The path is taken only
+  when the creation time is within one second of the WMI one (pids are reused). It
+  does not run when no process needs it.
 
 A field Windows returned empty (path, command line, owner without rights) is
 null and named in the item's ``unread_fields``: "not read", never "none". The
@@ -20,13 +33,15 @@ only exception is a pseudo-process listed in ``data/no-image-processes.json``
 (by pid, or by name with parent pid 4) whose path is empty: it has no image
 file even for an administrator, so it has ``path_kind: "none"`` and its null
 path is not unread. That data file is the only classification here.
+``path_source`` names where a path came from: ``wmi``, ``query_image`` or null.
 
 A parent is the process with the parent pid only when it started no later than
 the child (pids are reused); otherwise ``parent_gone`` is true, and it is null
 when a start time is missing. Processes are grouped by their executable path
 (case-insensitive); processes whose path was not read form separate groups by
-name, ``"<name> (path not read)"``, never merged with a known path. Groups are
-ordered by private memory (by working set when ``perf`` was not read).
+name with ``path_read: false``, never merged with a known path, so two groups may
+share a name. Groups are ordered by private memory (by working set when ``perf``
+was not read).
 
 Why a group runs (facts, not judgements), from four more jobs and one file:
 
@@ -50,11 +65,15 @@ Why a group runs (facts, not judgements), from four more jobs and one file:
 not read stops the walk with ``started_by`` null and unread. UDP endpoints are
 bound sockets, not listeners: the summary counts them per group and scope.
 
-Nothing is judged, nothing on the machine is changed, nothing is written in
-``state/``. The summary goes to stdout and to
+Nothing is judged and nothing on the machine is changed. The only file in ``state/``
+is the id map ``state/ush-processes.ids.json`` (``ids.py``): a group ``g`` keeps its
+number across runs by its key (kind ``path``, ``none`` or ``unread`` and the value of
+``group_key``); the number is not its place in the list. Ports ``p`` are numbered by
+place in each run. The summary goes to stdout and to
 ``work/processes-<UTC stamp>.summary.json``; command lines are only in the
 detail file ``work/processes-<UTC stamp>.detail.json``. ``--detail <id>``
-prints one group (with its processes) or one port of the newest detail file.
+prints one group (with its processes) or one port of the newest detail file;
+``--cut`` prints the ids and names of the groups and ports the summary cut.
 To keep the summary within ``SUMMARY_MAX_CHARS`` ``groups`` is cut from its end
 (``truncated`` counts the cut groups); only when no group is left and it is
 still too long are ``ports`` cut from their end, with a ``not_checked`` note.
@@ -74,6 +93,7 @@ sys.path.insert(0, str(Path(__file__).absolute().parents[2] / "ush-common" / "sc
 
 import baseline
 import datadir
+import ids
 import psrun
 from psrun import dump, ps_script, run_job, with_ids
 
@@ -83,7 +103,7 @@ SUMMARY_MAX_CHARS = 35000
 DETAIL_SECTIONS = ("groups", "ports")
 NO_IMAGE_FILE = Path(__file__).absolute().parents[1] / "data" / "no-image-processes.json"
 LAUNCHERS_FILE = Path(__file__).absolute().parents[1] / "data" / "launchers.json"
-JOBS = ("processes", "perf", "owners", "memory", "services")
+JOBS = ("processes", "perf", "owners", "memory", "services", "network_profiles")
 PORT_JOBS = ("tcp_listeners", "udp_endpoints")
 # The FullyQualifiedErrorId prefix of Get-NetTCPConnection / Get-NetUDPEndpoint
 # without a result; the suffix depends on the filter (loc/PATTERNS.md).
@@ -105,7 +125,9 @@ ANCESTORS_MAX = 6
 KB = 1024
 MB = 1024 ** 2
 GB = 1024 ** 3
-NOT_READ_SUFFIX = " (path not read)"
+# A fallback path counts only when its process started within this many seconds of
+# the WMI process with the same pid (a reused pid is another process).
+CREATION_TOLERANCE_SECONDS = 1
 ISO_FRACTION = re.compile(r"^(.*T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})?$")
 
 # --- PowerShell job bodies (each assigns $result) -------------------------------
@@ -235,12 +257,96 @@ ENDPOINTS_BODY = r"""try {
 }
 """
 
+# Only the category of each profile, as text (5.1 writes the enum as a number); a
+# row is an object because load_rows refuses a list of bare texts. Without a
+# connection 5.1 throws ObjectNotFound with the CmdletizationQuery_NotFound id: that is
+# no profile, not a failure. A missing command (CommandNotFoundException) is also
+# ObjectNotFound, so the id must match too.
+NETWORK_PROFILES_BODY = r"""try {
+    $result = @(Get-NetConnectionProfile -ErrorAction Stop | ForEach-Object {
+        [pscustomobject]@{ Category = [string]$_.NetworkCategory }
+    })
+} catch {
+    if ([string]$_.CategoryInfo.Category -eq 'ObjectNotFound' -and
+        ([string]$_.FullyQualifiedErrorId).StartsWith('CmdletizationQuery_NotFound')) {
+        $result = @()
+    } else {
+        [Console]::Error.WriteLine([string]$_.FullyQualifiedErrorId + ' : ' + [string]$_.Exception.Message)
+        exit 1
+    }
+}
+"""
+
+# __WORK__ is replaced by the quoted work directory: TMP and TEMP point there before
+# Add-Type, so the compiler's temporary files stay in the data directory. __INPUT__ is
+# replaced by the quoted path of {"processes": [{ProcessId, CreationDate}, ...]}.
+# QueryFullProcessImageName with flag 0 gives a Win32 path (as WMI does), and
+# GetProcessTimes on the same handle gives the creation time, written in UTC.
+# A process that cannot be read is one row with Error.
+IMAGE_PATHS_BODY = r"""$env:TMP = __WORK__
+$env:TEMP = __WORK__
+$in = [System.IO.File]::ReadAllText(__INPUT__, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public static class UshImagePath
+{
+    const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern bool QueryFullProcessImageName(IntPtr process, uint flags, StringBuilder buffer, ref uint size);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool GetProcessTimes(IntPtr process, out long creation, out long exit, out long kernel, out long user);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool CloseHandle(IntPtr handle);
+
+    public static string[] Read(uint pid)
+    {
+        IntPtr handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+        if (handle == IntPtr.Zero) { throw new Win32Exception(Marshal.GetLastWin32Error()); }
+        try
+        {
+            uint size = 32768;
+            StringBuilder buffer = new StringBuilder((int)size);
+            if (!QueryFullProcessImageName(handle, 0, buffer, ref size)) { throw new Win32Exception(Marshal.GetLastWin32Error()); }
+            long creation, exit, kernel, user;
+            if (!GetProcessTimes(handle, out creation, out exit, out kernel, out user)) { throw new Win32Exception(Marshal.GetLastWin32Error()); }
+            return new string[] { buffer.ToString(0, (int)size), DateTime.FromFileTimeUtc(creation).ToString("o") };
+        }
+        finally { CloseHandle(handle); }
+    }
+}
+'@
+$rows = New-Object System.Collections.Generic.List[object]
+foreach ($p in @($in.processes)) {
+    try {
+        $read = [UshImagePath]::Read([uint32]$p.ProcessId)
+        $rows.Add([pscustomobject]@{ ProcessId = $p.ProcessId; Path = $read[0]; CreationTime = $read[1]; Error = $null })
+    } catch {
+        $e = $_.Exception
+        if ($null -ne $e.InnerException) { $e = $e.InnerException }
+        $rows.Add([pscustomobject]@{ ProcessId = $p.ProcessId; Path = $null; CreationTime = $null; Error = [string]$e.Message })
+    }
+}
+$result = $rows.ToArray()
+"""
+
 BODIES = {
     "processes": PROCESSES_BODY,
     "perf": PERF_BODY,
     "owners": OWNERS_BODY,
     "memory": MEMORY_BODY,
     "services": SERVICES_BODY,
+    "network_profiles": NETWORK_PROFILES_BODY,
+    "image_paths": IMAGE_PATHS_BODY,
     "tcp_listeners": ENDPOINTS_BODY.replace("__CMDLET__", "Get-NetTCPConnection -State Listen"),
     "udp_endpoints": ENDPOINTS_BODY.replace("__CMDLET__", "Get-NetUDPEndpoint"),
 }
@@ -367,6 +473,83 @@ def collect_file_facts(run_ps, work: Path, stamp: str, paths: list) -> dict:
     return run_job(run_ps, "file_facts", ps_script(body, out_path), out_path)
 
 
+def image_path_requests(processes: list) -> list:
+    """``{ProcessId, CreationDate}`` of every process whose path was not read, that is
+    not file-less and has a creation time to compare with (sorted by pid)."""
+    return [{"ProcessId": p["pid"], "CreationDate": p["started_at"]}
+            for p in processes
+            if p["path"] is None and p["path_kind"] == "file"
+            and parse_time(p["started_at"]) is not None]
+
+
+def collect_image_paths(run_ps, work: Path, stamp: str, requests: list) -> dict:
+    """The ``image_paths`` job for ``requests``; they go through an input file."""
+    input_path = work / f"processes-{stamp}.image_paths.input.json"
+    out_path = work / f"processes-{stamp}.image_paths.json"
+    try:
+        input_path.write_text(json.dumps({"processes": requests}, ensure_ascii=True),
+                              encoding="utf-8")
+    except OSError as exc:
+        return {"status": "unreadable", "rows": [],
+                "reason": f"the process list could not be written: {type(exc).__name__}: {exc}"}
+    body = (IMAGE_PATHS_BODY.replace("__WORK__", psrun.ps_quote(work))
+            .replace("__INPUT__", psrun.ps_quote(input_path)))
+    return run_job(run_ps, "image_paths", ps_script(body, out_path), out_path)
+
+
+def apply_image_paths(processes: list, rows) -> int:
+    """Set the path of a process from its ``image_paths`` row when the row has a full
+    path (drive or UNC) and a creation time within ``CREATION_TOLERANCE_SECONDS`` of the WMI one; return
+    how many paths were taken. Any other row leaves the path unread."""
+    by_pid = {}
+    for row in rows:
+        pid = as_int(row.get("ProcessId"))
+        if pid is not None:
+            by_pid.setdefault(pid, row)
+    taken = 0
+    for item in processes:
+        if item["path"] is not None or item["path_kind"] != "file":
+            continue
+        row = by_pid.get(item["pid"])
+        if row is None or text(row.get("Error")) is not None:
+            continue
+        path = text(row.get("Path"))
+        row_time = parse_time(row.get("CreationTime"))
+        wmi_time = parse_time(item["started_at"])
+        if path is None or row_time is None or wmi_time is None:
+            continue
+        # A process without an image file (vmmem, Registry) gives a bare name, not a
+        # path: only a full path with a drive or UNC prefix is taken.
+        if not (ntpath.splitdrive(path)[0] and ntpath.isabs(path)):
+            continue
+        if abs((row_time - wmi_time).total_seconds()) >= CREATION_TOLERANCE_SECONDS:
+            continue
+        item["path"] = path
+        item["path_source"] = "query_image"
+        item["unread_fields"].remove("path")
+        taken += 1
+    return taken
+
+
+def network_categories(result: dict, not_checked: list):
+    """Profiles counted per category: ``{}`` for no profile, None for a failed job.
+    A row without a category text is left out and counted in a note."""
+    if result["status"] == "unreadable":
+        return None
+    counts, bad = {}, 0
+    for row in result["rows"]:
+        category = text(row.get("Category"))
+        if category is None:
+            bad += 1
+            continue
+        counts[category] = counts.get(category, 0) + 1
+    if bad:
+        not_checked.append({"what": "network_profiles rows",
+                            "reason": f"{bad} network profiles had no category text and "
+                                      f"were left out of network_categories"})
+    return counts
+
+
 def perf_by_pid(rows) -> dict:
     values = {}
     for row in rows:
@@ -426,6 +609,7 @@ def build_processes(rows, perf: dict, owners: dict, no_image: dict) -> tuple[lis
             "name": name,
             "path_kind": "none" if no_file else "file",
             "path": path,
+            "path_source": None if path is None else "wmi",
             "command_line": command_line,
             "owner": owner,
             "session_id": as_int(row.get("SessionId")),
@@ -498,8 +682,17 @@ def group_key(item: dict) -> tuple:
     return ("unread", item["name"].casefold())
 
 
-def build_groups(processes: list, sorted_by: str) -> list:
-    """Detail groups (with their process items), ordered and with ids ``g1...``."""
+def stable_group_key(key: tuple) -> str:
+    """The id-map key of a group: ``json.dumps`` of ``[kind, value]``, so a ``none`` and
+    an ``unread`` group with the same name are two keys."""
+    return json.dumps(list(key), ensure_ascii=True)
+
+
+def build_groups(processes: list, sorted_by: str, numbering=None) -> list:
+    """Detail groups (with their process items), ordered, with ids ``g...`` from
+    ``numbering`` (an ``ids.Numbering``; without one the ids are the places)."""
+    if numbering is None:
+        numbering = ids.Numbering.fresh(SKILL)
     members = {}
     for item in processes:  # processes are sorted by pid
         members.setdefault(group_key(item), []).append(item)
@@ -519,9 +712,12 @@ def build_groups(processes: list, sorted_by: str) -> list:
             if value is None:
                 unread.append(field)
         groups.append({
-            "name": first["name"] + (NOT_READ_SUFFIX if key[0] == "unread" else ""),
+            "_key": stable_group_key(key),
+            "name": first["name"],
             "path": first["path"],
             "path_kind": first["path_kind"],
+            "path_read": key[0] != "unread",
+            "path_source": first["path_source"],
             "count": len(items),
             "pids": [p["pid"] for p in items],
             "memory_private_bytes": private,
@@ -548,8 +744,9 @@ def build_groups(processes: list, sorted_by: str) -> list:
         return (value is None, -(value or 0), group["name"].casefold(), group["pids"][0])
 
     groups.sort(key=order)
-    for n, group in enumerate(groups, 1):
-        group["id"] = f"g{n}"
+    numbering.assign("g", groups, key_of=lambda group: group["_key"])
+    for group in groups:
+        del group["_key"]
         for item in group["processes"]:
             item["group"] = group["id"]
     return [{"id": g.pop("id"), **g} for g in groups]
@@ -886,7 +1083,10 @@ def endpoints(rows, names: dict, group_of: dict) -> tuple[list, int]:
 
 
 def udp_bound(items: list, group_names: dict) -> list:
-    """UDP endpoints counted per (group, scope); a pid without a group by its process."""
+    """UDP endpoints counted per (group, scope); a pid without a group by its process.
+    ``group_names`` maps a group id to its name, in the order of the groups; the counts
+    follow that order (a group id is not a place in the list)."""
+    place = {group: n for n, group in enumerate(group_names)}
     counts = {}
     for item in items:
         name = group_names.get(item["group"]) if item["group"] else item["process"]
@@ -895,7 +1095,7 @@ def udp_bound(items: list, group_names: dict) -> list:
 
     def order(key):
         group, name, scope = key
-        number = int(group[1:]) if group else float("inf")
+        number = place.get(group, float("inf")) if group else float("inf")
         return (number, str(name), SCOPE_ORDER[scope])
 
     return [{"group": g, "process": n, "scope": s, "count": counts[(g, n, s)]}
@@ -903,7 +1103,8 @@ def udp_bound(items: list, group_names: dict) -> list:
 
 
 def memory_facts(result: dict) -> dict:
-    """Physical and commit memory in bytes and GB; null when the job gave no row."""
+    """Physical and commit memory in bytes, GB and used percent (``used/total*100``, one
+    decimal); null when the job gave no row or a part is missing."""
     row = result["rows"][0] if result["status"] == "read" else {}
     values = {}
     for prefix, total_field, free_field in (
@@ -923,6 +1124,10 @@ def memory_facts(result: dict) -> dict:
     for prefix in ("", "commit_"):
         for part in ("total", "available", "used"):
             memory[f"{prefix}{part}_gb"] = to_gb(values[f"{prefix}{part}_bytes"])
+    for prefix in ("", "commit_"):
+        total, used = values[f"{prefix}total_bytes"], values[f"{prefix}used_bytes"]
+        memory[f"{prefix}used_percent"] = (None if not total or used is None
+                                           else round(used / total * 100, 1))
     memory["listed_private_bytes"] = None
     memory["listed_private_gb"] = None
     return memory
@@ -943,15 +1148,16 @@ def set_cut(summary: dict, parts: dict, kept_groups: int, kept_ports: int) -> No
         listed = sum(values)
     summary["memory"]["listed_private_bytes"] = listed
     summary["memory"]["listed_private_gb"] = to_gb(listed)
-    ids = {g["id"] for g in summary["groups"]}
+    kept_ids = {g["id"] for g in summary["groups"]}
     # A port of a process that is not in the process list has no group to cut: null.
     summary["ports"] = [{**p, "group_in_summary": None if p["group"] is None
-                         else p["group"] in ids}
+                         else p["group"] in kept_ids}
                         for p in parts["ports"][:kept_ports]]
     summary["udp_bound"] = [u for u in parts["udp_bound"]
-                            if u["group"] is None or u["group"] in ids]
+                            if u["group"] is None or u["group"] in kept_ids]
     summary["counts"]["udp_bound_outside_summary"] = sum(
-        u["count"] for u in parts["udp_bound"] if u["group"] is not None and u["group"] not in ids)
+        u["count"] for u in parts["udp_bound"]
+        if u["group"] is not None and u["group"] not in kept_ids)
 
 
 def most_that_fit(fits, high: int) -> int:
@@ -1044,10 +1250,38 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--data-dir", default=None, help=datadir.HELP)
     parser.add_argument("--detail", metavar="ID",
                         help="print one group or port of the newest detail file and exit")
+    parser.add_argument("--cut", action="store_true",
+                        help="print the ids and names of the groups and ports the summary "
+                             "cut (from the newest detail file) and exit")
     parser.add_argument("--detail-file", metavar="PATH",
-                        help="with --detail: read this detail file (the summary's "
-                             "detail_file) instead of the newest one")
+                        help="with --detail or --cut: read this detail file (the "
+                             "summary's detail_file) instead of the newest one")
     return parser
+
+
+def cut_label_port(item: dict):
+    """The ``name`` of a cut port: protocol, port and process name (no path)."""
+    return f"{item.get('protocol')} {item.get('local_port')} {item.get('process')}"
+
+
+CUT_LABELS = {"ports": cut_label_port}
+
+
+def show_cut(work: Path, detail_file: Path | None = None) -> int:
+    """Print ``{detail_file, summary_file, cut}``: the groups and ports of the detail
+    file that the summary of the same run does not hold. Starts no machine job."""
+    if detail_file is None:
+        files = sorted(work.glob("processes-*.detail.json"), key=lambda p: p.name)
+        if not files:
+            print(f"no detail file in {work}; run the collection first", file=sys.stderr)
+            return 1
+        detail_file = files[-1]
+    result, reason = ids.read_cut(detail_file, CUT_LABELS)
+    if reason is not None:
+        print(reason, file=sys.stderr)
+        return 1
+    print(json.dumps(result, ensure_ascii=True, indent=1))
+    return 0
 
 
 def show_detail(work: Path, item_id: str, detail_file: Path | None = None) -> int:
@@ -1088,16 +1322,25 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
         raise TypeError("inject both run_ps and is_admin, or neither")
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.detail is not None and args.cut:
+        parser.error("--detail and --cut cannot be used together")
+    if args.detail_file is not None and args.detail is None and not args.cut:
+        parser.error("--detail-file needs --detail or --cut")
+    if args.detail_file is not None:
+        # The detail file is named explicitly: no data directory is needed.
+        if args.cut:
+            return show_cut(Path(), Path(args.detail_file).resolve())
+        return show_detail(Path(), args.detail, Path(args.detail_file).resolve())
     try:
         data_dir = datadir.resolve(args.data_dir)
     except datadir.DataDirError as exc:
         parser.error(str(exc))
     work = data_dir / "work"
-    if args.detail_file is not None and args.detail is None:
-        parser.error("--detail-file needs --detail")
+    state = data_dir / "state"
     if args.detail is not None:
-        detail_file = None if args.detail_file is None else Path(args.detail_file).resolve()
-        return show_detail(work, args.detail, detail_file)
+        return show_detail(work, args.detail)
+    if args.cut:
+        return show_cut(work)
 
     run_ps = run_ps or default_run_ps
     is_admin = is_admin or default_is_admin
@@ -1125,9 +1368,25 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
         not_checked.append({"what": "process rows",
                             "reason": f"{skipped} rows of the processes job had no usable "
                                       f"or a repeated ProcessId and were left out"})
-    groups = build_groups(processes, sorted_by)
+    requests = image_path_requests(processes)
+    if requests:  # nothing to ask: the job does not run and leaves no note
+        image_result = record("image_paths",
+                              collect_image_paths(run_ps, work, stamp, requests),
+                              sources, not_checked)
+        if image_result["status"] == "empty":
+            not_checked.append({"what": "job image_paths",
+                                "reason": f"image_paths returned no rows for "
+                                          f"{len(requests)} processes; their paths stay "
+                                          f"unread"})
+        apply_image_paths(processes, image_result["rows"])
+    id_map, map_reason = ids.load_map(state, SKILL)
+    if map_reason is not None:
+        what, reason = ids.load_note(map_reason)
+        not_checked.append({"what": what, "reason": reason})
+    numbering = ids.Numbering(id_map, now.date().isoformat())
+    groups = build_groups(processes, sorted_by, numbering)
 
-    inventory, inventory_sources, notes = read_inventory(data_dir / "state", admin, now)
+    inventory, inventory_sources, notes = read_inventory(state, admin, now)
     not_checked.extend(notes)
     launchers, launchers_reason = load_launchers(LAUNCHERS_FILE)
     if launchers_reason is not None and inventory_sources is not None:
@@ -1199,8 +1458,18 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
         "groups": groups,
         "ports": ports,
         "udp_endpoints": udp,
+        # The ids of the items the summary lists before the budget cut, for --cut.
+        "listed": {"groups": [g["id"] for g in groups], "ports": [p["id"] for p in ports]},
+        "summary_file": str(summary_file),
     }
     detail_file.write_text(dump(detail) + "\n", encoding="utf-8")
+
+    map_save_reason = ids.save_map(state, SKILL, id_map, now.date().isoformat())
+    if map_save_reason is not None:
+        what, reason = ids.save_note(map_save_reason)
+        not_checked.append({"what": what, "reason": reason})
+    for what, reason in numbering.repeated_notes():
+        not_checked.append({"what": what, "reason": reason})
 
     summary = {
         "schema_version": SCHEMA_VERSION,
@@ -1214,6 +1483,7 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
         "truncated": 0,
         "sorted_by": sorted_by,
         "memory": memory_facts(results["memory"]),
+        "network_categories": network_categories(results["network_profiles"], not_checked),
         "inventory": inventory,
         "counts": counts,
         "groups": [],

@@ -20,7 +20,8 @@ from tests.skill_loader import REPO_ROOT, load_script
 
 NOT_CHECKED = ["## Nie sprawdzono", "<!-- ush:not-checked -->", "Nic."]
 REAL_WORDS_FILE = REPO_ROOT / "skills" / "ush-common" / "data" / "number-words.json"
-SKILLS = ("ush-events", "ush-health", "ush-inventory", "ush-processes", "ush-settings")
+SKILLS = ("ush-advice", "ush-events", "ush-files", "ush-health", "ush-inventory",
+          "ush-processes", "ush-runall", "ush-settings")
 EXIT_ERROR = 2  # "the report, its JSON or its profile could not be checked"
 
 
@@ -293,9 +294,21 @@ def _skill_tests(skill, module):
     return importlib.import_module(f"tests.{skill}.{module}")
 
 
+def _advice_data(summary_file, detail_file):
+    mod = _skill_tests("ush-advice", "test_report_profile")
+    summary = mod._clean_summary(summary_file, detail_file)
+    return summary, mod._detail_data(summary)
+
+
 def _events_data(summary_file, detail_file):
     mod = _skill_tests("ush-events", "test_report_check")
     return mod._summary_data(detail_file), mod._detail_data()
+
+
+def _files_data(summary_file, detail_file):
+    mod = _skill_tests("ush-files", "test_report_profile")
+    summary = mod._clean_summary(summary_file, detail_file)
+    return summary, mod._detail_data(summary)
 
 
 def _health_data(summary_file, detail_file):
@@ -316,10 +329,46 @@ def _processes_data(summary_file, detail_file):
     return summary, {section: summary[section] for section in mod.DETAIL_SECTIONS}
 
 
+def _runall_data(summary_file, detail_file):
+    mod = _skill_tests("ush-runall", "test_report_profile")
+    summary = mod._clean_summary(summary_file, detail_file)
+    return summary, mod._detail_data(summary)
+
+
 def _settings_data(summary_file, detail_file):
     mod = _skill_tests("ush-settings", "test_report_profile")
     summary = mod._clean_summary(summary_file, detail_file)
     return summary, {section: summary[section] for section in mod.DETAIL_SECTIONS}
+
+
+def _advice_body():
+    return [
+        "# Raport porad, 2026-09-20",
+        "",
+        "## Stan poprawek",
+        "System: Windows 11 w wersji 25H2, kompilacja 26200.6899.",
+        "Zainstalowane poprawki: KB5099901, KB5099917.",
+        ("- u1 aktualizacja z 2026-09 (KB5099901): zainstalowana; "
+         "CVE zapisane w ustaleniach: 1, krytyczne: 0."),
+        "",
+        "## Wykorzystywane podatności",
+        "- k1 CVE-2026-40001 (Contoso Invented Product): termin 2026-09-23, załatana.",
+        "- Wykorzystywane podatności spoza miesięcy Windows w ustaleniach: 0.",
+        "",
+        "## Firmware",
+        "BIOS tej maszyny: Contoso Book 14, wersja CB14.317.0 z 2026-04-15.",
+        "",
+        "## Nowe od ostatniego sprawdzenia",
+        "Brak wcześniejszego stanu do porównania; bieżący stan zapisano.",
+        "",
+        "## Niezweryfikowane",
+        "- f1 Contoso Book 14: strona spoza listy źródeł podaje wersję 1.20 z 2026-09-01.",
+        "",
+        "## Zalecenia",
+        "Brak zaleceń w tym przebiegu.",
+        "",
+        *NOT_CHECKED,
+    ]
 
 
 def _events_body():
@@ -333,6 +382,40 @@ def _events_body():
         "Największa grupa ma 4321 zdarzeń; ten dostawca jest jeden.",
         "## 1. Ustalenia",
         "- Nic więcej nie odstaje.",
+        "",
+        *NOT_CHECKED,
+    ]
+
+
+def _files_body(temp_block, recycle_block):
+    return [
+        "# Raport plików, 2026-10-02",
+        "",
+        "## Dyski",
+        "- Dysk C: zajęte 160.0 GB z 238.4 GB, wolne 78.4 GB.",
+        "- Pliki w przejrzanych folderach: 149.6 GB; zajętość dysku to liczba, która się liczy.",
+        "- f1: folder Windows, 31.4 GB; f2: folder starszych programów, 12.3 GB.",
+        "",
+        "## Co przybyło",
+        "Porównano z przebiegiem z 2026-09-25, sprzed 7.1 dnia.",
+        "- d1: folder Pobrane użytkownika urósł o 2.0 GB.",
+        "",
+        "## Duże pliki",
+        "- l1: dysk maszyny wirtualnej, 40.0 GB, zmieniony 2026-09-30.",
+        "",
+        "## Do sprzątania",
+        ("- c1: pliki tymczasowe użytkownika, 0.68 GB w 1532 plikach; starsze niż 2 dni: "
+         "0.59 GB w 1204 plikach. Ryzyko niskie, nie da się cofnąć."),
+        "",
+        "```powershell",
+        *temp_block.splitlines(),
+        "```",
+        "",
+        "- c2: kosz, 0.05 GB w 12 plikach; ryzyko niskie, nie da się cofnąć.",
+        "",
+        "```powershell",
+        *recycle_block.splitlines(),
+        "```",
         "",
         *NOT_CHECKED,
     ]
@@ -430,6 +513,39 @@ def _processes_body(total_bytes):
     ]
 
 
+def _runall_body():
+    return [
+        "# Raport zbiorczy, 2026-09-20",
+        "",
+        "## Stan przebiegu",
+        "- h1 ush-health: ok, 1.5 s.",
+        "- h2 ush-events: ok, 1.5 s.",
+        "- h3 ush-settings: ok, 1.5 s.",
+        "- h4 ush-inventory: ok, 1.5 s.",
+        "- h5 ush-processes: ok, 1.5 s.",
+        "- h6 ush-files: ok, 1.5 s.",
+        "- h7 ush-advice: ok, 1.5 s.",
+        "- Cały przebieg trwał 10.5 s.",
+        "",
+        "## Zalecenia",
+        "Brak zaleceń w tym przebiegu.",
+        "",
+        "## Powiązania między skillami",
+        "Brak powiązań między ustaleniami różnych skilli.",
+        "",
+        "## Zapora wobec portów nasłuchu",
+        ("- w1: reguła ush-inventory x2 (Invented Server) dopuszcza port 8080; program "
+         "słucha tylko na pętli zwrotnej (127.0.0.1), profil Private; sieci Private: 1."),
+        ("- Pozostałe reguły przychodzące: bez nasłuchu 2, nieporównane 4, UDP 2, "
+         "inny protokół 0."),
+        "",
+        "## Sprzeczne ustalenia",
+        "Brak.",
+        "",
+        *NOT_CHECKED,
+    ]
+
+
 def _settings_body(block_lines):
     return [
         "# Raport ustawień, 2026-09-30 08:10",
@@ -470,11 +586,15 @@ class TestPolishSkillReports(_CheckerCase):
     def _cases(self):
         processes = _skill_tests("ush-processes", "test_report_profile")
         settings = _skill_tests("ush-settings", "test_report_profile")
+        files = _skill_tests("ush-files", "test_report_profile")
         return {
+            "ush-advice": (_advice_data, _advice_body()),
             "ush-events": (_events_data, _events_body()),
+            "ush-files": (_files_data, _files_body(files.TEMP_BLOCK, files.RECYCLE_BLOCK)),
             "ush-health": (_health_data, _health_body()),
             "ush-inventory": (_inventory_data, _inventory_body()),
             "ush-processes": (_processes_data, _processes_body(processes.TOTAL_BYTES)),
+            "ush-runall": (_runall_data, _runall_body()),
             "ush-settings": (_settings_data, _settings_body(settings._block_lines())),
         }
 

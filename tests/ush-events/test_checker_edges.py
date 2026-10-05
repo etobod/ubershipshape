@@ -209,11 +209,16 @@ class TestIdsSupplyNoNumbers(CheckerTestCase):
         self.assertEqual(code, 0, output)
 
     def test_truncated_group_ids_are_known(self):
-        # Two groups listed, three cut off: g3..g5 are known ids, g6 is not.
-        self.summary({"groups": [{"id": "g1", "count": 4}, {"id": "g2", "count": 7}],
-                      "truncated": 3})
-        code, output = self.run_check(["Group g5 was cut from the summary.", "Groups g1 and g2.",
-                                       *NOT_CHECKED])
+        # Two groups listed, three cut off. Group ids are stable, so the cut ones
+        # (g9, g13, g15) come from the detail file; g6 is in no detail section.
+        listed = [{"id": "g1", "count": 4}, {"id": "g2", "count": 7}]
+        cut = [{"id": "g9", "count": 3}, {"id": "g13", "count": 2}, {"id": "g15", "count": 1}]
+        (self.root / "detail.json").write_text(
+            json.dumps({"groups": listed + cut, "noise": [], "boots": [], "anomalies": []}),
+            encoding="utf-8")
+        self.summary({"groups": listed, "truncated": 3})
+        code, output = self.run_check(["Group g13 was cut from the summary.",
+                                       "Groups g1 and g2.", *NOT_CHECKED])
         self.assertEqual(code, 0, output)
 
         code, output = self.run_check(["Group g6 was cut from the summary.", "Groups g1 and g2.",

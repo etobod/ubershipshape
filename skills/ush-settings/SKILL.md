@@ -81,6 +81,15 @@ a change automatically. Say so if the user asks for these.
    `<data dir>/work/`, and saves the new baseline to `<data dir>/state/`.
    The field meanings are in `references/summary-contract.md`.
 
+   When the user asks about changes over a longer period ("what changed this
+   month", "since last week"), add `--compare-to <N>d` (N from 1 to 30, e.g.
+   `--compare-to 7d`): the run then compares with the saved state at least N
+   days old instead of the latest run (`baseline.reference`,
+   `baseline.reference_file`). Without such a question run it without the
+   flag. The flag changes nothing but the data directory; every run, with or
+   without it, also keeps a day copy of the baseline in
+   `<data dir>/state/history/` (30 days).
+
 2. Read the summary. For the `rationale`, `manual`, `locations` or `adapters`
    of an entry listed in the summary, fetch the item (a change `c..` holds
    only its `entry`, `before` and `after`; the entry's `rationale` is known
@@ -154,7 +163,8 @@ run it yourself.
 ```
 # Runs the same read-only settings check with administrator rights. It changes
 # nothing on the machine and writes only to <data dir>\work\ and
-# <data dir>\state\ (a separate elevated baseline, ush-settings.elevated.json).
+# <data dir>\state\ (a separate elevated baseline, ush-settings.elevated.json,
+# and the id map, ush-settings.ids.json).
 Set-Location "<absolute project root>"
 python -B skills/ush-settings/scripts/settings.py --data-dir "<absolute data dir>"
 ```

@@ -82,8 +82,24 @@ The report names each item; an empty list is reported as "nothing".
 ## Ids and --detail
 
 Every item of a summary or detail list has an `id`: one lowercase letter per
-list followed by its 1-based position (`g1`, `g2`, ...). The letters of a
-skill are in its report profile.
+list followed by a number (`g1`, `x17`, ...). The letters of a skill are in
+its report profile.
+
+Most ids are stable between runs: the skill keeps a map from a stable key of
+the item to its number in `<data dir>/state/<skill>.ids.json`, so the same
+item keeps its id when other items disappear or appear. A new item gets the
+next free number, and the number of an item that disappeared is never used
+again. The number is not the item's position in its list, so the id of an
+item cut from the summary does not follow from the list. Stable letters:
+`a`, `s`, `f`, `d`, `x` (`ush-inventory`), `e` (`ush-settings`), `g`
+(`ush-processes`), `k`, `v`, `p` (`ush-health`), `g`, `n` (`ush-events`).
+
+The other letters keep a 1-based position in their list in each run:
+changes `c` (`ush-inventory`, `ush-settings`, `ush-health`), ports `p` (`ush-processes`),
+update failures `u` (`ush-health`), device-capability usage `u`
+(`ush-settings`), events `r`, `a`, `b`, `d` (`ush-events`), every letter of
+`ush-advice` (`u`, `k`, `f`, `i`, `w`) and every letter of `ush-files` (folders
+`f`, large files `l`, changes `d`, cleanup items `c`).
 
 `python -B skills/<skill>/scripts/<script>.py --data-dir <dir> --detail <id>`
 prints the item with that id from the newest detail file of the skill in
@@ -107,15 +123,46 @@ becomes `<skill>.previous.json` (one generation). A baseline that cannot be
 read is never deleted or overwritten: it is kept next to the new one as
 `<skill>.unreadable-<UTC stamp>.json`.
 
+History: after each save (also one that returned a reason) the baseline in
+place is copied, verified, to `<data dir>/state/history/<skill>.<YYYY-MM-DD>.json`
+(or `<skill>.elevated.<YYYY-MM-DD>.json`), dated by the UTC day of its own
+`created_at`; a later run on the same day replaces that day's copy. Day
+copies older than 31 days are removed, except the newest of them, so a
+comparison after a pause between runs still finds the state before it; other
+files in `history` are never touched. A copy that could not be made is a `not_checked` item ("history not
+kept") and does not change whether the baseline was saved. Old copies that
+could not be removed after a verified copy give the same item with the reason
+"the day copy was kept, but old copies were not removed: ..." instead. A comparison with
+an older state picks the newest day copy dated at least N UTC calendar days
+before the run (N from 1 to 30), so it can be less than N times 24 hours old:
+`age_days` says how old it really is; a picked copy
+that cannot be read is `unreadable` (never replaced by an older one), and no
+copy old enough means "no saved state at least N days old".
+
+`ush-inventory`, `ush-settings` and `ush-health` take `--compare-to <N>d` (N from 1 to 30;
+another value is a usage error, exit code 2). With it the run compares with
+that history copy instead of the latest baseline. Only the changes and the
+comparison states use the copy: the baseline saved by the run is built from
+the latest one, so a source not read in this run keeps the state of the
+latest run, not that of the old copy. Without the flag the run compares with
+the latest baseline, as before. With the flag and a latest baseline that
+cannot be read, `not_checked` has the item "the latest baseline could not be
+read; sources not read in this run keep nothing (the file is kept)", and the
+comparison with the copy still takes place; a copy that cannot be read gives
+the item "the reference baseline <file> could not be read, so nothing was
+compared".
+
 The summary has a `baseline` object:
 
 | Field | Meaning |
 |---|---|
-| `status` | `none` - no baseline yet (first run); `compared` - a baseline was read and compared; `unreadable` - a baseline file exists but could not be read (bad JSON, another `schema_version`, `skill` or `elevated`, a time without a zone) |
+| `status` | `none` - no baseline yet (first run); with `reference` other than `latest` it means instead that no state at least N days old is saved (the reason is in `reason`), not a first run; `compared` - a baseline was read and compared; `unreadable` - a baseline file exists but could not be read (bad JSON, another `schema_version`, `skill` or `elevated`, a time without a zone); with `reference` other than `latest` this is the picked history copy |
+| `reference` | `latest` (compared with the latest run) or the `--compare-to` value, e.g. `7d`; it holds the flag value also when `status` is `none` |
+| `reference_file` | the name of the history copy picked with `--compare-to` (also when it could not be read), `null` without the flag or when no copy was picked; in the `path_keys` of every skill that writes it, so the date in the name backs no number in a report |
 | `created_at` | ISO 8601 time of the baseline compared with, `null` unless `compared` |
 | `age_days` | days from `created_at` to `generated_at`, one decimal place, `null` unless `compared` |
 | `saved` | `true` when this run's baseline was written and verified, `false` otherwise (then `not_checked` has an item) |
-| `reason` | why the baseline was `unreadable` or not saved, otherwise `null` |
+| `reason` | why the baseline was `unreadable` or not saved, or, with `--compare-to`, that no state at least N days old is saved; several reasons are joined with "; ", the latest baseline's first; otherwise `null` |
 
 Each source also has a comparison state:
 
@@ -137,22 +184,25 @@ unknown one.
 
 ## Recommendations (written by the model in the report)
 
-Every recommendation in any `ush-*` report carries these fields:
+Every recommendation in any `ush-*` report carries these fields. The
+report writes them with the labels and values of the report language, in
+the layout of rule 4 of `skills/ush-common/references/report-style.md`; the
+Polish labels are in the last column.
 
-| Field | Values / content |
-|---|---|
-| `weight` | `high`, `medium` or `low` - one scale shared by all skills |
-| `kind` | `change` (the user changes something), `observe` (watch it, run again later), `consult_service` (needs a hardware service or the vendor) |
-| `risk` | what can go wrong when acting on it |
-| `evidence` | the numbers and ids from the summary or detail items it rests on |
-| `permissions` | what it needs (e.g. none, administrator) |
-| `rollback` | how to undo it (or "nothing to undo" for `observe`) |
+| Field | Values / content | Polish label |
+|---|---|---|
+| `weight` | `high`, `medium` or `low` — one scale shared by all skills | Waga: wysoka, średnia, niska |
+| `kind` | `change` (the user changes something), `observe` (watch it, run again later), `consult_service` (needs a hardware service or the vendor) | Rodzaj: zmiana, obserwacja, serwis |
+| `risk` | what can go wrong when acting on it | Ryzyko |
+| `evidence` | the numbers and ids from the summary or detail items it rests on | Dowód |
+| `permissions` | what it needs (e.g. none, administrator) | Uprawnienia |
+| `rollback` | how to undo it (or "nothing to undo" for `observe`) | Cofnięcie |
 
 Weights:
 
-- `high` - data loss, crashes or a failing device is likely; act soon.
-- `medium` - a real fault with limited effect; act when convenient.
-- `low` - a minor or cosmetic issue, or worth watching only.
+- `high` — data loss, crashes or a failing device is likely; act soon.
+- `medium` — a real fault with limited effect; act when convenient.
+- `low` — a minor or cosmetic issue, or worth watching only.
 
 The script assigns none of these; there is no threshold in code.
 
@@ -171,18 +221,22 @@ skill without a profile, cannot be checked (exit 2).
 | `path_keys` | keys whose values are file paths or names; their digits back no number |
 | `id_keys` | keys whose values are item ids or references to them; their digits back no number |
 | `required_lists` | dotted paths (`dumps.files`) of the summary lists whose every item the report must name; a missing or `null` list requires nothing |
-| `truncated` | `null`, or a list of `{"list": <dotted path>, "prefix": <letters>, "count_key": <summary key>}`, one per list the summary may cut from its end: the top-level summary key `count_key` (default `"truncated"`) counts the items cut from that list, and their ids (`<prefix><N+1>` to `<prefix><N+count>`, N the list's length) count as known. One such object without the list brackets works as a one-item list |
+| `truncated` | `null`, or a list of `{"list": <dotted path>, "prefix": <letters>, "count_key": <summary key>}`, one per list the summary may cut from its end: the top-level summary key `count_key` (default `"truncated"`) counts the items cut from that list, and, when that count is above 0, every `id` with that prefix in the `detail_sections` of the detail file counts as known (a missing or unreadable detail file is then exit `2`; a count of 0 does not read the detail file). One such object without the list brackets works as a one-item list |
 | `required_keys` | optional; top-level summary keys that must be present. A key whose value is `null` or empty is present; a missing key is named and gives exit `1`, so a summary of an older shape fails rather than passing because its list is missing |
 | `report_prefix` | the file name prefix of the skill's reports, e.g. `"events-"` |
 
-Example, the ush-health profile: `id_letters` `"kvpu"` (disks, volumes,
-devices, update failure groups), `required_lists`
-`["disks", "volumes", "devices", "updates.failures"]` (a nested list such as
-`tpm.devices` is not required unless named), `truncated`
+Example, the ush-health profile: `id_letters` `"kvpuc"` (disks, volumes,
+devices, update failure groups, changes), `required_lists`
+`["disks", "volumes", "devices", "updates.failures", "changes"]` (a nested
+list such as `tpm.devices` is not required unless named), `required_keys`
+`["baseline", "changes"]`, `truncated`
 `{"list": "updates.failures", "prefix": "u"}`, `path_keys`
-`["summary_file", "detail_file", "device_id", "instance_id"]` (the paths
-and two detail-only identifiers), so device, disk and update names back the
-digits a report quotes from them, and `report_prefix` `"health-"`.
+`["summary_file", "detail_file", "device_id", "instance_id", "unique_id",
+"reference_file"]` (the paths, three detail-only identifiers and the name of
+the history copy compared with), so device, disk and update
+names back the digits a report quotes from them, `id_keys` `["id", "item"]`
+(a change's `item` is the id of the item it is about), and `report_prefix`
+`"health-"`.
 
 Run it as:
 

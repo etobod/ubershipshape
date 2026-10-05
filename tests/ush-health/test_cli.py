@@ -50,11 +50,16 @@ class TestDetail(HealthTestCase):
         older = FakePowerShell({"physical_disks": ok([disk("0", "Invented Old Disk 1100")])})
         newer = FakePowerShell({"physical_disks": ok([disk("0", "Invented New Disk 2200")])})
         self.collect(older, data_dir=data_dir, now=NOW)
-        self.collect(newer, data_dir=data_dir, now=NOW + timedelta(hours=1))
+        newer_summary = self.collect(newer, data_dir=data_dir, now=NOW + timedelta(hours=1))
+        # Disk ids are stable across runs (plan 108): a disk without UniqueId gets a
+        # one-time number, so the newer run's disk is not k1; ask for its own id.
+        newer_id = newer_summary["disks"][0]["id"]
+        # The older run's one-time k1 is not given out again.
+        self.assertEqual(newer_id, "k2", newer_summary["disks"])
 
         detail_fake = FakePowerShell()
         code, stdout, stderr = self.run_main(
-            data_dir, detail_fake, extra=["--detail", "k1"]
+            data_dir, detail_fake, extra=["--detail", newer_id]
         )
         self.assertEqual(code, 0, stderr[:300])
         self.assertEqual(detail_fake.calls, [])

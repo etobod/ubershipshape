@@ -435,7 +435,8 @@ class TestSummary(CollectTestCase):
                 event(KERNEL_POWER, 41, 1, "2026-09-10T11:00:00.0000000+02:00"),
             ]),
         })
-        self.collect(first, data_dir=data_dir, now=NOW - timedelta(days=1))
+        first_groups = self.collect(first, data_dir=data_dir,
+                                    now=NOW - timedelta(days=1))["groups"]
 
         # Second run (newest): two groups, anomalies, boots.
         crash = bugcheck("2026-09-20T12:00:00.0000000+02:00", "0x0000019c")
@@ -509,8 +510,15 @@ class TestSummary(CollectTestCase):
         self.assertGreaterEqual(len(groups), 2, groups)
         self.assertGreaterEqual(len(anomalies), 2, anomalies)
         self.assertGreaterEqual(len(boots), 2, boots)
-        self.assertEqual([g.get("id") for g in groups],
-                         [f"g{i}" for i in range(1, len(groups) + 1)])
+        # Group ids are stable across runs (plan 108): the older run in the same data
+        # directory numbered its groups first, so every group of this run, all of them
+        # new, takes the next numbers in the order listed.
+        group_ids = [g.get("id") for g in groups]
+        self.assertEqual([g.get("id") for g in first_groups],
+                         [f"g{i}" for i in range(1, len(first_groups) + 1)])
+        self.assertEqual(group_ids, [f"g{len(first_groups) + i}"
+                                     for i in range(1, len(groups) + 1)])
+        first_group_id = group_ids[0]
         self.assertEqual([a.get("id") for a in anomalies],
                          [f"a{i}" for i in range(1, len(anomalies) + 1)])
         for boot in boots:
@@ -520,23 +528,25 @@ class TestSummary(CollectTestCase):
         self.assertEqual([a.get("id") for a in detail["anomalies"]],
                          [a["id"] for a in anomalies])
 
-        # A newer-named summary file with a conflicting g1 must be ignored.
+        # A newer-named summary file with a conflicting group id must be ignored.
         planted = work / "events-20991231-235959.summary.json"
         planted.write_text(
-            json.dumps({"groups": [{"id": "g1", "provider": "Planted-Summary-Provider"}]}),
+            json.dumps({"groups": [{"id": first_group_id,
+                                    "provider": "Planted-Summary-Provider"}]}),
             encoding="utf-8",
         )
 
         # --detail prints the item from the newest detail file, without PowerShell.
-        for item_id in ("g1", "a1", boots[0]["id"]):
+        for item_id in (first_group_id, "a1", boots[0]["id"]):
             no_ps = FakePowerShell()
             code, out = self.run_main(data_dir, no_ps, extra=("--detail", item_id))
             self.assertEqual(code, 0, out[:300])
             self.assertEqual(no_ps.calls, [])
             printed = self.parse(out)
             self.assertEqual(printed, self.find_item(detail, item_id))
-        g1 = self.find_item(detail, "g1")
-        self.assertTrue(str(g1.get("provider")).startswith("Invented-Run2-"), g1)
+        first_group = self.find_item(detail, first_group_id)
+        self.assertTrue(str(first_group.get("provider")).startswith("Invented-Run2-"),
+                        first_group)
 
         # An id that does not exist: non-zero exit, still no PowerShell.
         no_ps = FakePowerShell()

@@ -13,7 +13,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tests.skill_loader import load_script
+from tests.skill_loader import REPO_ROOT, load_script
+
+HEALTH_DIR = REPO_ROOT / "skills" / "ush-health"
 
 DEVICE_NAME = "Invented Adapter 6 AX201"
 PLAIN_DEVICE_NAME = "Invented Wireless Adapter"
@@ -56,6 +58,11 @@ def _summary_data(summary_file, detail_file, device_name=DEVICE_NAME, failures=N
         },
         "pending_reboot": {"windows_update": False, "component_servicing": False,
                            "file_rename_operations": False},
+        # Plan 110, M3: required keys of the profile; no digits here.
+        "baseline": {"status": "none", "created_at": None, "age_days": None,
+                     "saved": True, "reason": None, "reference": "latest",
+                     "reference_file": None},
+        "changes": [],
     }
 
 
@@ -256,17 +263,28 @@ class TestProfile(unittest.TestCase):
 
     def test_cut_failures_are_known(self):
         # Two failure groups in the summary, three more cut (truncated: 3).
+        # The cut groups are known from the detail file, not from their position.
         # The device name holds no digits, so no reading backs 4, 5 or 6;
         # u4, u5 and u6 can only pass as ids.
         summary, detail = self._write_data(
             device_name=PLAIN_DEVICE_NAME,
             failures=[dict(FAILURE_U1), dict(FAILURE_U2)],
             truncated=3)
+        detail["update_failures"] += [
+            {"id": "u3", "title": "Invented Firmware Update", "result": "Failed", "count": 2},
+            {"id": "u4", "title": "Invented Defender Update", "result": "Failed", "count": 7},
+            {"id": "u5", "title": "Invented Store Update", "result": "Failed", "count": 2},
+        ]
+        self.detail_file.write_text(json.dumps(detail), encoding="utf-8")
         stripped_summary = json.loads(json.dumps(summary))
         for key in PATH_KEYS:
             stripped_summary.pop(key)
+        stripped_detail = json.loads(json.dumps(detail))
+        for section in stripped_detail.values():
+            for item in section:
+                item.pop("id", None)
         tokens = (_number_tokens(json.dumps(stripped_summary))
-                  | _number_tokens(json.dumps(detail)))
+                  | _number_tokens(json.dumps(stripped_detail)))
         for number in ("4", "5", "6"):
             self.assertNotIn(int(number), tokens, f"{number} occurs in the JSON")
             self._assert_not_in_temp_path(number)
@@ -286,6 +304,128 @@ class TestProfile(unittest.TestCase):
             code, output = self._run(self._write_report(body, "health-2026-09-28-1221.md"))
             self.assertEqual(code, 1, f"output:\n{output}")
             self.assertNotIn("OK", output)
+
+    # --- plan 110, M3, K6 ---------------------------------------------------------------
+
+    def _write_custom(self, summary, detail):
+        self.summary_file.write_text(json.dumps(summary), encoding="utf-8")
+        self.detail_file.write_text(json.dumps(detail), encoding="utf-8")
+
+    def _changes_summary(self):
+        """A summary of the K5 shape: free space of C from 214.6 to 97.3 GB, a new
+        failing device p2 and disk health from Healthy to Warning, as c1 to c3."""
+        summary = _summary_data(self.summary_file, self.detail_file,
+                                device_name=PLAIN_DEVICE_NAME)
+        summary["disks"][0]["health_status"] = "Warning"
+        summary["volumes"][0]["free_gb"] = 97.3
+        summary["volumes"][0]["free_percent"] = 41.1
+        summary["devices"].append(
+            {"id": "p2", "name": "Invented Card Reader", "class": "USB",
+             "status": "Error", "problem": "CM_PROB_FAILED_START"})
+        summary["baseline"] = {
+            "status": "compared", "created_at": "2026-09-27T12:00:00Z", "age_days": 1.0,
+            "saved": True, "reason": None, "reference": "latest", "reference_file": None,
+        }
+        summary["comparison"] = {"disks": "compared", "volumes": "compared",
+                                 "devices": "compared", "os": "compared"}
+        summary["changes"] = [
+            {"id": "c1", "source": "disks", "kind": "changed", "item": "k1",
+             "name": "Invented NVMe Disk",
+             "fields": {"health_status": {"before": "Healthy", "after": "Warning"}}},
+            {"id": "c2", "source": "volumes", "kind": "changed", "item": "v1",
+             "name": "C", "fields": {"free_gb": {"before": 214.6, "after": 97.3}}},
+            {"id": "c3", "source": "devices", "kind": "added", "item": "p2",
+             "name": "Invented Card Reader", "fields": {}},
+        ]
+        detail = _detail_data(summary)
+        detail["changes"] = [dict(item) for item in summary["changes"]]
+        return summary, detail
+
+    def test_changes_are_required(self):
+        summary, detail = self._changes_summary()
+        self._write_custom(summary, detail)
+
+        # Guard: 117 (the difference 214.6 - 97.3) is backed by nothing.
+        self.assertNotIn(117, _number_tokens(json.dumps(summary)))
+        self.assertNotIn(117, _number_tokens(json.dumps(detail)))
+        self._assert_not_in_temp_path("117")
+
+        volume_line = "Volume v1 (C:) has 97.3 GB free of 236.9 GB, that is 41.1 percent."
+        device_lines = (DEVICE_LINE, "Device p2 reports problem CM_PROB_FAILED_START.")
+        change_c1 = "Change c1: disk k1 went from Healthy to Warning."
+        change_c2 = "Change c2: volume v1 (C:) had 214.6 GB free before and 97.3 GB after."
+        change_c3 = "Change c3: device p2 is a new problem."
+
+        def body(*changes):
+            return ["<!-- ush:detail c1 -->",
+                    *_body_lines(volume_line=volume_line, device_lines=device_lines,
+                                 update_lines=(*UPDATE_LINES, "", "## Changes",
+                                               *changes))]
+
+        with self.subTest("c1, c2 and c3 named with before and after"):
+            self._assert_passes(body(change_c1, change_c2, change_c3),
+                                "health-2026-09-28-1300.md")
+
+        with self.subTest("c2 not named"):
+            code, output = self._run(self._write_report(
+                body(change_c1, change_c3), "health-2026-09-28-1301.md"))
+            self.assertEqual(code, 1, f"output:\n{output}")
+            self.assertNotIn("OK", output)
+
+        with self.subTest("the difference 117.3 instead of before and after"):
+            difference = "Change c2: volume v1 (C:) has 117.3 GB less free space."
+            code, output = self._run(self._write_report(
+                body(change_c1, difference, change_c3), "health-2026-09-28-1302.md"))
+            self.assertEqual(code, 1, f"output:\n{output}")
+            self.assertNotIn("OK", output)
+            self.assertIn("117", output)
+
+        with self.subTest("item is an id key: v7 backs no 7"):
+            summary = _summary_data(self.summary_file, self.detail_file,
+                                    device_name=PLAIN_DEVICE_NAME)
+            summary["disks"][0]["size_gb"] = 238.5
+            summary["changes"] = [
+                {"id": "c1", "source": "volumes", "kind": "changed", "item": "v7",
+                 "name": "C", "fields": {"free_gb": {"before": 30.5, "after": 29.2}}},
+            ]
+            detail = _detail_data(summary)
+            detail["changes"] = [dict(item) for item in summary["changes"]]
+            self._write_custom(summary, detail)
+
+            # Guard: 7 occurs in the summary only in the item field, and not in the
+            # temp path.
+            stripped = json.loads(json.dumps(summary))
+            for key in PATH_KEYS:
+                stripped.pop(key)
+            stripped["changes"][0].pop("item")
+            self.assertNotIn(7, _number_tokens(json.dumps(stripped)))
+            self.assertNotIn(7, _number_tokens(json.dumps(detail).replace('"v7"', '""')))
+            self._assert_not_in_temp_path("7")
+
+            def item_body(change_line):
+                lines = _body_lines(update_lines=(*UPDATE_LINES, "", "## Changes",
+                                                  change_line))
+                return [line.replace("238.7 GB", "238.5 GB") for line in lines]
+
+            with_seven = ("Change c1: volume C had 30.5 GB free before and 29.2 GB after, "
+                          "7 days apart.")
+            code, output = self._run(self._write_report(
+                item_body(with_seven), "health-2026-09-28-1240.md"))
+            self.assertEqual(code, 1, f"output:\n{output}")
+            self.assertNotIn("OK", output)
+            self.assertRegex(output, r"(?<![\w.])7(?![\w.])")
+
+            # Control: without the 7 the report passes, so every id is named.
+            self._assert_passes(item_body(
+                "Change c1: volume C had 30.5 GB free before and 29.2 GB after."),
+                "health-2026-09-28-1241.md")
+
+        with self.subTest("documents"):
+            report_format = (HEALTH_DIR / "references" / "report-format.md").read_text(
+                encoding="utf-8")
+            self.assertNotIn("compares with nothing", report_format)
+            skill = (HEALTH_DIR / "SKILL.md").read_text(encoding="utf-8")
+            self.assertNotIn("no comparison with earlier runs", skill)
 
 
 if __name__ == "__main__":

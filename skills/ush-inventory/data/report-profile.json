@@ -3,7 +3,7 @@
                       "additions"],
   "id_letters": "ascfdx",
   "path_keys": ["summary_file", "detail_file", "key", "program", "install_location",
-                "targets", "path", "expanded_path", "app", "value"],
+                "targets", "path", "expanded_path", "app", "value", "reference_file"],
   "id_keys": ["id"],
   "required_lists": ["programs", "autostart", "changes", "components", "drivers",
                      "additions"],

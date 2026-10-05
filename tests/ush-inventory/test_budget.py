@@ -207,7 +207,7 @@ class TestBudget(InventoryTestCase):
             self.assertEqual(len(self.listed(detail, "drivers")), 500)
             self.assertEqual(len(self.listed(detail, "components")), 100)
 
-        with self.subTest(case="programs at the minimum, drivers gone, components cut"):
+        with self.subTest(case="programs and drivers at the minimum, components cut"):
             summary, detail = self.sized_run(
                 self.data_dir(),
                 FakePowerShell({
@@ -221,8 +221,12 @@ class TestBudget(InventoryTestCase):
             self.assertEqual(self.count(summary, "truncated"), PROGRAMS - PROGRAMS_MINIMUM)
             self.assertEqual([p["id"] for p in self.listed(summary, "programs")],
                              [p["id"] for p in self.listed(detail, "programs")][:PROGRAMS_MINIMUM])
-            self.assertEqual(self.count(summary, "truncated_drivers"), 50)
-            self.assertEqual(self.listed(summary, "drivers"), [])
+            # Plan 107 M3: drivers keep their short list (DRIVERS_MIN) before
+            # components are cut.
+            drivers_min = self.inventory.DRIVERS_MIN
+            self.assertEqual(self.count(summary, "truncated_drivers"), 50 - drivers_min)
+            self.assertEqual([d["id"] for d in self.listed(summary, "drivers")],
+                             [d["id"] for d in self.listed(detail, "drivers")][:drivers_min])
             truncated_components = self.count(summary, "truncated_components")
             self.assertGreater(truncated_components, 0)
             self.assertEqual(

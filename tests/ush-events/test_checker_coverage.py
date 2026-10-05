@@ -183,6 +183,9 @@ class TestSummaryItemsNamed(CheckerTestCase):
                 "boots": [{"id": "b1", "start": "2026-01-02T01:00:00Z"}],
             }, ["No error groups, anomalies or crash dumps."]),
         ]
+        # The two groups cut from the first case are in the detail file (stable ids).
+        self.detail({"groups": [group(1), group(6), group(9)], "noise": [], "boots": [],
+                     "anomalies": []})
         for label, data, lines in cases:
             with self.subTest(label):
                 self.summary(data)

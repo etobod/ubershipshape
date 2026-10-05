@@ -6,6 +6,9 @@ the run) and checked with
 `python -B skills/ush-common/scripts/check_report.py <report>` (or
 `--latest --skill ush-inventory` for the newest `inventory-*.md`), which
 reads the ush-inventory rules from `data/report-profile.json`.
+Follow `skills/ush-common/references/report-style.md`: it says how every
+report is written (time, numbers, dash, recommendation layout, language);
+this file says what the ush-inventory report contains.
 `<data dir>` is the data directory (`--data-dir`, else `USH_DATA_DIR`, else
 `%LOCALAPPDATA%\ubershipshape`); its absolute value is the directory above
 `work/` in the summary's `summary_file`. The report text outside code blocks
@@ -13,11 +16,12 @@ writes it as `&lt;data dir>` in plain text, never in inline code (a `<`
 before a letter fails the check, and inline code shows `&lt;` as it is), and
 never the expanded path: it contains the account name, which a report must
 not carry. The expanded path appears only in the `ush:summary` marker, as
-the `--data-dir` value of a block for an elevated shell (`SKILL.md`: an
-elevated shell of another account has a different `%LOCALAPPDATA%`) and in
-the backup path of a certificate or hosts block (`SKILL.md`, "Change
-blocks"), which must land in the same data directory; any other code block
-writes it from the environment (`"$env:LOCALAPPDATA\ubershipshape"`).
+the `--data-dir` value of every block that runs a skill script (rule 9 of
+`report-style.md`; an elevated shell of another account has a different
+`%LOCALAPPDATA%`) and in the backup path of a certificate or hosts block
+(`SKILL.md`, "Change blocks"), which must land in the same data directory; a
+code block that runs no skill script writes it from the environment
+(`"$env:LOCALAPPDATA\ubershipshape"`).
 
 The markers below are HTML comments: they do not depend on the report
 language and do not show in a preview. Each marker stands on its own line,
@@ -33,8 +37,9 @@ shared by all skills (see `skills/ush-health/references/report-format.md`,
 "Numbers", for the full list); in short:
 
 - Every run of digits is a separate number: `2026-05-07` is 2026, 5 and 7,
-  `146.3` is 146 and 3. Write a number exactly as the JSON has it, counts
-  without a thousands separator.
+  `146.3` is 146 and 3. Write a number with the same digits and precision
+  as the JSON, with the decimal separator of the report language (rule 2 of `report-style.md`) (in Polish `146,3`), counts without a thousands
+  separator.
 - Names back their own digits: a program's `name`, `version` and
   `publisher`, an entry's `name`, `location` and `command`, and the other
   text values of the summary. `Invented Tool 2024` may be written with its
@@ -95,7 +100,8 @@ is of an older shape and fails with
    <!-- ush:summary <absolute summary_file path> -->
    ```
 
-2. Title and one line: when the summary was made (`generated_at`, UTC) and
+2. Title and one line: when the summary was made (`generated_at`, rule 1 of
+   `report-style.md`) and
    whether the run was elevated (`elevated`). Without elevation say that the
    task list may be incomplete (the item `scheduled_tasks visibility` in
    "Not checked").
@@ -119,19 +125,21 @@ is of an older shape and fails with
 
 4. Legend, under the dashboard:
 
-   - 🔧 change - an entry the user may want to turn off or fix; the section
+   - 🔧 change — an entry the user may want to turn off or fix; the section
      gives the block.
-   - 🔍 observe or check - not clear yet, not read, or worth a look (a new
+   - 🔍 observe or check — not clear yet, not read, or worth a look (a new
      entry, a changed signature).
-   - ✅ fine - read and nothing to act on.
-   - ❌ problem found - something the user cannot fix with a block from this
+   - ✅ fine — read and nothing to act on.
+   - ❌ problem found — something the user cannot fix with a block from this
      skill; the section says who can help.
 
 5. One section per area (`## 1. <area>`, in order from 1):
 
    - Comparison: first the baseline: `Compared with the baseline of
-     <created_at date>, <baseline.age_days> days old.`, or on a first run
-     "no comparison: this is the first run" (see "Degradation cases"). Then
+     <created_at as in rule 1 of report-style.md>, <baseline.age_days> days old.`, or on a first run
+     "no comparison: this is the first run" (see "Degradation cases"). With
+     `baseline.reference` other than `latest`, say it is the saved state from
+     `reference_file`, not the latest run. Then
      `comparison` per source when any is not `compared`, and every change
      (`c..`) with its `change`, `name`, `source` and, for `changed`, each
      field of `fields` with `before` and `after`. A Defender exclusion change
@@ -154,11 +162,21 @@ is of an older shape and fails with
    - Programs: every program (`a..`) with `name`, `version`, `publisher`
      and `install_date`, newest first as in the summary; `scope` and
      `system_component` when they matter. For MSIX say that `install_date`
-     is the install or the last update. Then, one line with its number:
+     is the install or the last update. Programs linked by `per_user_pair`
+     (directly, or through a common partner: a `(User)` entry can pair with
+     both a 64-bit and a 32-bit copy, which do not name each other; only
+     programs with the same name and the same publisher are linked) are one
+     program installed more than once: describe it once, at the first of
+     the linked programs in the summary's `programs` list (ids are stable,
+     not places in the list), with a note on its other installs (for the
+     user, or for the computer), naming each one's `id` and `name`; each
+     other linked program's line refers back to that id instead of
+     repeating the description. Then, one line with its number:
      "Windows programs (not listed): <own_counts.programs>". When
-     `truncated` > 0: how many were cut, their ids
-     ("3 more programs were cut from the summary: a3, a4, a5." with the
-     real ids), and that the detail file has them.
+     `truncated` > 0: how many were cut and that the detail file has them
+     ("3 more programs were cut from the summary; the detail file has
+     them."). Name a cut program only after fetching it with `--detail`
+     (its id comes from `--cut`).
    - Autostart: every entry (`s..`) with `kind`, `name`, `location`,
      `command` (inline code), `enabled` and `approved`, and what `facts`
      say (exists, signature, signer, program). A `location` or `command`
@@ -173,34 +191,67 @@ is of an older shape and fails with
    - Components: every listed component (`f..`, the features with `state`
      `enabled` and the capabilities with `state` `Installed`) with `kind`
      and `name`. Then the counts of `component_counts`, one line per kind
-     with each state and its number as the JSON has it, never added up:
+     with each state and its number from the JSON, never added up:
      "Features: enabled <feature.enabled>, disabled <feature.disabled>,
      absent <feature.absent>, unread <feature.unread>" (and any other state
      key), "Capabilities: <state> <number>, ..., unread
      <capability.unread>". A kind whose count is `null` was not read: say
      so ("Capabilities: not read, requires administrator"), never 0. When
-     `truncated_components` > 0: how many were cut and their ids.
+     `truncated_components` > 0: how many were cut, and that the detail file has them (`--cut` lists the cut items, see SKILL.md).
    - Drivers: every listed driver (`d..`, drivers whose `.inf` is not one
      of Windows') with `device_name`, `class`, `provider`, `version`,
      `date` and `signer`. Then, each on its own line with its number:
-     "Windows drivers (not listed): <own_counts.drivers>" and "Devices
-     without a driver (not listed): <component_counts.drivers_without_inf>".
-     When `truncated_drivers` > 0: how many were cut and their ids. A
+     "Windows drivers (not listed): <own_counts.drivers>" and "Driver rows
+     without an INF file (not listed):
+     <component_counts.drivers_without_inf>". Describe that number with
+     this sentence, translated: "`Win32_PnPSignedDriver` rows without an
+     INF file (for example software devices, or a device without a driver), not device state; device
+     state is measured by `ush-health`." Say nothing more about what the
+     rows mean; when the user compares it with `ush-health`, the rows are in `drivers_without_inf_items` of the detail file
+     (`device_name` and `class`). Example of a Polish report:
+
+     ```markdown
+     Wiersze sterowników bez pliku INF (niewymienione): 2 — np. urządzenia programowe albo urządzenie bez sterownika, nie stan urządzeń; stan urządzeń mierzy `ush-health`.
+     ```
+
+     When `truncated_drivers` > 0: how many were cut, and that the detail file has them (`--cut` lists the cut items, see SKILL.md). A
      `removed` driver change is a device not present now, not an
      uninstalled driver.
    - Added to the system: first one sentence, translated: "This section
      lists what is outside the Windows lists of the skill's data file, not
      what is suspicious." Then every addition (`x..`) by `kind`:
      `administrator` (`object_class`, `principal_source`, `enabled`,
-     `is_current`; never its `name`, see "Account names"),
+     `is_current`, `builtin`; never its `name`, see "Account names"),
      `defender_exclusion` (`type`, `value`, `origin`), `root_certificate`
      (`store`, `subject`, `not_after`, `self_signed`, `in_authroot`,
      `windows_first_run` when present),
      `firewall_rule` (`store`, `name`, `action`, `dir`, `active`,
-     `protocol_name` or `protocol`, `lport`, `app`), `hosts_entry`
+     `protocol_name` or `protocol`, `lport`, `app`, `app_exists` when
+     present), `hosts_entry`
      (`hostname`, `address`, `line`, `duplicates`). A rule's `app` and an
      exclusion's `value` go in a fenced code block under the item's line,
-     never in the line itself (see the path keys above). Then `hosts_file`:
+     never in the line itself (see the path keys above). A rule's
+     `app_exists` `true` is "the program file is there"; `false` is "no
+     file at this path in this profile" (the path was checked from the
+     account that ran the skill, so a path into another account's profile
+     can give it): a fact, not "the rule is unneeded"; `null` is "not
+     checked". A rule without `app_exists` has no program file to check
+     (no `app`, or `System`). An item without a change block gives its
+     `no_block_reason` in words, translated, never the code alone:
+     `store_app_iso` "a rule of a Store app (the app manages it)",
+     `store_policy` "a rule set by policy", `cert_other_store` "a
+     certificate in a store other than the root stores of the computer and
+     the user", `cert_in_authroot` "the certificate is also in the Windows
+     list of trusted roots", `cert_in_several_stores` "the certificate is
+     in more than one root store", `defender_origin` "the exclusion was not
+     added locally (policy or unknown)", `defender_method` "the exclusions
+     were read from the registry, not from Defender". Example of a Polish
+     report:
+
+     ```markdown
+     - x12 Invented Store App Rule — brak bloku: reguła aplikacji ze Sklepu, zarządza nią aplikacja. Pliku programu nie ma pod tą ścieżką w tym profilu.
+     ```
+     Then `hosts_file`:
      whether the file exists and whether its folder is the default one
      (`path_is_default` `false` is a finding: the name resolution reads
      another file). Then the Windows-own counts, each on its own line with
@@ -217,7 +268,7 @@ is of an older shape and fails with
      `windows_first_run` `null` means the decision file
      `ush-inventory.first-run.json` could not be read; say it was not checked.
      A `first-run certificates` item in "Not checked" names that file and the
-     reason; deleting the file starts a new first run. When `truncated_additions` > 0: how many were cut and their ids
+     reason; deleting the file starts a new first run. When `truncated_additions` > 0: how many were cut, and that the detail file has them (`--cut` lists the cut items, see SKILL.md)
      (the items without a change block are cut first, from the end of their
      group: firewall rules outside `local`, certificates outside
      `machine_root` and `user_root`, with `in_authroot` `true` or also in another
@@ -233,8 +284,9 @@ is of an older shape and fails with
 
    Each section gives what was read, with the numbers and ids from the JSON,
    the judgement, and for each finding a recommendation with `weight`,
-   `kind`, `risk`, `evidence`, `permissions` and `rollback`
-   (`skills/ush-common/references/summary-contract.md`, "Recommendations").
+   `kind`, `risk`, `evidence`, `permissions` and `rollback` in the layout of
+   rule 4 of `skills/ush-common/references/report-style.md` (the fields are
+   in `skills/ush-common/references/summary-contract.md`, "Recommendations").
    A `change` gives a paste-ready block (see `SKILL.md`) and says that the
    skill is run again to read the value back. An area with nothing to act on
    gets one or two lines, not a recommendation.
@@ -264,11 +316,19 @@ is of an older shape and fails with
 
 A report never carries the account name, except in the data directory path
 where the section above allows it (the `ush:summary` marker, which the
-checker needs, the `--data-dir` of an elevated-shell block and the backup
+checker needs, the `--data-dir` of every block that runs a skill script and the backup
 path of a certificate or hosts block). A member of Administrators is named
-by its id, `object_class`, `principal_source`, `enabled` and `is_current`
-("the account that ran the skill"), never by its `name`, which holds an
-account name; the user sees the names with
+by its id, `object_class`, `principal_source`, `enabled`, `is_current`
+and `builtin`, never by its `name`, which holds an account name. Name a
+member by its role (rule 13 of the report style): `builtin` `true` is "the
+built-in Administrator account", `is_current` `true` is "your account"
+(the account that ran the skill). Example of a Polish report:
+
+```markdown
+x1 — wbudowane konto Administrator, wyłączone. x2 — Twoje konto, włączone.
+```
+
+The user sees the names with
 `Get-LocalGroupMember -SID S-1-5-32-544` in their own shell. A Defender
 exclusion `value` under the profile folder is written with
 `%USERPROFILE%` in its code block, like an autostart path. `location`, `command`,
@@ -327,6 +387,19 @@ Never report missing data as "no changes" or "clean":
   `reason`; the old file was kept and this run started a new baseline.
 - `baseline.saved` `false`: this run's baseline was not saved (item
   `baseline save`); the next run compares with the older one.
+- `baseline.reference` other than `latest` (the run had `--compare-to`):
+  say that the comparison is with the saved state from `reference_file`,
+  `age_days` days old, not with the latest run. `status` `none` then means
+  "there is no saved state from at least N days ago" (give the `reason`), not
+  a first run and never "no changes". `status` `unreadable` with the item
+  `reference baseline` in "Not checked": that copy could not be read, so
+  nothing was compared; give the `reason`. A latest baseline that could not be
+  read (item `baseline`, "the latest baseline could not be read") does not
+  stop that comparison: say that sources not read in this run keep nothing.
+- Item `baseline history` ("history not kept"): this run's baseline has no
+  day copy, so a later `--compare-to` may not find it. With the reason "the
+  day copy was kept, but old copies were not removed": the copy is there;
+  only older copies stay longer than 31 days. Not a missing history.
 - A source with `comparison` `not_read` (`status` `unreadable`): no
   comparison for that source, and its items are missing from this report;
   give the `reason`. `no_baseline`: the source was not read in the
@@ -372,11 +445,20 @@ Never report missing data as "no changes" or "clean":
   be read, so every exclusion has `origin` `null` and gets no block.
 - Truncated lists: `truncated`, `truncated_drivers`,
   `truncated_components` or `truncated_additions` > 0 means the summary
-  holds only part of that list; the cut items are in the detail file, with
-  the ids that follow the last one in the summary. Say how many were cut
-  in each list and name their ids; fetch one with `--detail` to report on
-  it. `autostart` and `changes` are never cut; a `summary budget` item in
+  holds only part of that list; the cut items are in the detail file.
+  Ids are stable between runs, not positions, so the id of a cut item does
+  not follow from the list: say how many were cut from each list and that
+  the detail file has them. `--cut` lists the cut items (`id`, `list`,
+  `name`); name one in the report only after fetching it with `--detail`,
+  and then in the `ush:detail` line. Each cut list keeps a short list before any list is emptied: the
+  20 newest programs and the first 10 drivers (a `Display` driver leads
+  them), components and additions (see "Files and output" of
+  `summary-contract.md`); report the short list as it is, never as the whole
+  list. `autostart` and `changes` are never cut; a `summary budget` item in
   "Not checked" means the summary is over the budget and nothing was cut.
+- `per_user_suffixes.json` in "Not checked": install pairs were not checked,
+  so no program has `per_user_pair`; describe every program on its own and
+  never say that no program is installed more than once.
 - `windows-own.json` in "Not checked": besides the longer lists, every
   driver is listed with `third_party` in `unread_fields`, every firewall
   rule and every certificate (also of `authroot`) is listed except those

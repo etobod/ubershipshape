@@ -20,6 +20,12 @@ more than a readability test) and linked to bugchecks by path only.
 
 The script counts; it never judges severity. Noise is classified only by the
 data file ``data/noise.json``, the per-group trend only by ``data/trend.json``.
+
+Groups ``g`` (key ``[log, provider, event id]``) and known noise ``n`` (key
+``[provider, event id]``, each ``json.dumps`` of the list) keep their numbers across
+runs through the id map ``state/ush-events.ids.json`` (``ids.py``), the only file
+written in ``state/``; boots, anomalies, reliability records and dump files are
+numbered by place. ``--cut`` prints the ids and names of the groups the summary cut.
 """
 
 import argparse
@@ -39,6 +45,7 @@ sys.path.insert(0, str(Path(__file__).absolute().parents[2] / "ush-common" / "sc
 
 import datadir
 import dumpfiles
+import ids
 from dumpfiles import iso
 
 DEFAULT_NOISE_FILE = Path(__file__).absolute().parents[1] / "data" / "noise.json"
@@ -872,6 +879,24 @@ def with_ids(items: list[dict], prefix: str) -> list[dict]:
     return [{"id": f"{prefix}{n}", **item} for n, item in enumerate(items, 1)]
 
 
+def group_key(item: dict) -> str:
+    """The id-map key of a group: ``json.dumps([log, provider, event id])``."""
+    return json.dumps([item.get("log"), item.get("provider"), item.get("event_id")],
+                      ensure_ascii=True)
+
+
+def noise_key(item: dict) -> str:
+    """The id-map key of a known-noise item: ``json.dumps([provider, event id])``."""
+    return json.dumps([item.get("provider"), item.get("event_id")], ensure_ascii=True)
+
+
+def with_stable_ids(items: list[dict], prefix: str, numbering, key_of) -> list[dict]:
+    """Items with ``id`` first, numbered by ``numbering`` (an ``ids.Numbering``)."""
+    numbered = with_ids(items, prefix)
+    numbering.assign(prefix, numbered, key_of)
+    return numbered
+
+
 def dump(data) -> str:
     """Compact ASCII JSON: safe on any console code page."""
     return json.dumps(data, ensure_ascii=True, separators=(",", ":"))
@@ -1083,12 +1108,16 @@ def link_dumps(anomalies: list[dict], dumps: dict) -> dict:
 
 
 def build_summary(now, days, sources, analysis, not_checked, summary_file, detail_file,
-                  reliability=None, dumps=None):
+                  reliability=None, dumps=None, numbering=None):
     """The summary. ``reliability`` comes from ``reliability_summary``; without it
     the Reliability Monitor is reported as not queried. ``dumps`` is the
     inventory from ``read_dumps`` (without ids); an unreadable one is named in
     not_checked. Without it the dumps are reported as not listed, and, as for
-    the Reliability Monitor, not_checked is left to the caller."""
+    the Reliability Monitor, not_checked is left to the caller. ``numbering``
+    (an ``ids.Numbering``) gives the stable ids of groups and noise; without one
+    they are numbered by place."""
+    if numbering is None:
+        numbering = ids.Numbering.fresh(SKILL)
     start = now - timedelta(days=days)
     if reliability is None:
         reliability = reliability_summary(None, start)
@@ -1119,9 +1148,9 @@ def build_summary(now, days, sources, analysis, not_checked, summary_file, detai
         anomalies = [{**item, "boot": None} for item in anomalies]
     uncertain = sorted(analysis.get("uncertain_boots", []))
     if boots is not None and uncertain:
-        ids = ", ".join(f"b{index}" for index in uncertain)
+        boot_ids = ", ".join(f"b{index}" for index in uncertain)
         not_checked = not_checked + [{
-            "what": f"boot sessions {ids}: a Fast Startup Kernel-Boot 27 joined a session "
+            "what": f"boot sessions {boot_ids}: a Fast Startup Kernel-Boot 27 joined a session "
                     "without a typed Kernel-Boot 27",
             "reason": "it may be a separate hybrid boot; the boot_type of these sessions "
                       "and the clean_shutdown before them are uncertain",
@@ -1133,8 +1162,8 @@ def build_summary(now, days, sources, analysis, not_checked, summary_file, detai
         "generated_at": iso(now),
         "window": {"start": iso(start), "end": iso(now), "days": days},
         "sources": sources,
-        "groups": with_ids(analysis["groups"], "g"),
-        "noise": with_ids(analysis["noise"], "n"),
+        "groups": with_stable_ids(analysis["groups"], "g", numbering, group_key),
+        "noise": with_stable_ids(analysis["noise"], "n", numbering, noise_key),
         "boots": boots,
         "anomalies": anomalies,
         "not_checked": not_checked,
@@ -1167,8 +1196,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--detail", metavar="ID",
                         help="print one item (e.g. g1, a2, b3, r1, d1) from the newest detail "
                              "file instead of collecting")
+    parser.add_argument("--cut", action="store_true",
+                        help="print the ids and names of the groups the newest summary "
+                             "cut to fit its size limit, instead of collecting")
     parser.add_argument("--detail-file", metavar="PATH",
-                        help="with --detail: read this detail file (the summary's "
+                        help="with --detail or --cut: read this detail file (the summary's "
                              "detail_file) instead of the newest one")
     return parser
 
@@ -1178,6 +1210,31 @@ def _positive_int(text: str) -> int:
     if value < 1:
         raise argparse.ArgumentTypeError("must be at least 1")
     return value
+
+
+def cut_label_group(item: dict) -> str:
+    """The ``--cut`` name of a group: provider, event id and log, nothing else."""
+    return f"{item.get('provider')} {item.get('event_id')} {item.get('log')}"
+
+
+CUT_LABELS = {"groups": cut_label_group, "noise": cut_label_group}
+
+
+def show_cut(work: Path, detail_file: Path | None = None) -> int:
+    """Print ``{detail_file, summary_file, cut}``: the listed items of the detail file
+    that the summary of the same run does not hold. Starts no machine job."""
+    if detail_file is None:
+        files = sorted(work.glob("events-*.detail.json"), key=lambda p: p.name)
+        if not files:
+            print(f"no detail file in {work}; run the collection first", file=sys.stderr)
+            return 1
+        detail_file = files[-1]
+    result, reason = ids.read_cut(detail_file, CUT_LABELS)
+    if reason is not None:
+        print(reason, file=sys.stderr)
+        return 1
+    print(json.dumps(result, ensure_ascii=True, indent=1))
+    return 0
 
 
 def show_detail(work: Path, item_id: str, detail_file: Path | None = None) -> int:
@@ -1224,15 +1281,25 @@ def main(argv=None, run_ps=None, now=None, trend_file=None, read_dumps=None) -> 
         raise TypeError("inject both run_ps and read_dumps, or neither")
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.detail is not None and args.detail_file:
+    if args.detail is not None and args.cut:
+        parser.error("--detail and --cut cannot be used together")
+    if args.detail_file is not None and args.detail is None and not args.cut:
+        parser.error("--detail-file needs --detail or --cut")
+    if args.detail_file is not None:
         # The detail file is named explicitly: no data directory is needed.
+        if args.cut:
+            return show_cut(Path(), Path(args.detail_file).absolute())
         return show_detail(Path(), args.detail, Path(args.detail_file).absolute())
     try:
-        work = datadir.resolve(args.data_dir) / "work"
+        data_dir = datadir.resolve(args.data_dir)
     except datadir.DataDirError as exc:
         parser.error(str(exc))
+    work = data_dir / "work"
+    state = data_dir / "state"
     if args.detail is not None:
         return show_detail(work, args.detail)
+    if args.cut:
+        return show_cut(work)
 
     try:
         noise = load_noise()
@@ -1261,15 +1328,32 @@ def main(argv=None, run_ps=None, now=None, trend_file=None, read_dumps=None) -> 
     analysis = analyze(merge(events["A"], events["B"]), noise, window=(start, now),
                        coverage=coverage, trend_rule=trend_rule)
     reliability = reliability_summary(events["reliability"], start)
+    today = now.date().isoformat()
+    id_map, map_reason = ids.load_map(state, SKILL)
+    if map_reason is not None:
+        what, reason = ids.load_note(map_reason)
+        not_checked = not_checked + [{"what": what, "reason": reason}]
+    numbering = ids.Numbering(id_map, today)
     summary = build_summary(now, args.days, sources, analysis, not_checked,
-                            summary_file, detail_file, reliability, read_dumps())
+                            summary_file, detail_file, reliability, read_dumps(), numbering)
     detail = {key: summary[key] for key in (
         "schema_version", "skill", "generated_at", "window", "sources", "reliability",
         *DETAIL_SECTIONS) if key != "dump_files"}
     # dump_files is not a summary key: it is the list inside summary["dumps"].
     detail["dump_files"] = summary["dumps"].get("files") or []
     detail["unreadable"] = analysis["unreadable"]
+    # The ids of the items the summary lists before the budget cut, for --cut.
+    detail["listed"] = {name: [item["id"] for item in summary[name]]
+                        for name in ("groups", "noise")}
+    detail["summary_file"] = str(summary_file)
     detail_file.write_text(dump(detail) + "\n", encoding="utf-8")
+
+    map_save_reason = ids.save_map(state, SKILL, id_map, today)
+    if map_save_reason is not None:
+        what, reason = ids.save_note(map_save_reason)
+        summary["not_checked"] = summary["not_checked"] + [{"what": what, "reason": reason}]
+    summary["not_checked"] = summary["not_checked"] + [
+        {"what": what, "reason": reason} for what, reason in numbering.repeated_notes()]
 
     text = fit_budget(summary)
     summary_file.write_text(text + "\n", encoding="utf-8")

@@ -1,6 +1,6 @@
 ---
 name: ush-health
-description: Read the health of this Windows machine once and write a report of disk health (and, elevated, the disks' reliability counters), free space on the volumes, battery wear, devices with an error in Device Manager, failed Windows updates, a pending restart and the Windows version, the antivirus state and signature age, restore points and WinRE, Secure Boot, TPM and BitLocker encryption. Use when the user asks for a health check or the state of this machine, whether the disks, the battery, the updates, the antivirus or the encryption are fine, how much free space is left, which devices have problems, or whether a restart is pending. Read-only; no comparison with earlier runs.
+description: Read the health of this Windows machine once and write a report of disk health (and, elevated, the disks' reliability counters), free space on the volumes, battery wear, devices with an error in Device Manager, failed Windows updates, a pending restart and the Windows version, the antivirus state and signature age, restore points and WinRE, Secure Boot, TPM and BitLocker encryption. Use when the user asks for a health check or the state of this machine, whether the disks, the battery, the updates, the antivirus or the encryption are fine, how much free space is left, which devices have problems, or whether a restart is pending, and what changed in the disks, volumes, failing devices and Windows version since the last run (or since N days ago with --compare-to). Read-only.
 ---
 
 # ush-health
@@ -17,16 +17,21 @@ user decides what to act on.
   cycles), a device that does not work, failed updates, a pending restart,
   the Windows version, the antivirus, restore points, WinRE, Secure Boot,
   the TPM or BitLocker.
+- The user asks what changed in the disks, the free space, the failing
+  devices or the Windows version since the last run, or over a longer
+  period (`--compare-to`).
 
-Not for: the event logs, crashes and memory dumps (`ush-events`), trends or
-a comparison with an earlier run (there is no baseline), decoding the bits
-of `productState`, fixing anything automatically. Say so if the user asks
-for these.
+Not for: the event logs, crashes and memory dumps (`ush-events`), trends
+over many runs, a comparison of the battery, updates, TPM, Secure Boot,
+antivirus, restore points or WinRE with an earlier run (each run gives
+their current state only), decoding the bits of `productState`, fixing
+anything automatically. Say so if the user asks for these.
 
 ## Rules
 
 - **Read-only.** `health.py` changes nothing on the machine and writes only
-  to `<data dir>`. Do not run anything that needs administrator rights
+  to `<data dir>` (`work/`, and its baseline, history copies and id map in
+  `state/`). Do not run anything that needs administrator rights
   yourself. A recommended change is a paste-ready block the user runs
   themselves (in an elevated PowerShell when it needs the rights); you then
   read the value back.
@@ -41,9 +46,11 @@ for these.
   never in inline code (a `<` before a letter fails the check, and inline
   code shows `&lt;` as it is), and never the expanded path: it contains
   the account name, which a report must not carry. The expanded path
-  appears only in the `ush:summary` marker and in code blocks. A block for an elevated shell always passes
-  `--data-dir "<absolute data dir>"`: an elevated shell of another
-  account has a different `%LOCALAPPDATA%`.
+  appears only in the `ush:summary` marker and in code blocks. Every block
+  that runs a skill script starts with `Set-Location "<absolute project
+  root>"` and passes `--data-dir "<absolute data dir>"` (rule 9 of
+  `skills/ush-common/references/report-style.md`): an elevated shell of
+  another account has a different `%LOCALAPPDATA%`.
 - **Every number in the report comes from the JSON**: from the summary, or
   from a detail item you fetched with `--detail` and named in the report's
   `<!-- ush:detail ... -->` line. Do not compute totals, percentages, sizes,
@@ -68,8 +75,20 @@ for these.
    ```
 
    It prints the summary JSON on stdout and writes it, with a detail file, to
-   `<data dir>/work/`. The field meanings are in
+   `<data dir>/work/`, compares the disks, volumes, failing devices and the
+   Windows version with the baseline of the previous run (`changes`,
+   `baseline`, `comparison`) and saves the new baseline to
+   `<data dir>/state/`. The field meanings are in
    `references/summary-contract.md`.
+
+   When the user asks about changes over a longer period ("what changed this
+   month", "since last week"), add `--compare-to <N>d` (N from 1 to 30, e.g.
+   `--compare-to 7d`): the run then compares with the saved state at least N
+   days old instead of the latest run (`baseline.reference`,
+   `baseline.reference_file`). Without such a question run it without the
+   flag. The flag changes nothing but the data directory; every run, with or
+   without it, also keeps a day copy of the baseline in
+   `<data dir>/state/history/` (30 days).
 
 2. Read the summary. If you need one item in full (for example a failure
    group left out by `truncated`), fetch it:
@@ -82,7 +101,7 @@ for these.
    comes from the same run that the report checker checks against.
 
    Ids: `k..` disks, `v..` volumes, `p..` devices, `u..` update failure
-   groups. Remember every id you fetched and used.
+   groups, `c..` changes. Remember every id you fetched and used.
 
 3. Judge the findings: what is a real fault, what is harmless, what needs
    watching. Weigh them with the scale in the shared contract
@@ -111,7 +130,7 @@ for these.
    skills; it reads the ush-health rules from `data/report-profile.json`.
 
    It prints `OK` when every number is backed by the JSON, every disk,
-   volume, device and update failure group of the summary is named, and the
+   volume, device, update failure group and change of the summary is named, and the
    markers are in place. `OK` means each number occurs somewhere in the JSON,
    not that it is used for the right thing, so the rule above still binds
    you. Otherwise it names each unbacked number with its line: remove or
@@ -133,7 +152,9 @@ for these.
    ```
    # Runs the same read-only health check with administrator rights, so it also
    # reads the disks' reliability counters, Win32_Tpm, the restore points and
-   # WinRE. It changes nothing on the machine and writes only to <data dir>\work\.
+   # WinRE. It changes nothing on the machine and writes only to <data dir>\work\
+   # and to <data dir>\state\ (its id map and a separate elevated baseline,
+   # ush-health.elevated.json, with its day copies in state\history\).
    Set-Location "<absolute project root>"
    python -B skills/ush-health/scripts/health.py --data-dir "<absolute data dir>"
    ```

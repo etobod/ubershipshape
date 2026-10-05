@@ -69,15 +69,22 @@ class TestDetail(InventoryTestCase):
         self.collect(older, data_dir=data_dir, now=NOW)
         self.collect(newer, data_dir=data_dir, now=NOW + timedelta(hours=1))
 
+        # Ids are stable (plan 108): the old app keeps a1 and the new one takes a2.
         detail_fake = FakePowerShell()
-        code, stdout, stderr = self.run_main(data_dir, detail_fake, extra=["--detail", "a1"])
+        code, stdout, stderr = self.run_main(data_dir, detail_fake, extra=["--detail", "a2"])
         self.assertEqual(code, 0, stderr[:300])
         self.assertEqual(detail_fake.calls, [])
         item = json.loads(stdout)
         self.assertIsInstance(item, dict, stdout[:300])
-        self.assertEqual(item.get("id"), "a1", item)
+        self.assertEqual(item.get("id"), "a2", item)
         self.assertEqual(item.get("name"), "Invented New App 2200", item)
         self.assertNotIn("Invented Old App 1100", stdout)
+
+        # a1 is only in the older detail file: the newest one is read.
+        code, stdout, stderr = self.run_main(data_dir, detail_fake, extra=["--detail", "a1"])
+        self.assertEqual(code, 1, stdout[:300])
+        self.assertNotIn("Invented Old App 1100", stdout)
+        self.assertEqual(detail_fake.calls, [])
 
         code, stdout, stderr = self.run_main(data_dir, detail_fake, extra=["--detail", "a99"])
         self.assertEqual(code, 1, stdout[:300])

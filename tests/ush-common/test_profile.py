@@ -210,18 +210,21 @@ class TestProfile(CheckerTestCase):
                 self.assertIn("OK", output)
 
     def test_truncated_ids_from_profile(self):
-        # Readings hold no 4, 5 or 6; x4..x6 can only pass as ids.
+        # Readings hold no 6, 12 or 15; x6, x12 and x15 can only pass as ids.
+        # Ids are stable, so the cut ones (x12, x15) come from the detail file,
+        # not from the positions after the list.
         self.write_profile(_profile(required_lists=["a.items"],
                                     truncated={"list": "a.items", "prefix": "x"}))
         items = [{"id": "x1", "name": "alpha"}, {"id": "x2", "name": "beta"},
                  {"id": "x3", "name": "gamma"}]
-        self.write_detail({"things": items})
+        cut = [{"id": "x12", "name": "delta"}, {"id": "x15", "name": "epsilon"}]
+        self.write_detail({"things": items + cut})
         named = "Items x1, x2 and x3."
 
-        with self.subTest("truncated 2: x4 and x5 are known"):
+        with self.subTest("truncated 2: x12 and x15 from the detail file are known"):
             self.write_summary({"a": {"items": items}, "truncated": 2})
             code, output = self.run_report(
-                ["# Test report", named, "Items x4 and x5 were cut from the summary.",
+                ["# Test report", named, "Items x12 and x15 were cut from the summary.",
                  *NOT_CHECKED], "trunc-known.md")
             self.assertEqual(code, 0, output)
             self.assertIn("OK", output)
@@ -233,10 +236,10 @@ class TestProfile(CheckerTestCase):
                 "trunc-x6.md")
             self.assertEqual(code, 1, output)
 
-        with self.subTest("truncated null: x4 and x5 are not known"):
+        with self.subTest("truncated null: x12 and x15 are not known"):
             self.write_summary({"a": {"items": items}, "truncated": None})
             code, output = self.run_report(
-                ["# Test report", named, "Items x4 and x5 were cut from the summary.",
+                ["# Test report", named, "Items x12 and x15 were cut from the summary.",
                  *NOT_CHECKED], "trunc-null.md")
             self.assertEqual(code, 1, output)
 
@@ -248,13 +251,16 @@ class TestProfile(CheckerTestCase):
             return None, f"checker raised {type(exc).__name__}: {exc}"
 
     def test_truncated_list_with_count_keys(self):
-        # Readings are 2 and 1 only; x4, x5 and y3 can only pass as ids.
+        # Readings are 2 and 1 only; x12, x15 and y7 can only pass as ids. The cut
+        # ids are stable, so they come from the detail file, not from positions.
         items_x = [{"id": "x1", "name": "alpha"}, {"id": "x2", "name": "beta"},
                    {"id": "x3", "name": "gamma"}]
         items_y = [{"id": "y1", "name": "delta"}, {"id": "y2", "name": "epsilon"}]
-        self.write_detail({"things": items_x + items_y})
+        cut_x = [{"id": "x12", "name": "zeta"}, {"id": "x15", "name": "eta"}]
+        cut_y = [{"id": "y7", "name": "theta"}]
+        self.write_detail({"things": items_x + items_y + cut_x + cut_y})
         named = ["Items x1, x2 and x3.", "Items y1 and y2."]
-        for token in ("x4", "x5", "y3", "y4"):
+        for token in ("x12", "x15", "y7", "y4"):
             self.assertNotIn(token, str(self.root), "temp path collides with a test id")
 
         self.write_profile(_profile(
@@ -270,19 +276,19 @@ class TestProfile(CheckerTestCase):
             self.assertEqual(code, 0, output)
             self.assertIn("OK", output)
 
-        with self.subTest("list: x4 and x5 are known (count from truncated)"):
+        with self.subTest("list: x12 and x15 are known (count from truncated)"):
             self.write_summary(summary)
             code, output = self.run_report_guarded(
-                ["# Test report", *named, "Items x4 and x5 were cut from the summary.",
-                 *NOT_CHECKED], "list-x45.md")
+                ["# Test report", *named, "Items x12 and x15 were cut from the summary.",
+                 *NOT_CHECKED], "list-x-cut.md")
             self.assertEqual(code, 0, output)
             self.assertIn("OK", output)
 
-        with self.subTest("list: y3 is known (count from truncated_b)"):
+        with self.subTest("list: y7 is known (count from truncated_b)"):
             self.write_summary(summary)
             code, output = self.run_report_guarded(
-                ["# Test report", *named, "Item y3 was cut from the summary.", *NOT_CHECKED],
-                "list-y3.md")
+                ["# Test report", *named, "Item y7 was cut from the summary.", *NOT_CHECKED],
+                "list-y-cut.md")
             self.assertEqual(code, 0, output)
             self.assertIn("OK", output)
 
@@ -299,8 +305,8 @@ class TestProfile(CheckerTestCase):
                                         truncated={"list": "a.items", "prefix": "x"}))
             self.write_summary({"a": {"items": items_x}, "truncated": 2})
             code, output = self.run_report_guarded(
-                ["# Test report", named[0], "Items x4 and x5 were cut from the summary.",
-                 *NOT_CHECKED], "object-x45.md")
+                ["# Test report", named[0], "Items x12 and x15 were cut from the summary.",
+                 *NOT_CHECKED], "object-x-cut.md")
             self.assertEqual(code, 0, output)
             self.assertIn("OK", output)
 

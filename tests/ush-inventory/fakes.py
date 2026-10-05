@@ -152,8 +152,19 @@ def default_responses():
     }
 
 
+def firewall_apps_present(out_path):
+    """The default ``firewall_apps`` answer: one row per value of the job's input file
+    (``<out stem>.input.json`` next to ``out_path``) with ``exists`` true and
+    ``expanded`` equal to ``app``, so a clean fixture stays clean."""
+    out_path = Path(out_path)
+    input_path = out_path.with_name(out_path.name[:-len(".json")] + ".input.json")
+    data = json.loads(input_path.read_text(encoding="utf-8-sig"))
+    return [{"app": app, "expanded": app, "exists": True} for app in data.get("apps") or []]
+
+
 class FakePowerShell:
-    """Stands in for run_ps. Jobs not listed answer ``ok([])``."""
+    """Stands in for run_ps. Jobs not listed answer ``ok([])``; ``firewall_apps`` not
+    listed answers ``exists`` true for every value of its input file."""
 
     def __init__(self, responses=None):
         self.responses = default_responses()
@@ -163,7 +174,10 @@ class FakePowerShell:
     def __call__(self, job, script, out_path):
         out_path = Path(out_path)
         self.calls.append((job, script, out_path))
-        response = self.responses.get(job, ok([]))
+        if job == "firewall_apps" and job not in self.responses:
+            response = ok(firewall_apps_present(out_path))
+        else:
+            response = self.responses.get(job, ok([]))
         if response[0] == "ok":
             out_path.parent.mkdir(parents=True, exist_ok=True)
             # Windows PowerShell 5.1 writes UTF-8 with a BOM.

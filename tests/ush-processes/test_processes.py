@@ -234,7 +234,7 @@ class TestGroups(ProcessesTestCase):
 
         self.assertEqual(
             [g.get("name") for g in groups],
-            ["browser.exe", "editor.exe", "svc.exe (path not read)"],
+            ["browser.exe", "editor.exe", "svc.exe"],
         )
         ids = [g.get("id") for g in groups]
         self.assertEqual(sorted(ids), ["g1", "g2", "g3"], ids)
@@ -253,7 +253,7 @@ class TestGroups(ProcessesTestCase):
         self.assertEqual(e.get("memory_private_bytes"), 600 * MB, e)
         self.assertEqual(e.get("memory_unread_count"), 1, e)
 
-        s = self.group_named(groups, "svc.exe (path not read)")
+        s = self.group_named(groups, "svc.exe", path_read=False)
         self.assertIsNone(s.get("path"), s)
         self.assertEqual(s.get("count"), 2, s)
         self.assertEqual(sorted(s.get("pids")), [110, 111], s)

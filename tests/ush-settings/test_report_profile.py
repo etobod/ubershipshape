@@ -17,7 +17,7 @@ from tests.skill_loader import load_script
 
 SKILL = "ush-settings"
 # Keys whose values supply no numbers (the profile's path_keys and id_keys).
-SKIP_KEYS = frozenset({"summary_file", "detail_file", "id"})
+SKIP_KEYS = frozenset({"summary_file", "detail_file", "reference_file", "id"})
 DETAIL_SECTIONS = ("settings", "changes", "usage")
 
 GENERATED_AT = "2026-09-30T08:10:00+00:00"
@@ -225,11 +225,14 @@ class TestProfile(unittest.TestCase):
         self.assertTrue(profile.is_file(),
                         f"the ush-settings report profile is missing: {profile}")
 
-    def _write_summary(self, name, builder):
+    def _write_summary(self, name, builder, cut=None):
+        """Write the summary and its detail file; ``cut`` adds items cut from the summary
+        to detail sections ({section: [item, ...]})."""
         summary_file = self.work / f"{name}-summary.json"
         detail_file = self.work / f"{name}-detail.json"
         summary = builder(summary_file, detail_file)
-        detail = {section: summary[section] for section in DETAIL_SECTIONS}
+        detail = {section: list(summary[section]) + list((cut or {}).get(section, []))
+                  for section in DETAIL_SECTIONS}
         detail_file.write_text(json.dumps(detail), encoding="utf-8")
         summary_file.write_text(json.dumps(summary), encoding="utf-8")
         return summary_file, summary
@@ -309,7 +312,15 @@ class TestProfile(unittest.TestCase):
             return _summary_data(summary_file, detail_file,
                                  usage=[_usage_u1(), _usage_u2()], truncated=3)
 
-        summary_file, summary = self._write_summary("settings-cut", cut_summary)
+        # The cut uses are known from the detail file, not from their position.
+        cut = []
+        for item_id, app in (("u3", "Invented.MapsApp_def"), ("u4", "Invented.ChatApp_ghi"),
+                             ("u5", "Invented.NotesApp_jkl")):
+            use = _usage_u2()
+            use.update({"id": item_id, "app": app})
+            cut.append(use)
+        summary_file, summary = self._write_summary("settings-cut", cut_summary,
+                                                    cut={"usage": cut})
         self.assertEqual(len(summary["usage"]), 2)
         self.assertEqual(summary["truncated"], 3)
         # u4 and u5 are backed only by being known ids, not by their digits.

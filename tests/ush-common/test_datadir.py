@@ -110,6 +110,10 @@ SCRIPTS = (
     ("dumps.py", "ush-events", "dumps", [],
      ("read_value", "list_dir", "stat", "open_file", "copy", "remove", "disk_usage"), True),
     ("health.py", "ush-health", "health", [], ("run_ps", "is_admin"), True),
+    ("advice.py", "ush-advice", "advice", [], ("run_ps",), True),
+    ("files.py", "ush-files", "files", [], ("list_drives", "scan_dir", "disk_usage", "is_admin"),
+     True),
+    ("runall.py", "ush-runall", "runall", [], ("run_child",), True),
     ("check_report.py", "ush-common", "check_report", ["--latest", "--skill", "ush-events"],
      (), False),
 )

@@ -63,15 +63,21 @@ class TestCli(ProcessesTestCase):
                      created=2),
             ]))
             older_summary = self.collect(older, data_dir=data_dir, now=NOW)
-            self.collect(newer, data_dir=data_dir, now=NOW + timedelta(hours=1))
+            newer_summary = self.collect(newer, data_dir=data_dir, now=NOW + timedelta(hours=1))
+            # Group ids are stable across runs (plan 108): the newer run's only group is
+            # not g1 when the older run in the same data directory already gave g1 away.
+            newer_id = newer_summary["groups"][0]["id"]
+            self.assertEqual(older_summary["groups"][0]["id"], "g1", older_summary["groups"])
+            self.assertEqual(newer_id, "g2", newer_summary["groups"])
 
             detail_fake = FakePowerShell()
-            code, stdout, stderr = self.run_main(data_dir, detail_fake, extra=["--detail", "g1"])
+            code, stdout, stderr = self.run_main(data_dir, detail_fake,
+                                                 extra=["--detail", newer_id])
             self.assertEqual(code, 0, stderr[:300])
             self.assertEqual(detail_fake.calls, [])
             group = json.loads(stdout)
             self.assertIsInstance(group, dict, stdout[:300])
-            self.assertEqual(group.get("id"), "g1", group)
+            self.assertEqual(group.get("id"), newer_id, group)
             self.assertEqual(group.get("name"), "newapp.exe", group)
             members = group.get("processes")
             self.assertIsInstance(members, list, group)
@@ -86,7 +92,8 @@ class TestCli(ProcessesTestCase):
             self.assertEqual(detail_fake.calls, [])
 
         with self.subTest("--detail-file reads the named run"):
-            extra = ["--detail", "g1", "--detail-file", older_summary.get("detail_file")]
+            older_id = older_summary["groups"][0]["id"]
+            extra = ["--detail", older_id, "--detail-file", older_summary.get("detail_file")]
             try:
                 code, stdout, stderr = self.run_main(data_dir, detail_fake, extra=extra)
             except SystemExit as exc:

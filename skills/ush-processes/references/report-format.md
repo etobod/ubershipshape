@@ -6,6 +6,9 @@ the run) and checked with
 `python -B skills/ush-common/scripts/check_report.py <report>` (or
 `--latest --skill ush-processes` for the newest `processes-*.md`), which
 reads the ush-processes rules from `data/report-profile.json`.
+Follow `skills/ush-common/references/report-style.md`: it says how every
+report is written (time, numbers, dash, recommendation layout, language);
+this file says what the ush-processes report contains.
 `<data dir>` is the data directory (`--data-dir`, else `USH_DATA_DIR`, else
 `%LOCALAPPDATA%\ubershipshape`); its absolute value is the directory above
 `work/` in the summary's `summary_file`. The report text outside code blocks
@@ -13,8 +16,9 @@ writes it as `&lt;data dir>` in plain text, never in inline code (a `<`
 before a letter fails the check, and inline code shows `&lt;` as it is), and
 never the expanded path: it contains the account name, which a report must
 not carry. The expanded path appears only in the `ush:summary` marker and
-as the `--data-dir` value of a block for an elevated shell (`SKILL.md`: an
-elevated shell of another account has a different `%LOCALAPPDATA%`). A
+as the `--data-dir` value of every block that runs a skill script (rule 9 of
+`report-style.md`; an elevated shell of another account has a different
+`%LOCALAPPDATA%`). A
 `not_checked` reason or `inventory.reason` that names a path inside the
 data directory (the ush-inventory baseline in `state`) is written with
 `&lt;data dir>` in place of the data directory; this rule comes before
@@ -34,12 +38,14 @@ shared by all skills (see `skills/ush-health/references/report-format.md`,
 "Numbers", for the full list); in short:
 
 - Every run of digits is a separate number: `2026-05-07` is 2026, 5 and 7,
-  `1500.0` is 1500 and 0. Write a number exactly as the JSON has it, counts
-  without a thousands separator.
+  `1500.0` is 1500 and 0. Write a number with the same digits and precision
+  as the JSON, with the decimal separator of the report language (rule 2 of `report-style.md`) (in Polish `1500,0`), counts without a thousands
+  separator.
 - Memory is written only from the `_gb` fields of `memory` and the `_mb`
-  fields of groups and processes, as the JSON has them (`1500.0`, not
-  `1.5 GB`). Never convert bytes, never add groups up, never compute a
-  percentage.
+  fields of groups and processes, with their digits (`1500,0`, never
+  `1,5 GB`). Never convert bytes, never add groups up, never compute a
+  percentage: a memory percentage comes only from `memory.used_percent` and
+  `memory.commit_used_percent` (`89,9%`).
 - Names back their own digits: a group's `name` and `path`, a port's
   `process` and `local_address`, a service's `name` and `display_name`, a
   program's `name`, an autostart `key`, and the other text values of the
@@ -81,19 +87,41 @@ and the `udp_bound` items (they have no id) are not required.
    <!-- ush:summary <absolute summary_file path> -->
    ```
 
-   Then the title with the time of the snapshot (`generated_at`, UTC: write
-   it as UTC or say so; `inventory.created_at` carries its own zone), and one
+   Then the title with the time of the snapshot (`generated_at`, in local
+   time with the UTC time in brackets, rule 1 of `report-style.md`;
+   `inventory.created_at` carries its own zone), and one
    line: that it is a snapshot of that moment, and whether the run was
    elevated (`elevated`). Without elevation say that paths, command lines
    and owners of other accounts' and system processes were not read, with
    `counts.path_unread`, `counts.command_line_unread` and
    `counts.owner_unread`.
 
-2. Memory in total, from `memory`: used, total and available (`used_gb`,
-   `total_gb`, `available_gb`), commit when it matters (`commit_used_gb` of
-   `commit_total_gb`), the number of processes and groups
-   (`counts.processes`, `counts.groups`), and how much the listed groups
-   hold (`listed_private_gb`: only the groups in the summary, so with
+2. Dashboard: a table of the machine at that moment, one row per item, in
+   this order:
+
+   | Item | Value |
+   |---|---|
+   | Processes | 245 |
+   | Groups | 96 |
+   | Physical memory | 56,7 of 63,1 GB used (89,9%), 6,4 GB available |
+   | Commit memory | 70,2 of 80,0 GB used (87,8%) |
+   | TCP listening ports | 12 |
+   | Network categories | public: 2, private: 1 |
+
+   - Processes and Groups: `counts.processes`, `counts.groups`.
+   - Physical memory: `memory.used_gb` of `memory.total_gb`,
+     `memory.used_percent`, and `memory.available_gb`.
+   - Commit memory: `memory.commit_used_gb` of `memory.commit_total_gb` and
+     `memory.commit_used_percent`.
+   - TCP listening ports: `counts.ports`; when source `tcp_listeners` is
+     `unreadable` the cell is „not read”, never the count.
+   - Network categories: `network_categories`, each category in words of the
+     report language with its count. `{}` is „no network connection”;
+     `null` is „not read” (the job failed, see „Not checked”).
+   - A `null` value is „not read” in its cell, never „0”.
+
+   Under the table, one line on how much the listed groups hold
+   (`listed_private_gb`: only the groups in the summary, so with
    `truncated` > 0 say that it covers the listed groups only).
 
 3. Programs, one table with a row per group of the summary, in the
@@ -101,8 +129,8 @@ and the `udp_bound` items (they have no id) are not required.
 
    | # | Program | Processes | Memory (MB) | Started by |
    |---|---------|-----------|-------------|------------|
-   | 1 | g1 browser.exe | 2 | 1000.0 | autostart |
-   | 2 | g2 host.exe | 1 | 250.0 | service |
+   | 1 | g1 browser.exe | 2 | 1000,0 | autostart |
+   | 2 | g2 host.exe | 1 | 250,0 | service |
 
    `Program` is the id and `name` (and `program.name` when known),
    `Processes` is `count`, `Memory (MB)` is `memory_private_mb`. When
@@ -116,8 +144,12 @@ and the `udp_bound` items (they have no id) are not required.
    shown as the whole.
 
    When `truncated` > 0, one line under the table: how many groups were cut
-   and their ids ("3 more groups were cut from the summary: g3, g4, g5."
-   with the real ids), and that the detail file has them.
+   and that the detail file has them ("3 more groups were cut from the
+   summary; the detail file has them." with the real number). Group ids are
+   stable between runs, not places in the list, so the id of a cut group
+   does not follow from the list: `--cut` lists the cut groups and ports
+   (`id`, `list`, `name`). Name a cut group only after fetching it with
+   `--detail`, and then in the `ush:detail` line.
 
 4. Groups worth a word: for each group you have something to say about
    (the largest ones, a group without a reason to run you can name, an
@@ -129,9 +161,13 @@ and the `udp_bound` items (they have no id) are not required.
    shorter than it; `autostart` keys, `parents`,
    `parent_gone_count`), and whose account runs it in words ("your
    account", "the system account", "another account"), never the account
-   name from `owners` (see "Account names"). A group whose
-   `name` ends with `(path not read)` has an unread path, not a missing
-   file; a pseudo-process group (`path_kind` `"none"`) has no file at all.
+   name from `owners` (see "Account names"). A group with `path_read`
+   `false` has an unread path, not a missing file; its `name` is the bare
+   process name, so another group (with a read path) may have the same name:
+   tell them apart by id and say which one has no path. A pseudo-process
+   group (`path_kind` `"none"`, `path_read` `true`) has no file at all.
+   `path_source` `query_image` means the path came from the fallback read of
+   the running process, not from WMI; it is as good a path as any.
    The kernel starts it: `Registry`, `Memory Compression` and `Secure
    System` have `System` as their parent, and `System` and `System Idle
    Process` have no parent process at all. When `services` and the
@@ -162,14 +198,15 @@ and the `udp_bound` items (they have no id) are not required.
 
 7. Inventory, the ush-inventory list the links come from. With
    `inventory.status` `read`: "Links come from the ush-inventory baseline of
-   <created_at date>, <age_days> days old.", plus `missing_sources` and
+   <created_at as in rule 1 of report-style.md>, <age_days> days old.", plus `missing_sources` and
    `entries_without_path` when they are not empty or 0. Otherwise see
    "Degradation cases".
 
 8. Recommendations, where you have any: each with `weight`, `kind`, `risk`,
    `evidence` (ids and values from the JSON), `permissions` and `rollback`
-   (`skills/ush-common/references/summary-contract.md`,
-   "Recommendations"). To end or turn off something, point to
+   in the layout of rule 4 of `skills/ush-common/references/report-style.md`
+   (the fields are in `skills/ush-common/references/summary-contract.md`,
+   "Recommendations"); with none, write the sentence of rule 14 there. To end or turn off something, point to
    `ush-inventory` with the entry's key (`autostart[].key` or
    `services[].key`); give no block of your own.
 
@@ -203,7 +240,8 @@ and the `udp_bound` items (they have no id) are not required.
 
 A report never carries the account name, except in the data directory path
 where the section above allows it (the `ush:summary` marker, which the
-checker needs, and the `--data-dir` of an elevated-shell block). A group's
+checker needs, and the `--data-dir` of every block that runs a skill
+script). A group's
 `path`, a process's `path` and `command_line` from `--detail`,
 `inventory.reason` and the reason of a `not_checked` item (outside the data
 directory, see above) often start with the profile folder, `C:\Users\` followed by the
@@ -256,14 +294,22 @@ Never report missing data as "none" or "nothing there":
 - An old list: give `age_days` and suggest a new `ush-inventory` run when
   entries may have changed since.
 - No administrator rights: many processes have `path`, `command_line` and
-  `owner` not read, and their groups are named `<name> (path not read)`.
+  `owner` not read, and their groups have `path_read` `false` (the fallback
+  `image_paths` read fills some paths, never those of protected processes).
   Give the counts and offer an elevated run (`SKILL.md`, step 7); never
   write that these processes have no file.
 - `perf` not read (`sorted_by` `working_set_bytes`): private memory is not
   known; the table uses `working_set_mb` and says that it is the working set
   (shared pages count in every process), and `listed_private_gb` is
   unknown.
-- `memory` not read: the totals are unknown; the groups are still listed.
+- `memory` not read: the totals and percentages are unknown; the groups are
+  still listed.
+- `image_paths` failed or `empty` (an item `job image_paths`): the paths it
+  would have read stay unread; the paths from WMI are complete. When no
+  process needed it, it did not run and there is no item.
+- `network_profiles` not read (`network_categories` `null`): the network
+  categories are „not read”, never „no network”. `{}` is a reading: no
+  network connection at that moment.
 - `services` not read: `services` and `started_by` of every group are "not
   read"; never say that a group hosts no service.
 - `file_facts` not read, or an item `file_facts files`: `exists`, the
@@ -273,4 +319,9 @@ Never report missing data as "none" or "nothing there":
   read; the other one is reported normally. `empty` is a finding: nothing
   listens on TCP, or no UDP socket is bound.
 - Groups cut (`truncated` > 0) or ports cut (an item `ports cut from the
-  summary`): give the numbers and say that the detail file has them.
+  summary`): give the numbers and say that the detail file has them
+  (`--cut` lists the cut items, see SKILL.md).
+- A `stable ids` or `stable ids save` item: the group ids of this run may
+  differ from those of earlier or later reports; say so in "Not checked".
+  A `stable ids save` reason that starts with "the id map was saved" means
+  only the previous copy of the map was not replaced: the ids still hold.

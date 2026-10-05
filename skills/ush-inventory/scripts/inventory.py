@@ -34,13 +34,18 @@ see ``skills/ush-common/scripts/psrun.py``):
   rights; without them the job is not run and the source is unreadable
   (``requires administrator``), never empty.
 - ``drivers``: ``Win32_PnPSignedDriver``, one entry per device; a row without
-  ``InfName`` (a device without a driver) is no entry, only counted in
-  ``component_counts.drivers_without_inf``. A ``removed`` driver is a device that
-  is not present now (e.g. unplugged), not an uninstalled driver.
+  ``InfName`` (for example a software device, or a device without a driver; not device
+  state, which ``ush-health`` measures) is no entry, only counted in
+  ``component_counts.drivers_without_inf`` and listed by device name and class
+  in ``drivers_without_inf_items`` of the detail file. A ``removed`` driver is a
+  device that is not present now (e.g. unplugged), not an uninstalled driver.
 - ``firewall_rules``: the rule values of the ``FirewallRules`` keys of the local
   store (``local``), of Store apps (``app_iso``) and of the policy (``policy``);
   a missing key is no rules, a key that cannot be read fails the source. The
   rule text is split by ``parse_firewall_rule``.
+- ``firewall_apps``: one more job gets the ``App`` values of all rules (not
+  ``System``) in a JSON file and answers, per value, its expanded path and
+  whether a file is there (``app_exists`` of each rule; see ``apply_firewall_apps``).
 - ``root_certificates``: the thumbprint subkeys of five physical root stores in
   the registry (``machine_root``, ``machine_policy``, ``enterprise``,
   ``user_root``, ``authroot``), with subject, issuer and dates from ``Cert:``.
@@ -48,7 +53,8 @@ see ``skills/ush-common/scripts/psrun.py``):
   ``parse_hosts``; a missing file is read and holds no entries.
 - ``administrators``: ``Get-LocalGroupMember -SID S-1-5-32-544`` (``Enabled``
   from ``Get-LocalUser`` for local and Microsoft accounts), else ADSI
-  (``method: adsi``).
+  (``method: adsi``); ``builtin`` is true for the built-in Administrator account
+  (a SID ``S-1-5-21-...-500``).
 - ``defender_exclusions``: only with administrator rights; ``Get-MpPreference``
   (``method: preference``), else the ``Exclusions`` registry keys
   (``method: registry``); each entry has ``origin`` ``policy`` or ``local``. A
@@ -96,12 +102,17 @@ the detail file ``work/inventory-<UTC stamp>.detail.json`` holds every program,
 every autostart entry, every component, every driver, every addition and every
 change with the same ids. ``--detail <id>`` prints one item of the newest detail
 file. To keep the summary within ``SUMMARY_MAX_CHARS`` four lists are cut from
-their end: ``programs`` (``truncated``; programs without an install date, then
-the oldest installs) down to ``PROGRAMS_MIN``, then ``drivers``
-(``truncated_drivers``), ``components`` (``truncated_components``) and
-``additions`` (``truncated_additions``; the items without a change block in
-SKILL.md first, then the ones with a block), each only after the one before is
-empty, and only then ``programs`` below ``PROGRAMS_MIN``. A listed
+their end, first each down to its minimum: ``programs`` (``truncated``; programs
+without an install date, then the oldest installs) down to ``PROGRAMS_MIN``,
+``drivers`` (``truncated_drivers``; the ``DRIVER_CLASSES_FIRST`` classes lead the
+list) down to ``DRIVERS_MIN``, ``components`` (``truncated_components``) down to
+``COMPONENTS_MIN`` and ``additions`` (``truncated_additions``; the items without a
+change block in SKILL.md first, then the ones with a block) down to
+``ADDITIONS_MIN``; then ``drivers``, ``components`` and ``additions`` below their
+minimum, each only after the one before is empty, and only then ``programs``
+below ``PROGRAMS_MIN``. A program whose name, without a suffix of
+``data/per_user_suffixes.json``, equals the name of another program with the
+same publisher gets ``per_user_pair``, and so does that other program. A listed
 program and autostart entry in the summary lack some fields the report does not
 use (``install_location``, ``display_name``, a fact's ``company``, ...); the
 detail file and the baseline keep the full items, and the comparison uses them.
@@ -124,6 +135,7 @@ sys.path.insert(0, str(Path(__file__).absolute().parents[2] / "ush-common" / "sc
 
 import baseline  # called as baseline.save(...), so tests can patch it
 import datadir
+import ids
 import psrun
 from psrun import dump, ps_script, run_job
 
@@ -134,6 +146,9 @@ SCHEMA_VERSION = 1
 SUMMARY_MAX_CHARS = 35000
 DETAIL_SECTIONS = ("programs", "autostart", "components", "drivers", "additions", "changes")
 DEFAULT_OWN_FILE = Path(__file__).absolute().parents[1] / "data" / "windows-own.json"
+# The name suffixes of a per-user install (" (User)"); read at run time.
+PER_USER_SUFFIXES_FILE = (Path(__file__).absolute().parents[1] / "data"
+                          / "per_user_suffixes.json")
 
 PROGRAM_SOURCES = ("win32_programs", "msix_programs")
 AUTOSTART_SOURCES = ("run_keys", "startup_folders", "scheduled_tasks", "services")
@@ -183,8 +198,15 @@ ADMIN_REASON = ("requires administrator rights (not read in this run, which is n
 # The lists cut to fit the budget, in this order, with the key that counts the cut items.
 CUT_LISTS = (("programs", "truncated"), ("drivers", "truncated_drivers"),
              ("components", "truncated_components"), ("additions", "truncated_additions"))
-# The newest programs kept before the other lists are cut.
+# The items each list keeps before any list is cut further: the newest programs and
+# the first drivers, components and additions.
 PROGRAMS_MIN = 20
+DRIVERS_MIN = 10
+COMPONENTS_MIN = 10
+ADDITIONS_MIN = 10
+# Driver classes (case-insensitive) put first among the listed drivers, in this
+# order, so the graphics driver stays in a short list.
+DRIVER_CLASSES_FIRST = ("DISPLAY",)
 # Firewall rules: the stores (registry keys under HKLM) and the fields of a rule.
 FIREWALL_STORES = ("local", "app_iso", "policy")
 FIREWALL_FIELDS = {
@@ -193,6 +215,8 @@ FIREWALL_FIELDS = {
     "embed_ctxt": "EmbedCtxt",
 }
 PROTOCOL_NAMES = {6: "TCP", 17: "UDP"}
+# The App value of a rule that names the kernel, not a file: no app_exists.
+FIREWALL_SYSTEM_APP = "system"
 # protocol next to protocol_name: a null name alone would not tell "any protocol"
 # (no Protocol) from a protocol without a name (e.g. 1, ICMP).
 FIREWALL_SUMMARY = ("store", "name", "action", "dir", "active", "protocol", "protocol_name",
@@ -551,6 +575,60 @@ foreach ($p in $paths) {
   } catch {
     $rows.Add([pscustomobject]@{ Kind = 'file'; Path = $path; Error = S $_.Exception.Message })
   }
+}
+$result = $rows.ToArray()
+"""
+
+# __INPUT__ is replaced by the quoted path of {"apps": [...]} (the raw App values
+# of the firewall rules). Nothing is written. exists is null when the expanded
+# value still holds a % (a variable this account does not know), is not a full
+# path on a local drive (UNC and network drives are never touched: nothing
+# leaves the machine, and a host that does not answer would stall the job), or Get-Item fails for another reason than "not found" (e.g. access denied
+# in WindowsApps); only ItemNotFoundException is false, and only when listing the
+# parent folder confirms it: 5.1 also says "not found" for a file in a folder this
+# account may not read (UnauthorizedAccessException there gives null).
+FIREWALL_APPS_BODY = r"""function Test-LocalPath([string]$path) {
+  if ($path -notmatch '^[A-Za-z]:\\') { return $false }
+  try {
+    $type = [string](New-Object System.IO.DriveInfo $path.Substring(0, 1)).DriveType
+  } catch {
+    return $false
+  }
+  return @('Fixed', 'Removable', 'Ram') -contains $type
+}
+function Confirm-Missing([string]$path) {
+  try {
+    $parent = [System.IO.Path]::GetDirectoryName($path)
+    $leaf = [System.IO.Path]::GetFileName($path)
+    if (-not $parent -or -not $leaf -or $leaf.IndexOfAny([char[]]'*?') -ge 0) { return $null }
+    if (@([System.IO.Directory]::GetFileSystemEntries($parent, $leaf)).Count -eq 0) { return $false }
+    return $null
+  } catch [System.IO.DirectoryNotFoundException] {
+    return $false
+  } catch {
+    return $null
+  }
+}
+$in = [System.IO.File]::ReadAllText(__INPUT__, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+$rows = New-Object System.Collections.Generic.List[object]
+foreach ($a in @($in.apps)) {
+  $app = S $a
+  if (-not $app) { continue }
+  $expanded = [Environment]::ExpandEnvironmentVariables($app)
+  $exists = $null
+  if ($expanded.IndexOf('%') -lt 0) {
+    try {
+      if (Test-LocalPath $expanded) {
+        $null = Get-Item -LiteralPath $expanded -Force -ErrorAction Stop
+        $exists = $true
+      }
+    } catch [System.Management.Automation.ItemNotFoundException] {
+      $exists = Confirm-Missing $expanded
+    } catch {
+      $exists = $null
+    }
+  }
+  $rows.Add([pscustomobject]@{ app = $app; expanded = $expanded; exists = $exists })
 }
 $result = $rows.ToArray()
 """
@@ -992,8 +1070,15 @@ class Collector:
         self.sources = []
         self.not_checked = []
         self.drivers_without_inf = None  # set by collect: rows without InfName
+        self.drivers_without_inf_items = None  # set by collect: their name and class
         self.hosts_file = None  # set by collect_hosts: the folder and file of hosts
         self.current_sid = None  # set by collect_administrators
+        # set by collect_facts: {(source, key): {target path}} of the facts taken from
+        # the previous baseline, for a comparison with another state (compare_view)
+        self.carried_facts = {}
+        # set by the collectors: {(source, key)} of the items seen in this run whose
+        # row could not be read, for a comparison with another state (compare_view)
+        self.unread_keys = set()
 
     def job(self, job: str, body: str, depth: int = 4) -> dict:
         out_path = self.work / f"inventory-{self.stamp}.{job}.json"
@@ -1033,6 +1118,7 @@ def collect_win32(col: Collector, previous: dict) -> tuple[str, dict]:
         if error is not None:
             denied += 1
             col.skip(f"win32_programs key {hive}:{key_name}", error)
+            col.unread_keys.add(("win32_programs", key))
             if key in previous:
                 items[key] = copy.deepcopy(previous[key])
                 items[key]["from_baseline"] = True  # not read in this run
@@ -1113,6 +1199,7 @@ def keep_previous(col: Collector, source: str, key: str, error: str, items: dict
                   previous: dict) -> None:
     """An item that could not be read: named in not_checked, kept from the baseline."""
     col.skip(f"{source} {key}", error)
+    col.unread_keys.add((source, key))
     if key in previous:
         items[key] = copy.deepcopy(previous[key])
         items[key]["from_baseline"] = True  # not read in this run
@@ -1354,24 +1441,30 @@ def service_target(row: dict, instance: bool):
     return None
 
 
-def guess_instance(name: str, previous: dict) -> bool:
+def guess_instance(name: str, previous: dict, reference: dict | None = None) -> bool:
     """Whether a service whose ``Type`` was not read is a per-user instance.
 
     A baseline entry under the full name wins; then one under the template decides
-    by its ``user_service``; with neither, only a name ending in
-    ``INSTANCE_GUESS_SUFFIX`` (``_`` and at least 5 hex digits) is taken for an
-    instance, so a name such as ``Agent_1`` keeps its own key.
+    by its ``user_service``. ``previous`` (the latest baseline) is asked first, then
+    ``reference`` (the state compared with, e.g. a history copy) by the same rules;
+    with neither entry in either, only a name ending in ``INSTANCE_GUESS_SUFFIX``
+    (``_`` and at least 5 hex digits) is taken for an instance, so a name such as
+    ``Agent_1`` keeps its own key.
     """
     template = INSTANCE_SUFFIX.sub("", name)
-    if template == name or f"service:{name}" in previous:
+    if template == name:
         return False
-    known = previous.get(f"service:{template}")
-    if known is not None:
-        return isinstance(known, dict) and known.get("user_service") is True
+    for known_items in (previous, reference or {}):
+        if f"service:{name}" in known_items:
+            return False
+        known = known_items.get(f"service:{template}")
+        if known is not None:
+            return isinstance(known, dict) and known.get("user_service") is True
     return INSTANCE_GUESS_SUFFIX.search(name) is not None
 
 
-def collect_services(col: Collector, previous: dict) -> tuple[str, dict]:
+def collect_services(col: Collector, previous: dict,
+                     reference: dict | None = None) -> tuple[str, dict]:
     """``(status, {key: entry})`` of the automatic services; per-user instances by template.
 
     A service whose registry values could not be read is named in not_checked and
@@ -1388,9 +1481,10 @@ def collect_services(col: Collector, previous: dict) -> tuple[str, dict]:
     When ``Type`` is not read, the key is, in this order: the full name when the
     baseline has ``service:<full name>``; the template (the name without
     ``INSTANCE_SUFFIX``) when the baseline has ``service:<template>`` with
-    ``user_service`` true; the full name when it has that key otherwise; the template
-    when the name ends in ``INSTANCE_GUESS_SUFFIX`` (``_`` and at least 5 hex
-    digits); else the full name.
+    ``user_service`` true; the full name when it has that key otherwise; when the
+    baseline has neither key, the same rules with ``reference`` (the state compared
+    with); the template when the name ends in ``INSTANCE_GUESS_SUFFIX`` (``_`` and at
+    least 5 hex digits); else the full name.
     """
     result = col.job("services", SERVICES_BODY)
     groups, failed, guessed = {}, set(), set()
@@ -1403,7 +1497,7 @@ def collect_services(col: Collector, previous: dict) -> tuple[str, dict]:
         if isinstance(kind, int) and not isinstance(kind, bool):
             instance = bool(kind & USER_SERVICE_INSTANCE)
         else:
-            instance = guess_instance(name, previous)
+            instance = guess_instance(name, previous, reference)
         entry_name = INSTANCE_SUFFIX.sub("", name) if instance else name
         key = f"service:{entry_name}"
         # The template itself may be listed next to its instances, under the same key.
@@ -1416,6 +1510,7 @@ def collect_services(col: Collector, previous: dict) -> tuple[str, dict]:
                       if at in SERVICE_READ_ORDER else f"registry values not read: {error}")
             col.skip(f"services {name}", reason)
             failed.add(key)
+            col.unread_keys.add(("services", key))
     items = {}
     for key, (entry_name, pairs) in groups.items():
         if key in failed and key in previous:
@@ -1583,6 +1678,7 @@ def collect_facts(col: Collector, current: dict, previous: dict, programs: dict,
                     if target in known:
                         fact.update({f: known[target].get(f) for f in FACT_FIELDS})
                         item["facts_from_baseline"] = True
+                        col.carried_facts.setdefault((source, key), set()).add(target)
                     else:
                         unread.add("facts")
                 elif row is not None:
@@ -1603,6 +1699,7 @@ def collect_facts(col: Collector, current: dict, previous: dict, programs: dict,
                     fact.update({f: known[target].get(f) for f in FACT_FIELDS})
                     fact["program"] = match(fact["expanded_path"])
                     item["facts_from_baseline"] = True
+                    col.carried_facts.setdefault((source, key), set()).add(target)
                 elif target is not None:
                     unread.add("facts")
                 facts.append(fact)
@@ -1673,20 +1770,22 @@ def collect_capabilities(col: Collector, admin: bool) -> tuple[str, dict]:
     return status, items
 
 
-def collect_drivers(col: Collector, patterns) -> tuple[str, dict, int | None]:
+def collect_drivers(col: Collector, patterns) -> tuple[str, dict, list | None]:
     """``(status, {key: item}, rows without InfName)`` of ``Win32_PnPSignedDriver``.
 
     ``third_party`` is whether ``inf_name`` matches one of ``patterns`` (case-folded
     fnmatch patterns); ``own`` is its opposite. With ``patterns`` None (the data file
     could not be read) ``third_party`` is null and unread, and ``own`` is false. The
-    count of rows without ``InfName`` is None when the source was not read.
+    rows without ``InfName`` are ``{device_name, class}`` (no device id), None when
+    the source was not read.
     """
     result = col.job("drivers", DRIVERS_BODY)
-    items, without_inf, without_id = {}, 0, 0
+    items, without_inf, without_id = {}, [], 0
     for row in result["rows"]:
         inf_name = text(row.get("InfName"))
-        if inf_name is None:  # a device without a driver
-            without_inf += 1
+        if inf_name is None:  # no INF file: e.g. a software device, or no driver
+            without_inf.append({"device_name": text(row.get("DeviceName")),
+                                "class": text(row.get("DeviceClass"))})
             continue
         device_id = text(row.get("DeviceID"))
         if device_id is None:
@@ -1718,7 +1817,8 @@ def parse_firewall_rule(value, builtin) -> dict:
     """The fields of one rule text ``v2.xx|Key=Value|...|``.
 
     A key that appears more than once (e.g. ``LPort``) gives a list, once a string,
-    never a null placeholder for a missing key. ``protocol`` is a number,
+    never a null placeholder for a missing key. ``lport2`` lists the values of every
+    other key starting with ``LPort`` (``LPort2_10`` ...), null when there is none. ``protocol`` is a number,
     ``protocol_name`` its name when known. ``own`` is true when every field of
     ``builtin['required_fields']`` is there and ``Name`` starts with its
     ``name_prefix``; with ``builtin`` None (the data file could not be read) no rule
@@ -1726,7 +1826,7 @@ def parse_firewall_rule(value, builtin) -> dict:
     every compared field in ``unread_fields``, so a later run that reads it is no change.
     """
     rule = {field: None for field in FIREWALL_FIELDS}
-    rule.update(protocol=None, protocol_name=None, version=None, own=False)
+    rule.update(protocol=None, protocol_name=None, version=None, own=False, lport2=None)
     raw = value if isinstance(value, str) else None
     if raw is None or not raw.startswith("v2."):
         rule["unread_fields"] = ["rule", *COMPARED_FIELDS["firewall_rules"]]
@@ -1742,6 +1842,11 @@ def parse_firewall_rule(value, builtin) -> dict:
         values = pairs.get(key)
         if values:
             rule[field] = values[0] if len(values) == 1 else values
+    # The values of every other LPort... key (LPort2_10, LPort2_20, ...), in key order and
+    # in value order within a key; detail file only, never compared.
+    lport2 = [data for key, values in pairs.items()
+              if key.startswith("LPort") and key != "LPort" for data in values]
+    rule["lport2"] = lport2 or None
     protocol = pairs.get("Protocol")
     if protocol and len(protocol) == 1 and protocol[0].strip().isdigit():
         rule["protocol"] = int(protocol[0])
@@ -1770,6 +1875,68 @@ def collect_firewall(col: Collector, builtin) -> tuple[str, dict]:
     skip_keyless(col, "firewall_rules", "value name", without_name)
     col.record("firewall_rules", result["status"], result["reason"])
     return result["status"], items
+
+
+def apply_firewall_apps(col: Collector, items: dict) -> None:
+    """Set ``app_exists`` of every rule with a program from the ``firewall_apps`` job.
+
+    A rule without ``App``, with an empty one or with ``System`` (any case) gets no
+    field. ``app_exists`` is the job's ``exists`` for the raw value, and null (named
+    in ``unread_fields``) when ``App`` is a list (the key repeated), the job failed
+    or gave no row for the value, its ``exists`` is not a boolean, or its
+    ``expanded`` still holds a ``%``. Only ``expanded`` is checked for ``%``: a raw
+    ``%SystemRoot%`` is the usual form of a rule. An empty set of values runs no job.
+    """
+    rules, apps, seen = [], [], set()
+    for item in items.values():
+        app = item.get("app")
+        if app is None or (isinstance(app, str)
+                           and (not app.strip() or app.strip().casefold() == FIREWALL_SYSTEM_APP)):
+            continue
+        rules.append(item)
+        if isinstance(app, str) and app.casefold() not in seen:
+            seen.add(app.casefold())
+            apps.append(app)
+    if not rules:
+        return
+    rows = {}
+    if apps:
+        input_path = col.work / f"inventory-{col.stamp}.firewall_apps.input.json"
+        try:
+            input_path.write_text(json.dumps({"apps": apps}, ensure_ascii=True),
+                                  encoding="utf-8")
+        except OSError as exc:
+            result = {"status": "unreadable", "rows": [],
+                      "reason": f"the program list could not be written: "
+                                f"{type(exc).__name__}: {exc}"}
+        else:
+            body = FIREWALL_APPS_BODY.replace("__INPUT__", psrun.ps_quote(input_path))
+            result = col.job("firewall_apps", body)
+        if result["status"] == "unreadable":
+            col.skip("firewall_apps", result["reason"])
+        elif result["status"] == "empty":
+            col.skip("firewall_apps",
+                     f"firewall_apps returned no rows for {len(apps)} programs, so "
+                     f"app_exists is null")
+        for row in result["rows"]:
+            app = text(row.get("app"))
+            if app is not None:
+                rows.setdefault(app.casefold(), row)
+        missing = sum(1 for app in apps if app.casefold() not in rows)
+        if result["status"] == "read" and missing:
+            col.skip("firewall_apps",
+                     f"firewall_apps returned no row for {missing} of {len(apps)} "
+                     f"programs, so their app_exists is null")
+    for item in rules:
+        app = item["app"]
+        row = rows.get(app.casefold()) if isinstance(app, str) else None
+        exists = row.get("exists") if row is not None else None
+        expanded = row.get("expanded") if row is not None else None
+        if not isinstance(exists, bool) or not isinstance(expanded, str) or "%" in expanded:
+            exists = None
+        item["app_exists"] = exists
+        if exists is None:
+            item["unread_fields"] = sorted({*(item.get("unread_fields") or []), "app_exists"})
 
 
 def first_run_names(subject: str, first_run: list) -> list:
@@ -2100,6 +2267,8 @@ def collect_administrators(col: Collector) -> tuple[str, dict]:
     they could not read in ``unread_fields``. A member ``Get-LocalUser`` does not
     know (``is_user: false``) is a group, never unread. ``is_current`` is whether the
     member is the running account, ``null`` in ``unread_fields`` when its SID was not read.
+    ``builtin`` is whether the SID is that of the built-in Administrator account
+    (``S-1-5-21-...-500``).
     """
     result = col.job("administrators", ADMINISTRATORS_BODY)
     rows = [row for row in result["rows"] if isinstance(row, dict)]
@@ -2118,7 +2287,8 @@ def collect_administrators(col: Collector) -> tuple[str, dict]:
                     "principal_source": text(entry.get("principal_source")),
                     "enabled": enabled,
                     "is_current": (None if col.current_sid is None
-                                   else sid == col.current_sid)}
+                                   else sid == col.current_sid),
+                    "builtin": sid.upper().startswith("S-1-5-21-") and sid.endswith("-500")}
             unread = [] if col.current_sid is not None else ["is_current"]
             if method == "adsi":
                 # ADSI names a member from its WinNT path, not as
@@ -2190,12 +2360,15 @@ def collect_defender(col: Collector, admin: bool) -> tuple[str, dict]:
 
 
 def collect(run_ps, work: Path, stamp: str, previous: dict, config: dict, admin: bool,
-            first_run: dict):
+            first_run: dict, reference: dict | None = None):
     """Run every source: ``(statuses, {source: {key: item}}, collector)``.
+
+    ``reference`` is the state compared with; it only helps to key a service whose
+    ``Type`` was not read.
 
     ``statuses`` and the returned map also hold ``file_facts`` (its directories), so
     they are kept in the baseline; ``startup_approved`` has a status and no items.
-    The collector keeps the count of driver rows without ``InfName``.
+    The collector keeps the driver rows without ``InfName`` and their count.
     """
     col = Collector(run_ps, work, stamp)
     statuses, current = {}, {}
@@ -2213,7 +2386,7 @@ def collect(run_ps, work: Path, stamp: str, previous: dict, config: dict, admin:
     statuses["scheduled_tasks"], current["scheduled_tasks"] = collect_tasks(
         col, previous.get("scheduled_tasks") or {}, admin)
     statuses["services"], current["services"] = collect_services(
-        col, previous.get("services") or {})
+        col, previous.get("services") or {}, (reference or {}).get("services") or {})
 
     # Targets are matched to the programs as they will be saved: an unread
     # program source brings its items from the previous baseline.
@@ -2227,11 +2400,14 @@ def collect(run_ps, work: Path, stamp: str, previous: dict, config: dict, admin:
 
     statuses["optional_features"], current["optional_features"] = collect_features(col)
     statuses["capabilities"], current["capabilities"] = collect_capabilities(col, admin)
-    statuses["drivers"], current["drivers"], col.drivers_without_inf = collect_drivers(
+    statuses["drivers"], current["drivers"], col.drivers_without_inf_items = collect_drivers(
         col, config["driver_third_party_inf"])
+    if col.drivers_without_inf_items is not None:
+        col.drivers_without_inf = len(col.drivers_without_inf_items)
 
     statuses["firewall_rules"], current["firewall_rules"] = collect_firewall(
         col, config["firewall_builtin"])
+    apply_firewall_apps(col, current["firewall_rules"])
     statuses["root_certificates"], current["root_certificates"] = collect_certificates(
         col, config, first_run)
     statuses["hosts"], current["hosts"] = collect_hosts(col, config["hosts_default_dir"])
@@ -2267,22 +2443,90 @@ def program_order(entry):
     return (ordinal is None, -(ordinal or 0), name.casefold(), name, entry[1])
 
 
-def build_programs(current: dict, own_kinds: set) -> tuple[list, int]:
-    """Every program with an id: listed ones (``own: false``) first, then own ones."""
+def numbering_of(numbering):
+    """The run's ``ids.Numbering``, or one over an empty map (ids by place) for a
+    caller without one."""
+    return numbering if numbering is not None else ids.Numbering.fresh(SKILL)
+
+
+def build_programs(current: dict, own_kinds: set, numbering=None) -> tuple[list, int]:
+    """Every program with an id: listed ones (``own: false``) first, then own ones.
+    The id is the stable number of the program's ``key`` (``numbering``)."""
     entries = [(source, key, item) for source in PROGRAM_SOURCES
                for key, item in current.get(source, {}).items()]
     entries.sort(key=program_order)
     listed = [e for e in entries if not is_own(e[0], e[2], own_kinds)]
     own = [e for e in entries if is_own(e[0], e[2], own_kinds)]
     programs = []
-    for number, (source, key, item) in enumerate(listed + own, 1):
-        programs.append({"id": f"a{number}", "key": key, "source": source,
+    for source, key, item in listed + own:
+        programs.append({"id": None, "key": key, "source": source,
                          "own": is_own(source, item, own_kinds), **item})
+    numbering_of(numbering).assign("a", programs)
     return programs, len(own)
 
 
-def build_autostart(current: dict) -> tuple[list, dict, int]:
-    """Every autostart entry with an id, listed ones (``own: false``) first.
+def load_suffixes(path: Path):
+    """The per-user name suffixes as ``(list, None)``, or ``(None, reason)``.
+
+    The file holds a list of non-empty strings; an empty suffix would pair any
+    two programs of the same name, so it makes the file unusable.
+    """
+    name = Path(path).name
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        return None, f"{name} could not be read: {type(exc).__name__}: {exc}"
+    if not is_strings(data) or not all(data):
+        return None, f"{name} does not hold a list of non-empty strings"
+    return data, None
+
+
+def publisher_of(program: dict):
+    """The program's publisher, stripped and case-folded, or None when empty."""
+    publisher = program.get("publisher")
+    if isinstance(publisher, str) and publisher.strip():
+        return publisher.strip().casefold()
+    return None
+
+
+def pair_installs(programs: list, suffixes: list) -> None:
+    """Add ``per_user_pair`` to each program whose name, without one of
+    ``suffixes`` (case-insensitive), equals the name of another program with the
+    same publisher (non-empty, compared stripped and case-insensitive), and to
+    that other program: a list of ``{id, name}`` sorted by the number in ``id``.
+    A program without a publisher, or without a partner, gets no field."""
+    by_name: dict = {}
+    for program in programs:
+        name = program.get("name")
+        if isinstance(name, str):
+            by_name.setdefault(name.casefold(), []).append(program)
+    pairs: dict = {}
+    for program in programs:
+        name = program.get("name")
+        if not isinstance(name, str):
+            continue
+        folded = name.casefold()
+        for suffix in suffixes:
+            suffix = suffix.casefold()
+            if not folded.endswith(suffix):
+                continue
+            for partner in by_name.get(folded[:-len(suffix)], []):
+                if partner is program or publisher_of(partner) != publisher_of(program) \
+                        or publisher_of(program) is None:
+                    continue
+                pairs.setdefault(program["id"], {})[partner["id"]] = partner
+                pairs.setdefault(partner["id"], {})[program["id"]] = program
+    for program in programs:
+        partners = pairs.get(program["id"])
+        if partners:
+            program["per_user_pair"] = [
+                {"id": p["id"], "name": p.get("name")}
+                for p in sorted(partners.values(), key=lambda p: int(p["id"][1:]))]
+
+
+def build_autostart(current: dict, numbering=None) -> tuple[list, dict, int]:
+    """Every autostart entry with an id, listed ones (``own: false``) first; the id is
+    the stable number of the entry's ``key`` (``numbering``).
 
     Returns the entries, ``{kind: number of own entries}`` and the number of entries
     with ``own: null``.
@@ -2292,8 +2536,9 @@ def build_autostart(current: dict) -> tuple[list, dict, int]:
                                        key=lambda pair: (pair[0].casefold(), pair[0]))]
     listed = [e for e in entries if e[2].get("own") is False]
     rest = [e for e in entries if e[2].get("own") is not False]
-    autostart = [{"id": f"s{n}", "key": key, "source": source, **item}
-                 for n, (source, key, item) in enumerate(listed + rest, 1)]
+    autostart = [{"id": None, "key": key, "source": source, **item}
+                 for source, key, item in listed + rest]
+    numbering_of(numbering).assign("s", autostart)
     per_kind = Counter(e[2].get("kind") for e in rest if e[2].get("own") is True)
     unknown = sum(1 for e in rest if e[2].get("own") is None)
     return autostart, dict(sorted(per_kind.items())), unknown
@@ -2304,11 +2549,12 @@ def text_order(value) -> tuple:
     return (value is None, (value or "").casefold(), value or "")
 
 
-def build_components(current: dict) -> tuple[list, int]:
+def build_components(current: dict, numbering=None) -> tuple[list, int]:
     """Every feature and capability with an id; the listed ones (features
     ``enabled``, capabilities ``Installed``) first, each group by kind, then name.
 
-    Returns the items and the number of listed ones.
+    The id is the stable number of the item's ``key`` (``numbering``). Returns the
+    items and the number of listed ones.
     """
     kinds = list(COMPONENT_KINDS.values())
     entries = [{"key": key, "kind": kind, "source": source, **item}
@@ -2317,7 +2563,9 @@ def build_components(current: dict) -> tuple[list, int]:
     entries.sort(key=lambda e: (kinds.index(e["kind"]), text_order(e.get("name")), e["key"]))
     listed = [e for e in entries if e.get("state") == LISTED_STATES[e["kind"]]]
     rest = [e for e in entries if e.get("state") != LISTED_STATES[e["kind"]]]
-    return [{"id": f"f{n}", **e} for n, e in enumerate(listed + rest, 1)], len(listed)
+    components = [{"id": None, **e} for e in listed + rest]
+    numbering_of(numbering).assign("f", components)
+    return components, len(listed)
 
 
 def state_counts(items: dict, fixed=()) -> dict:
@@ -2329,15 +2577,26 @@ def state_counts(items: dict, fixed=()) -> dict:
     return result
 
 
-def build_drivers(current: dict) -> tuple[list, int]:
+def build_drivers(current: dict, numbering=None) -> tuple[list, int]:
     """Every driver with an id; the listed ones (``own`` not true) first, each group
-    by provider, then device name, null last. Returns the items and the listed count."""
+    with the classes of ``DRIVER_CLASSES_FIRST`` first (in that order), then by
+    provider, then device name, null last. The id is the stable number of the
+    driver's ``key`` (``numbering``). Returns the items and the listed count."""
+    first = [name.casefold() for name in DRIVER_CLASSES_FIRST]
+
+    def class_rank(entry: dict) -> int:
+        value = entry.get("class")
+        folded = value.casefold() if isinstance(value, str) else None
+        return first.index(folded) if folded in first else len(first)
+
     entries = [{"key": key, **item} for key, item in (current.get("drivers") or {}).items()]
-    entries.sort(key=lambda e: (text_order(e.get("provider")),
+    entries.sort(key=lambda e: (class_rank(e), text_order(e.get("provider")),
                                 text_order(e.get("device_name")), e["key"]))
     listed = [e for e in entries if e.get("own") is not True]
     rest = [e for e in entries if e.get("own") is True]
-    return [{"id": f"d{n}", **e} for n, e in enumerate(listed + rest, 1)], len(listed)
+    drivers = [{"id": None, **e} for e in listed + rest]
+    numbering_of(numbering).assign("d", drivers)
+    return drivers, len(listed)
 
 
 def addition_order(entry: dict) -> tuple:
@@ -2395,12 +2654,39 @@ def has_change_block(entry: dict, context: dict) -> bool:
     return True
 
 
-def build_additions(current: dict, defender_method=None) -> tuple[list, int]:
+def no_block_reason(entry: dict, context: dict):
+    """Why ``has_change_block`` gives no block, as one code per branch (the first
+    that holds, in this order): ``store_app_iso``, ``store_policy``,
+    ``cert_other_store``, ``cert_in_authroot``, ``cert_in_several_stores``,
+    ``defender_origin``, ``defender_method``; None for an entry with a block."""
+    if has_change_block(entry, context):
+        return None
+    kind = entry["kind"]
+    if kind == "firewall_rule":
+        store = entry.get("store")
+        return f"store_{store}" if store in ("app_iso", "policy") else None
+    if kind == "root_certificate":
+        if entry.get("store") not in ("machine_root", "user_root"):
+            return "cert_other_store"
+        if entry.get("in_authroot") is True:
+            return "cert_in_authroot"
+        return "cert_in_several_stores"
+    if kind == "defender_exclusion":
+        if entry.get("origin") != "local":
+            return "defender_origin"
+        return "defender_method"
+    return None
+
+
+def build_additions(current: dict, defender_method=None,
+                    numbering=None) -> tuple[list, int]:
     """Every item of the added-to-the-system sources with an id: the listed ones
     (``own`` not true) first, the rest after them. The listed ones are in two
     groups: those with a change block (``has_change_block``), then those without;
     within each group and within the rest by kind (``ADDITION_KINDS`` order), then
-    by the kind's own order. Returns the items and the listed count."""
+    by the kind's own order; a listed one without a block has ``no_block_reason``.
+    The id is the stable number of the item's ``key`` (``numbering``). Returns the
+    items and the listed count."""
     kinds = list(ADDITION_KINDS.values())
     entries = [{"key": key, "kind": kind, "source": source, **item,
                 "own": item.get("own") is True}
@@ -2411,17 +2697,25 @@ def build_additions(current: dict, defender_method=None) -> tuple[list, int]:
     # Listed items with a change block (SKILL.md, "Change blocks") come first, so
     # the budget cuts the ones without a block before them.
     context = block_context(current, defender_method)
-    listed = ([e for e in listed if has_change_block(e, context)]
-              + [e for e in listed if not has_change_block(e, context)])
+    unblocked = []
+    for entry in listed:
+        reason = no_block_reason(entry, context)
+        if reason is not None:
+            entry["no_block_reason"] = reason
+            unblocked.append(entry)
+    listed = [e for e in listed if "no_block_reason" not in e] + unblocked
     rest = [e for e in entries if e["own"]]
-    return [{"id": f"x{n}", **e} for n, e in enumerate(listed + rest, 1)], len(listed)
+    additions = [{"id": None, **e} for e in listed + rest]
+    numbering_of(numbering).assign("x", additions)
+    return additions, len(listed)
 
 
 def summary_addition(entry: dict) -> dict:
     """One listed addition as it goes to the summary: a firewall rule and a root
-    certificate with their main fields only (the subject cut to SUBJECT_MAX, and
-    ``windows_first_run`` when the certificate has it), any
-    other kind with every field but ``own`` (and ``unread_fields`` when there are)."""
+    certificate with their main fields only (the subject cut to SUBJECT_MAX,
+    ``windows_first_run``, ``app_exists`` and ``no_block_reason`` when the entry
+    has them: a null in a fixed field would read as "not read"), any other kind
+    with every field but ``own`` (and ``unread_fields`` when there are)."""
     head = {k: entry.get(k) for k in ("id", "key", "kind")}
     if entry["kind"] == "firewall_rule":
         fields = {k: entry.get(k) for k in FIREWALL_SUMMARY}
@@ -2434,6 +2728,10 @@ def summary_addition(entry: dict) -> dict:
     else:
         fields = {k: v for k, v in entry.items()
                   if k not in head and k not in ("own", "source", "unread_fields")}
+    if entry["kind"] in ("firewall_rule", "root_certificate"):
+        for key in ("app_exists", "no_block_reason"):
+            if key in entry:
+                fields[key] = entry[key]
     if entry.get("unread_fields"):
         fields["unread_fields"] = entry["unread_fields"]
     return {**head, **fields}
@@ -2482,7 +2780,9 @@ def compare_autostart(before_items: dict, after_items: dict, skip_facts: bool,
 
     ``facts`` is skipped when ``file_facts`` was not read in this run or either side
     has it in ``unread_fields``; ``program`` likewise when a program source was not
-    read. A target added or removed is a change of ``targets`` only.
+    read, or when ``compare_view`` took a program from the history copy (it names
+    ``program`` in ``unread_fields``). A target added or removed is a change of
+    ``targets`` only.
     """
     diff = baseline.compare(before_items, after_items, AUTOSTART_FIELDS)
     if skip_facts:
@@ -2504,6 +2804,55 @@ def compare_autostart(before_items: dict, after_items: dict, skip_facts: bool,
                     diff["changed"].setdefault(key, {})[f"facts[{path}].{field}"] = {
                         "before": old, "after": new}
     return diff
+
+
+def compare_view(current: dict, statuses: dict, carried_facts: dict,
+                 unread_keys: set = frozenset(), reference: dict | None = None) -> dict:
+    """A copy of ``current`` for a comparison with a state other than the latest
+    baseline (``--compare-to``): what this run did not read is unread in it.
+
+    ``collect`` fills values it could not read from the latest baseline, which is
+    no change against that baseline but would be one against an older state. In
+    the copy an item with ``from_baseline`` has every compared field (and its
+    ``facts``) in ``unread_fields``, so it can still be added (its key was seen in
+    this run) but never changed; a ``run`` or ``startup_folder`` entry has the
+    StartupApproved fields unread when ``startup_approved`` was not read; and a
+    fact taken from the baseline (``carried_facts``) is left out, so that target's
+    facts are not compared. An item seen in this run but not read (``unread_keys``)
+    that the latest baseline lacks, so ``current`` lacks it too, is taken from
+    ``reference`` with ``from_baseline``: it is still there, so it is not removed.
+    When such an item is a program, every autostart entry has ``program`` unread:
+    its targets were matched to the programs of this run, which lack it.
+    ``current`` itself, saved and listed, is not changed.
+    """
+    view = copy.deepcopy(current)
+    program_from_reference = False
+    for source, key in sorted(unread_keys):
+        items = view.get(source)
+        before = (reference or {}).get(source) or {}
+        if isinstance(items, dict) and key not in items and isinstance(before.get(key), dict):
+            items[key] = copy.deepcopy(before[key])
+            items[key]["from_baseline"] = True  # not read in this run
+            program_from_reference |= source in PROGRAM_SOURCES
+    approved_read = statuses.get("startup_approved") in READ_STATUSES
+    for source in SOURCES:
+        for key, item in (view.get(source) or {}).items():
+            unread = set(item.get("unread_fields") or [])
+            if item.get("from_baseline"):
+                unread |= set(COMPARED_FIELDS[source])
+                if source in AUTOSTART_SOURCES:
+                    unread.add("facts")
+            elif not approved_read and item.get("kind") in ("run", "startup_folder"):
+                unread |= set(APPROVED_FIELDS)
+            if program_from_reference and source in AUTOSTART_SOURCES:
+                unread.add("program")
+            carried = carried_facts.get((source, key))
+            if carried:
+                item["facts"] = [fact for fact in item.get("facts") or []
+                                 if not (isinstance(fact, dict) and fact.get("path") in carried)]
+            if unread:
+                item["unread_fields"] = sorted(unread)
+    return view
 
 
 def build_changes(previous: dict, current: dict, comparison: dict, own_kinds: set,
@@ -2566,12 +2915,13 @@ def fit_budget(summary: dict) -> str:
     """The summary text within SUMMARY_MAX_CHARS.
 
     The lists of ``CUT_LISTS`` are cut from their end, in stages, each stage only
-    when the one before could not make the summary fit: ``programs`` (programs
-    without an install date, then the oldest installs) down to ``PROGRAMS_MIN``
-    (or all of them when there are fewer), then ``drivers``, ``components`` and
-    ``additions`` (the items without a change block, from the end of their group,
-    then the items with one) down to nothing, and last ``programs`` below
-    ``PROGRAMS_MIN``. Each count key (``truncated``, ``truncated_drivers``,
+    when the one before could not make the summary fit. First the minimums:
+    ``programs`` (programs without an install date, then the oldest installs) down
+    to ``PROGRAMS_MIN``, ``drivers`` down to ``DRIVERS_MIN``, ``components`` down to
+    ``COMPONENTS_MIN`` and ``additions`` (the items without a change block, from the
+    end of their group, then the items with one) down to ``ADDITIONS_MIN`` (a list
+    with fewer items keeps them all). Then ``drivers``, ``components`` and
+    ``additions`` down to nothing, and last ``programs`` below ``PROGRAMS_MIN``. Each count key (``truncated``, ``truncated_drivers``,
     ``truncated_components``, ``truncated_additions``) counts the cut items.
     ``autostart`` and ``changes`` are never cut. A summary that is still too long
     is not cut at all and says so in not_checked.
@@ -2581,7 +2931,9 @@ def fit_budget(summary: dict) -> str:
     if len(text_out) > SUMMARY_MAX_CHARS:
         count_keys = dict(CUT_LISTS)
         kept = {name: len(items or []) for name, items in originals.items()}
-        stages = [("programs", min(PROGRAMS_MIN, kept["programs"]))]
+        minimums = {"programs": PROGRAMS_MIN, "drivers": DRIVERS_MIN,
+                    "components": COMPONENTS_MIN, "additions": ADDITIONS_MIN}
+        stages = [(name, min(minimums[name], kept[name])) for name, _ in CUT_LISTS]
         stages += [(name, 0) for name, _ in CUT_LISTS[1:]]
         stages.append(("programs", 0))
         fitted = False
@@ -2643,10 +2995,52 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--data-dir", default=None, help=datadir.HELP)
     parser.add_argument("--detail", metavar="ID",
                         help="print one item of the newest detail file and exit")
+    parser.add_argument("--cut", action="store_true",
+                        help="print the ids and names of the items the summary cut "
+                             "(from the newest detail file) and exit")
     parser.add_argument("--detail-file", metavar="PATH",
-                        help="with --detail: read this detail file (the summary's "
-                             "detail_file) instead of the newest one")
+                        help="with --detail or --cut: read this detail file (the "
+                             "summary's detail_file) instead of the newest one")
+    parser.add_argument("--compare-to", metavar="<N>d", help=baseline.COMPARE_TO_HELP)
     return parser
+
+
+def cut_label_addition(item: dict):
+    """The ``name`` of a cut addition, never a path or a SID: a certificate's subject
+    (cut to SUBJECT_MAX), a hosts entry's hostname, a Defender exclusion's type only
+    (its value is a path), any other kind's ``name``."""
+    kind = item.get("kind")
+    if kind == "root_certificate":
+        subject = item.get("subject")
+        return subject[:SUBJECT_MAX] if isinstance(subject, str) else None
+    if kind == "hosts_entry":
+        return item.get("hostname")
+    if kind == "defender_exclusion":
+        return item.get("type")
+    return item.get("name")
+
+
+CUT_LABELS = {
+    "drivers": lambda item: item.get("device_name"),
+    "additions": cut_label_addition,
+}
+
+
+def show_cut(work: Path, detail_file: Path | None = None) -> int:
+    """Print ``{detail_file, summary_file, cut}``: the listable items of the detail file
+    that the summary of the same run does not hold. Starts no machine job."""
+    if detail_file is None:
+        files = sorted(work.glob("inventory-*.detail.json"), key=lambda p: p.name)
+        if not files:
+            print(f"no detail file in {work}; run the collection first", file=sys.stderr)
+            return 1
+        detail_file = files[-1]
+    result, reason = ids.read_cut(detail_file, CUT_LABELS)
+    if reason is not None:
+        print(reason, file=sys.stderr)
+        return 1
+    print(json.dumps(result, ensure_ascii=True, indent=1))
+    return 0
 
 
 def show_detail(work: Path, item_id: str, detail_file: Path | None = None) -> int:
@@ -2687,10 +3081,20 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
         raise TypeError("inject both run_ps and is_admin, or neither")
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.detail_file and args.detail is None:
-        parser.error("--detail-file needs --detail")
-    if args.detail is not None and args.detail_file:
+    if args.detail is not None and args.cut:
+        parser.error("--detail and --cut cannot be used together")
+    if args.detail_file and args.detail is None and not args.cut:
+        parser.error("--detail-file needs --detail or --cut")
+    compare_days = None
+    if args.compare_to is not None:
+        compare_days = baseline.parse_compare_to(args.compare_to)
+        if compare_days is None:
+            parser.error(f"--compare-to takes <N>d with N from 1 to "
+                         f"{baseline.HISTORY_DAYS - 1}, e.g. 7d: {args.compare_to!r}")
+    if args.detail_file:
         # The detail file is named explicitly: no data directory is needed.
+        if args.cut:
+            return show_cut(Path(), Path(args.detail_file).absolute())
         return show_detail(Path(), args.detail, Path(args.detail_file).absolute())
     try:
         data_dir = datadir.resolve(args.data_dir)
@@ -2700,6 +3104,8 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
     state = data_dir / "state"
     if args.detail is not None:
         return show_detail(work, args.detail)
+    if args.cut:
+        return show_cut(work)
 
     run_ps = run_ps or default_run_ps
     is_admin = is_admin or default_is_admin
@@ -2712,27 +3118,47 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
     admin = bool(is_admin())
     loaded = baseline.load(state, SKILL, admin)
     previous = loaded["sources"] if loaded["status"] == "read" else {}
+    # The state compared with: the latest baseline, or a history copy with --compare-to.
+    # ``previous`` stays the base of collect and merge_sources.
+    reference = baseline.reference_for(state, SKILL, admin, loaded, args.compare_to,
+                                       compare_days, now)
+    reference_sources = reference["sources"]
 
     config, own_reason = load_own(DEFAULT_OWN_FILE)
     first_run = {"dir": state, "loaded": load_first_run(state),
                  "decided_at": now.isoformat(timespec="seconds")}
     statuses, current, col = collect(run_ps, work, stamp, previous, config, admin,
-                                     first_run)
+                                     first_run, reference_sources)
     if own_reason is not None:
         col.skip("windows-own.json", f"nothing is classified as part of Windows: "
                                      f"{own_reason}")
     own_kinds = config["msix_signature_kinds"]
+    id_map, map_reason = ids.load_map(state, SKILL)
+    if map_reason is not None:
+        col.skip(*ids.load_note(map_reason))
+    numbering = ids.Numbering(id_map, now.date().isoformat())
 
-    comparison = {name: baseline.comparison_state(previous, name, statuses[name])
+    comparison = {name: baseline.comparison_state(reference_sources, name, statuses[name])
                   for name in SOURCES}
+    # Values taken from the latest baseline are no change against it, but would be
+    # against a history copy: with --compare-to they are not compared.
+    compared = (current if args.compare_to is None
+                else compare_view(current, statuses, col.carried_facts, col.unread_keys,
+                                  reference_sources))
     changes, listed_changes, own_changes = build_changes(
-        previous, current, comparison, own_kinds,
+        reference_sources, compared, comparison, own_kinds,
         skip_facts=statuses["file_facts"] not in READ_STATUSES,
         skip_program=any(statuses[s] not in READ_STATUSES for s in PROGRAM_SOURCES),
     )
-    programs, own_count = build_programs(current, own_kinds)
+    programs, own_count = build_programs(current, own_kinds, numbering)
+    suffixes, suffix_reason = load_suffixes(PER_USER_SUFFIXES_FILE)
+    if suffixes is None:
+        col.skip("per_user_suffixes.json",
+                 f"no program is marked with per_user_pair: {suffix_reason}")
+    else:
+        pair_installs(programs, suffixes)
     listed_programs = [summary_program(p) for p in programs if not p["own"]]
-    autostart, own_autostart, unknown = build_autostart(current)
+    autostart, own_autostart, unknown = build_autostart(current, numbering)
     if unknown:
         # A service whose registry was not read has no known targets at all.
         registry = sum(1 for entry in autostart if entry.get("own") is None
@@ -2752,7 +3178,7 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
     listed_autostart = [summary_autostart(entry)
                         for entry in autostart if entry.get("own") is False]
 
-    components, listed_count = build_components(current)
+    components, listed_count = build_components(current, numbering)
     components_read = any(statuses[s] in READ_STATUSES for s in COMPONENT_SOURCES)
     listed_components = [{k: c.get(k) for k in ("id", "key", "kind", "name", "state")}
                          for c in components[:listed_count]] if components_read else None
@@ -2763,7 +3189,7 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
                        if statuses["capabilities"] in READ_STATUSES else None),
         "drivers_without_inf": col.drivers_without_inf,
     }
-    drivers, listed_driver_count = build_drivers(current)
+    drivers, listed_driver_count = build_drivers(current, numbering)
     drivers_read = statuses["drivers"] in READ_STATUSES
     driver_fields = ("id", "key", "device_name", "class", "provider", "version", "date",
                      "signer")
@@ -2772,7 +3198,8 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
 
     defender_method = next((e.get("method") for e in col.sources
                             if e["name"] == "defender_exclusions"), None)
-    additions, listed_addition_count = build_additions(current, defender_method)
+    additions, listed_addition_count = build_additions(current, defender_method,
+                                                       numbering)
     additions_read = any(statuses[s] in READ_STATUSES for s in ADDITION_SOURCES)
     listed_additions = [summary_addition(e) for e in additions[:listed_addition_count]] \
         if additions_read else None
@@ -2799,10 +3226,17 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
         "autostart": autostart,
         "components": components,
         "drivers": drivers,
+        "drivers_without_inf_items": col.drivers_without_inf_items,
         "additions": additions,
         "hosts_file": col.hosts_file,
         "current_sid": col.current_sid,
         "changes": changes,
+        # The ids of the items the summary lists before the budget cut, for --cut.
+        "listed": {name: [item["id"] for item in items or []] for name, items in (
+            ("programs", listed_programs), ("autostart", listed_autostart),
+            ("components", listed_components), ("drivers", listed_drivers),
+            ("additions", listed_additions))},
+        "summary_file": str(summary_file),
     }
     detail_file.write_text(dump(detail) + "\n", encoding="utf-8")
 
@@ -2814,23 +3248,32 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
         "sources": baseline.merge_sources(
             previous, current, {name: statuses[name] for name in current}),
     }
-    save_reason = baseline.save(state, baseline.baseline_name(SKILL, admin), new_baseline)
+    state_name = baseline.baseline_name(SKILL, admin)
+    save_reason = baseline.save(state, state_name, new_baseline)
+    history_reason = baseline.archive(state, state_name, now)
+    if history_reason is not None:
+        col.skip("baseline history", baseline.history_note(history_reason))
+    map_save_reason = ids.save_map(state, SKILL, id_map, now.date().isoformat())
+    if map_save_reason is not None:
+        col.skip(*ids.save_note(map_save_reason))
+    for what, reason in numbering.repeated_notes():
+        col.skip(what, reason)
 
-    compared = loaded["status"] == "read"
-    reasons = []
-    if loaded["status"] == "unreadable":
-        reasons.append(loaded["reason"])
-        col.skip("baseline", f"the baseline could not be read, so nothing was compared "
-                             f"(the file is kept): {loaded['reason']}")
+    for what, reason in reference["notes"]:
+        col.skip(what, reason)
+    reasons = list(reference["info"]["reason"])
     if save_reason is not None:
         reasons.append(f"not saved: {save_reason}")
         col.skip("baseline save", f"this run's baseline was not saved: {save_reason}")
+    info = reference["info"]
     baseline_info = {
-        "status": "compared" if compared else loaded["status"],
-        "created_at": loaded["created_at"] if compared else None,
-        "age_days": baseline.age_days(loaded["created_at"], now) if compared else None,
+        "status": info["status"],
+        "created_at": info["created_at"],
+        "age_days": info["age_days"],
         "saved": save_reason is None,
         "reason": "; ".join(reasons) if reasons else None,
+        "reference": info["reference"],
+        "reference_file": info["reference_file"],
     }
 
     summary = {

@@ -20,8 +20,8 @@ Interface under test (fixed before the code exists):
   - ``memory``: one row ``{TotalVisibleMemorySize, FreePhysicalMemory,
     TotalVirtualMemorySize, FreeVirtualMemory}`` in KB.
 - Output: ``<data dir>/work/processes-<UTC stamp YYYYmmdd-HHMMSS>.summary.json`` and
-  ``.detail.json``; the summary is also printed on stdout; nothing under
-  ``<data dir>/state``.
+  ``.detail.json``; the summary is also printed on stdout; under
+  ``<data dir>/state`` only the id map ``ush-processes.ids.json`` (plan 108).
 - Summary: ``sources`` is a list of ``{name, status, reason}``; ``not_checked`` is a
   list of ``{what, reason}`` and an item about a job names the job in ``what``; groups
   have ids ``g1...``; every process and group item carries ``unread_fields`` (a list,
@@ -29,8 +29,9 @@ Interface under test (fixed before the code exists):
 - Detail file: ``processes`` (every process item) and ``groups`` (every group, same ids
   as the summary); each detail group has ``processes``, its full process items (with
   ``command_line``).
-- Group ``name``: the ``Name`` of the group's process with the lowest pid; a group whose
-  processes have path null is named ``"<Name> (path not read)"`` with path null.
+- Group ``name``: the ``Name`` of the group's process with the lowest pid, never with a
+  suffix; a group whose processes have path null has path null and ``path_read: false``
+  (two groups may share a name; they differ by ``id`` and ``path_read``).
 - ``--detail g1`` prints the detail group as JSON on stdout and exits 0; an unknown id
   exits 1.
 
@@ -146,8 +147,21 @@ def default_processes():
     ]
 
 
+def image_path_errors(out_path):
+    """The default ``image_paths`` answer: one ``Error`` row per pid of the job's input
+    file (``<out stem>.input.json`` next to ``out_path``), so a fixture with a process
+    without a path gets no new ``not_checked`` entry."""
+    out_path = Path(out_path)
+    input_path = out_path.with_name(out_path.name[:-len(".json")] + ".input.json")
+    data = json.loads(input_path.read_text(encoding="utf-8-sig"))
+    return [{"ProcessId": item.get("ProcessId"), "Path": None, "CreationTime": None,
+             "Error": "Invented: access is denied."}
+            for item in data.get("processes") or []]
+
+
 class FakePowerShell:
-    """Stands in for run_ps. Jobs not listed answer ``ok([])``."""
+    """Stands in for run_ps. Jobs not listed answer ``ok([])``; ``image_paths`` not
+    listed answers an ``Error`` row per pid of its input file."""
 
     def __init__(self, responses=None):
         self.responses = machine(default_processes())
@@ -157,7 +171,10 @@ class FakePowerShell:
     def __call__(self, job, script, out_path):
         out_path = Path(out_path)
         self.calls.append((job, script, out_path))
-        response = self.responses.get(job, ok([]))
+        if job == "image_paths" and job not in self.responses:
+            response = ok(image_path_errors(out_path))
+        else:
+            response = self.responses.get(job, ok([]))
         if response[0] == "ok":
             out_path.parent.mkdir(parents=True, exist_ok=True)
             # Windows PowerShell 5.1 writes UTF-8 with a BOM.
@@ -244,9 +261,13 @@ class ProcessesTestCase(unittest.TestCase):
         self.assertIsInstance(groups, list, summary)
         return groups
 
-    def group_named(self, groups, name):
-        matches = [g for g in groups if g.get("name") == name]
-        self.assertEqual(len(matches), 1, f"group {name!r}: {[g.get('name') for g in groups]}")
+    def group_named(self, groups, name, path_read=None):
+        """The one group with ``name`` (and ``path_read`` when given)."""
+        matches = [g for g in groups if g.get("name") == name
+                   and (path_read is None or g.get("path_read") is path_read)]
+        self.assertEqual(len(matches), 1,
+                         f"group {name!r} path_read={path_read}: "
+                         f"{[(g.get('name'), g.get('path_read')) for g in groups]}")
         return matches[0]
 
     def detail_processes(self, summary):

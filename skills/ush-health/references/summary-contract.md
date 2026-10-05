@@ -16,10 +16,17 @@ contract):
 - `health-<YYYYmmdd-HHMMSS>.summary.json` - the summary. The same text is
   printed on stdout. The time in the name is UTC, so names sort by time.
 - `health-<YYYYmmdd-HHMMSS>.detail.json` - the detail file: `schema_version`,
-  `skill`, `generated_at`, `elevated`, `sources` and the full lists `disks`,
-  `volumes`, `devices` and `update_failures` (never truncated) with the same
-  ids as the summary. Disks also keep `device_id` and devices `instance_id`
-  there; the summary leaves both out.
+  `skill`, `generated_at`, `elevated`, `sources`, `comparison` and the full
+  lists `disks`, `volumes`, `devices`, `update_failures` (never truncated)
+  and `changes`, with the same ids as the summary. Disks also keep
+  `device_id` and `unique_id` (the disk's `UniqueId`) and devices
+  `instance_id` there; the summary leaves them out.
+
+Outside `work/` the run writes only to `<data dir>/state/`: the id map
+`ush-health.ids.json` (see "Ids and --detail"), the baseline
+`ush-health.json` (`ush-health.elevated.json` for an elevated run) with its
+previous copy, and a day copy of the baseline in `state/history/` (see
+"Baseline and changes").
 
 The PowerShell jobs write their results to `health-<stamp>.<job>.json` in the
 same directory (raw captures: never read them). The battery report of
@@ -59,10 +66,10 @@ Besides the shared fields (`schema_version`, `skill` = `"ush-health"`,
 | Field | Type | Meaning |
 |---|---|---|
 | `elevated` | bool | `true` when the run had administrator rights |
-| `disks` | list or null | physical disks; ids `k1`, `k2`, ... `null` when `physical_disks` is unreadable |
-| `volumes` | list or null | volumes with a drive letter; ids `v1`, `v2`, ... `null` when `volumes` is unreadable |
+| `disks` | list or null | physical disks; ids `k..`, stable between runs (see "Ids and --detail"). `null` when `physical_disks` is unreadable |
+| `volumes` | list or null | volumes with a drive letter; ids `v..`, stable between runs. `null` when `volumes` is unreadable |
 | `battery` | object or null | the first battery, see below. `null` when `Win32_Battery` is unreadable |
-| `devices` | list or null | Plug and Play devices whose status is not `OK`; ids `p1`, `p2`, ... `[]` when every device is `OK`; `null` when `devices` is unreadable |
+| `devices` | list or null | Plug and Play devices whose status is not `OK`; ids `p..`, stable between runs. `[]` when every device is `OK`; `null` when `devices` is unreadable |
 | `devices_by_status` | object or null | the number of present devices per `Status` (`OK`, `Error`, ...; a device without a status counts under `"unknown"`). `null` with `devices` |
 | `secure_boot` | object or null | `enabled`, `firmware_type`, see below. `null` when unreadable |
 | `tpm` | object | `devices`, `spec_version`, `is_enabled`, `is_activated`, see below. Always present |
@@ -72,6 +79,9 @@ Besides the shared fields (`schema_version`, `skill` = `"ush-health"`,
 | `antivirus` | object or null | `products` and `defender`, see below. `null` when both parts are unreadable |
 | `restore_points` | object or null | `count`, `newest`, `oldest`. `null` without administrator rights or when unreadable |
 | `winre` | object or null | `status`. `null` without administrator rights or when unreadable |
+| `baseline` | object | `{status, created_at, age_days, saved, reason, reference, reference_file}`, the shared meaning ("Baseline" of the shared contract); `status` is `compared`, `none` or `unreadable`. Always present |
+| `comparison` | object | `{disks, volumes, devices, os}`, each `compared`, `no_baseline` or `not_read`. Always present |
+| `changes` | list | the changes against the baseline, ids `c..`; `[]` when nothing changed or nothing was compared (see `comparison`). Always present |
 
 A value that could not be read is `null`, never `false` or `0`. The script
 counts and converts; it never rates a value.
@@ -284,6 +294,56 @@ Special statuses:
 - `update_history` is `empty` when the history holds no entries.
 - `antivirus`: see Antivirus.
 
+## Baseline and changes
+
+Each run compares four sources with the baseline of the previous run of the
+same kind (elevated or not; `--compare-to <N>d`: with the saved state at
+least N days old, shared contract "Baseline") and then saves its own
+baseline:
+
+| Source | Status from | Key | Fields kept | Fields compared |
+|---|---|---|---|---|
+| `disks` | `physical_disks` | `unique_id` | `friendly_name`, `size_gb`, `health_status`, `operational_status`, `wear_percent`, `read_errors_total`, `write_errors_total` | all but `friendly_name` |
+| `volumes` | `volumes` | `drive_letter` | `file_system`, `size_gb`, `free_gb`, `health_status`, `protection` | all |
+| `devices` | `devices` | `instance_id` | `name`, `class`, `status`, `problem` | `status`, `problem` |
+| `os` | `os_version` | `"os"` (one item) | `display_version`, `build`, `ubr`, `edition_id` | all |
+
+`wear_percent`, `read_errors_total` and `write_errors_total` come from the
+disk's `reliability`. The `devices` source holds only the devices whose
+status is not `OK`, so a device that starts to fail is `added` and one that
+recovers is `removed`.
+
+- A field whose value is `null` in this run (not read) is not compared: it
+  is in the item's `unread_fields`. The saved item keeps the previous value
+  of that field, so the next successful read gives no false change. Without
+  administrator rights the disk counters are not read, so they are compared
+  only between elevated runs (each kind keeps its own baseline). Such
+  fields are named in a `<source> not compared: <fields>` item of
+  `not_checked`.
+- A source whose status is not `read` or `empty` is not compared
+  (`comparison` `not_read`) and keeps its previous items in the saved
+  baseline. A source missing from the baseline compared with is
+  `no_baseline`.
+- A disk without a `UniqueId` and a device without an `instance_id` are
+  neither kept nor compared, and nor are disks, volumes or devices whose
+  key came twice in this run. A key that is empty or only whitespace counts
+  as none. (A volume without a drive letter is not in `volumes` at all.)
+- A key that came twice in this run gives no change (`added`, `removed` or
+  `changed`), and the saved baseline keeps the previous item with that key.
+- An item without a key may be any saved item, so its source gives no
+  `removed` in this run (`added` and `changed` of keyed items still come),
+  and the saved baseline keeps every previous item of that source not
+  matched in this run. The reason of its `not compared` item says so.
+
+A change: `id` (`c..`), `source` (`disks`, `volumes`, `devices`, `os`),
+`kind` (`added`, `removed`, `changed`), `item` (the id of the disk, volume
+or device in this run; `null` for `removed` and for `os`), `name` (the
+disk's `friendly_name`, the drive letter, the device's `name`, or `"os"`;
+for `removed` from the baseline) and `fields` (`{field: {before, after}}`
+for `changed`, `{}` otherwise). Changes come in the order of the table,
+then by key. The script gives `before` and `after` only: no difference and
+no judgement.
+
 ## not_checked
 
 Items have the shared shape. They are added for:
@@ -304,15 +364,62 @@ Items have the shared shape. They are added for:
   directory;
 - `restore_points: creation time`: some creation times are not DMTF times
   (the reason gives how many of how many);
-- `summary budget`: the summary exceeds 35000 characters and was not cut.
+- `summary budget`: the summary exceeds 35000 characters and was not cut;
+- `stable ids`: `state/ush-health.ids.json` could not be read, so the
+  numbering started again (the file is kept as `.unreadable-<stamp>.json`
+  when the new map is saved);
+- `stable ids save`: the id map was not saved; this run's ids hold, the next
+  run may give other ones (when the reason starts with "the id map was saved", only its previous copy was not replaced and the next run keeps these ids);
+- `stable ids <letter>`: items whose key came twice in this run (two device
+  rows with the same instance id), and items without a key (a disk without
+  `UniqueId`, a device without an instance id); they got ids kept for this
+  run only, named in the reason, so the next run may give them other ids;
+- `disk not compared: no UniqueId` and `disk not compared: repeated
+  UniqueId`, `device not compared: no InstanceId` and `device not compared:
+  repeated InstanceId` (and `volume not compared: repeated drive letter`):
+  that item is not kept in the baseline and not compared. The reason names
+  it by id and name, never by its key (a `UniqueId` may hold a serial
+  number). For `no ...` the reason also says that removed disks or devices
+  were not checked in this run and that saved ones not seen stay in the
+  baseline; for `repeated ...` it says that the saved item with that key
+  stays in the baseline;
+- `<source> not compared: <fields>` (`disks`, `volumes`, `devices` or
+  `os`; the fields comma-separated and sorted): in a source that was
+  compared, these fields are in `unread_fields` of an item of this run or
+  of the same item in the state compared with, for items present on both
+  sides; the reason gives the number of such items (each lacks one or
+  more of the fields, not necessarily all) and says that the value was not
+  read in this run or in the run compared with. An item only on
+  one side (`added` or `removed`) does not count;
+- `baseline` (the latest baseline could not be read), `reference baseline`
+  (the history copy chosen by `--compare-to` could not be read, so nothing
+  was compared), `baseline history` ("history not kept: ...", or "the day copy was kept, but old copies were not removed: ..." when
+  only the cleanup failed) and
+  `baseline save` (this run's baseline was not saved), as in the shared
+  contract.
 
 ## Ids and --detail
 
-Ids: `k..` disks, `v..` volumes, `p..` devices, `u..` update failure groups.
+Ids: `k..` disks, `v..` volumes, `p..` devices, `u..` update failure groups,
+`c..` changes.
+
+The numbers of `k`, `v` and `p` are stable between runs (shared contract,
+"Ids and --detail"): the number belongs to the item, not to its position in
+the list, so the summary may have gaps (`k1`, `k3`). The key of a disk is
+its `UniqueId` (not `device_id`, which is only the enumeration number), of a
+volume its drive letter and of a device its `instance_id`. The map from key
+to number is kept in `<data dir>/state/ush-health.ids.json` (the same file
+for a run with and without administrator rights); a new item takes a number
+higher than any given before, and the number of an item that went away is
+not given again. A disk without `UniqueId` and a device without `instance_id`
+(a blank one, empty or only whitespace, counts as none) get a number for
+this run only. The update failure groups `u` and the changes `c` are
+numbered by position in each run.
 
 `python -B skills/ush-health/scripts/health.py --data-dir <dir> --detail <id>`
 prints the item with that id from the newest `health-*.detail.json` in
-`<dir>/work/` (sections `disks`, `volumes`, `devices`, `update_failures`) and
+`<dir>/work/` (sections `disks`, `volumes`, `devices`, `update_failures`,
+`changes`) and
 exits 0. `--detail-file`, errors and exit codes are as in the shared contract.
 A failure group cut from the summary (`truncated`) keeps its id: the summary
 holds `u1` to `u<n>` and the cut ones are `u<n+1>` onward.

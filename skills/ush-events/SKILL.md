@@ -44,9 +44,11 @@ for these.
   never in inline code (a `<` before a letter fails the check, and inline
   code shows `&lt;` as it is), and never the expanded path: it contains
   the account name, which a report must not carry. The expanded path
-  appears only in the `ush:summary` marker and in code blocks. A block for an elevated shell always passes
-  `--data-dir "<absolute data dir>"`: an elevated shell of another
-  account has a different `%LOCALAPPDATA%`.
+  appears only in the `ush:summary` marker and in code blocks. Every block
+  that runs a skill script starts with `Set-Location "<absolute project
+  root>"` and passes `--data-dir "<absolute data dir>"` (rule 9 of
+  `skills/ush-common/references/report-style.md`): an elevated shell of
+  another account has a different `%LOCALAPPDATA%`.
 - **Every number in the report comes from the JSON**: from the summary, or
   from a detail item you fetched with `--detail` and named in the report's
   `<!-- ush:detail ... -->` line. Do not compute totals, averages,
@@ -86,6 +88,14 @@ for these.
 
    `<detail_file>` is the `detail_file` value from the summary, so the item
    comes from the same run that the report checker checks against.
+
+   Group ids are stable numbers kept between runs, not places in the list,
+   so a group the summary cut cannot be guessed from `truncated`. List the
+   cut groups with their ids and names first:
+
+   ```
+   python -B skills/ush-events/scripts/events.py --cut --detail-file <detail_file>
+   ```
 
    Ids: `g..` groups, `n..` noise, `b..` boot sessions, `a..` anomalies,
    `r..` Reliability Monitor record groups, `d..` memory dump files.
@@ -199,15 +209,20 @@ for these.
 10. Clearing a log, only when the user explicitly asks for it. Never run it
     yourself and never pass `--clear` in any other step. Give the user this
     block for an elevated PowerShell, with the log name, the absolute
-    project root and the absolute data directory filled in, together with:
+    project root and the absolute data directory filled in, as a
+    recommendation in the layout of rule 4 of
+    `skills/ush-common/references/report-style.md`, with these fields:
 
-    - **risk:** high - clearing is irreversible; `ush-events` loses the
+    - `weight`: low (the user asked for it; it fixes no fault);
+    - `kind`: change;
+    - `risk`: high; clearing is irreversible, and `ush-events` loses the
       history of that log (clearing `System` removes the boot sessions,
       trends and bugchecks it would report);
-    - **permissions:** administrator (an elevated PowerShell);
-    - **rollback:** none - irreversible; the export and the `-rest` file are
-      a copy to open in Event Viewer, they cannot be loaded back into the
-      log.
+    - `evidence`: the user's request and the log's name;
+    - `permissions`: administrator (an elevated PowerShell);
+    - `rollback`: none, it is irreversible; the export and the `-rest` file
+      are a copy to open in Event Viewer, they cannot be loaded back into
+      the log.
 
     ```
     # Exports the <log> log to <data dir>\exports\, verifies the file by its

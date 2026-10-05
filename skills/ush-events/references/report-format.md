@@ -5,6 +5,9 @@ saved as `<data dir>/reports/events-<YYYY-MM-DD-HHMM>.md` and checked with
 `python -B skills/ush-common/scripts/check_report.py <report>` (or
 `--latest --skill ush-events` for the newest `events-*.md`), which reads the
 ush-events rules from `data/report-profile.json`.
+Follow `skills/ush-common/references/report-style.md`: it says how every
+report is written (time, numbers, dash, recommendation layout, language);
+this file says what the ush-events report contains.
 `<data dir>` is the data directory (`--data-dir`, else `USH_DATA_DIR`, else
 `%LOCALAPPDATA%\ubershipshape`); its absolute value is the directory
 above `work/` in the summary's `summary_file`. The report text outside code
@@ -30,8 +33,8 @@ numbers this way:
   number is backed only by a hex value, a decimal number only by a decimal one.
 - Every other run of digits is a separate number: `18.09.2026` is 18, 9 and
   2026; `3,5` is 3 and 5; `1 234` is 1 and 234; leading zeros do not matter.
-  So dates and times may be written in local format and a decimal comma is
-  fine, but write counts without a thousands separator (`1234`, not `1 234`):
+  So a decimal comma is fine (rule 2 of `report-style.md`), and a time with
+  a zone follows rule 1 there; but write counts without a thousands separator (`1234`, not `1 234`):
   its parts are rarely in the JSON on their own.
 - Write every number in digits: a number word (`dwa`, `trzy`, `two`, in any
   case or form) outside code fails the check unless the same word is in a
@@ -103,8 +106,9 @@ numbers this way:
   the check. Inside a
   code block `<`, `]:` and `](` are fine (`<# ... #>` in PowerShell).
 - Every other number is checked, in text, tables and quotes.
-  Do not add up, average or convert numbers yourself; do not convert times to
-  another time zone (the JSON times are UTC; write them as UTC or say so).
+  Do not add up, average or convert numbers yourself. Write a JSON time with
+  a zone in local time with its UTC time in brackets (rule 1 of
+  `report-style.md`); the check verifies the pair.
 
 ## Items the report must name
 
@@ -136,8 +140,8 @@ that is not a finding goes on the "Other groups" line (layout, item 5).
 
    | # | Finding | Count | Trend | Action |
    |---|---|---|---|---|
-   | 1 | Bugcheck 0x0000019c | 1 | - | 🔧 see below |
-   | 2 | Disk 7 (g1) | 5 | rising (0, then 5) | 🔍 run again later |
+   | 1 | Bugcheck 0x0000019c | 1 | — | 🔧 see below |
+   | 2 | g1 Disk 7 | 5 | rising (0, then 5) | 🔍 run again later |
 
    `#` is the section number of the finding, `Count` a count from the JSON,
    `Action` a legend symbol and a few words (no numbers of your own). A row
@@ -148,7 +152,7 @@ that is not a finding goes on the "Other groups" line (layout, item 5).
    language), optionally with its `first_half` and `second_half`; the
    script sets it by the rule in `data/trend.json`
    (`references/summary-contract.md`). A row without a group (an anomaly,
-   stability) has `-`; a row of several groups gives each group's trend with
+   stability) has „—”; a row of several groups gives each group's trend with
    its id. Read it this way:
    - `unknown` (the log does not cover the whole window, or the time of its
      oldest record could not be read: see `not_checked` for which) and `too_few` (too
@@ -161,11 +165,11 @@ that is not a finding goes on the "Other groups" line (layout, item 5).
 
 4. Legend, under the dashboard:
 
-   - 🔧 change - a fault the user can fix; the section gives the steps.
-   - 🔍 observe or check - not clear yet; watch it, run again later, or
+   - 🔧 change — a fault the user can fix; the section gives the steps.
+   - 🔍 observe or check — not clear yet; watch it, run again later, or
      check one more thing (including `consult_service`).
-   - ✅ fine - read and nothing wrong (a source read with no events, noise).
-   - ❌ problem found - a fault with no fix the user can apply themselves
+   - ✅ fine — read and nothing wrong (a source read with no events, noise).
+   - ❌ problem found — a fault with no fix the user can apply themselves
      (for example failing hardware); the section says who can help.
 
 5. One section per finding (`## 1. <name>`, `## 2. <name>` and so on, in
@@ -175,13 +179,15 @@ that is not a finding goes on the "Other groups" line (layout, item 5).
    - a quoted sample from the group's `sample` (a `>` block, shortened if
      needed);
    - the judgement, and a recommendation with `weight`, `kind`, `risk`,
-     `evidence`, `permissions` and `rollback`
-     (`references/summary-contract.md`). A `change` gives a paste-ready block
+     `evidence`, `permissions` and `rollback` in the layout of rule 4 of
+     `skills/ush-common/references/report-style.md` (the fields are in
+     `references/summary-contract.md`). A `change` gives a paste-ready block
      and how to read the value back afterwards.
 
    The groups that are not a finding go on one line at the end of the last
-   finding section, written in the report language, each with its id and
-   `count`: `Other groups: g29 (2), g22 (1), ...`. With no findings, put
+   finding section, written in the report language, each with its id, a
+   short name and `count` (rule 7 of `report-style.md`): „Pozostałe grupy:
+   g29 Service Control Manager (2), g22 Kernel-Power (1), …”. With no findings, put
    that line in a section of its own right after the dashboard and its
    legend.
 
@@ -305,7 +311,10 @@ Never report missing data as "clean":
   read; give the `reason`, never "no dumps". A file with `readable: false`
   exists; never report it as missing or as fine.
 - `truncated` > 0: say how many groups were left out of the summary (the
-  rarest) and that the detail file has them; fetch one with `--detail` if it
-  matters.
+  rarest) and that the detail file has them. Group ids are stable numbers,
+  not places in the list: find a cut group with `--cut`, then fetch it with
+  `--detail` if it matters and name it in an `ush:detail` line.
+- A `stable ids` item in `not_checked`: the ids of this run may differ from
+  earlier reports; say so, and never compare items between runs by id.
 - No baseline (skills that compare with one): "no baseline yet", never "no
   changes". Does not arise in `ush-events`, which keeps no baseline.

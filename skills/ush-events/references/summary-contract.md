@@ -17,7 +17,12 @@ contract):
   printed on stdout. The time in the name is UTC, so names sort by time.
 - `events-<YYYYmmdd-HHMMSS>.detail.json` - the detail file: the full lists
   (never truncated) with the same ids as the summary, plus `reliability` and
-  `unreadable`; the dump files are under `dump_files`.
+  `unreadable`; the dump files are under `dump_files`. `listed` holds the ids
+  of `groups` and `noise` before the budget cut (`{list name: [id, ...]}`),
+  and `summary_file` the path of the summary of the same run, for `--cut`.
+
+The only file written outside `work/` is the id map
+`<data dir>/state/ush-events.ids.json` (see "Ids and --detail").
 
 To keep the summary within its budget of 35 000 characters only `groups` are
 cut, from the end (the rarest); `truncated` counts them. Nothing
@@ -36,8 +41,8 @@ Besides the shared fields (`schema_version`, `generated_at`, `summary_file`,
 | `skill` | string | `"ush-events"` |
 | `window` | object | `start`, `end` (ISO 8601, UTC) and `days` (int): the time span read |
 | `sources` | list | one entry per capture pass, see below |
-| `groups` | list | level 1-3 events grouped by log, provider and Id (known noise excluded), most frequent first; ids `g1`, `g2`, ... |
-| `noise` | list | groups that match the known-noise list `data/noise.json`, with `count` and `reason`; ids `n1`, `n2`, ... Noise is counted, never hidden |
+| `groups` | list | level 1-3 events grouped by log, provider and Id (known noise excluded), most frequent first; each `id` is `g<number>`, a stable number kept between runs (see "Ids and --detail"), not the place in the list |
+| `noise` | list | groups that match the known-noise list `data/noise.json`, with `count` and `reason`; each `id` is `n<number>`, stable between runs like the group ids. Noise is counted, never hidden |
 | `boots` | list or null | boot sessions; id `b<index>` (`b0` is the part of a session that began before the window). `null` when System pass B was unreadable: sessions are unknown, and every anomaly's `boot` is `null` too |
 | `anomalies` | list | bugchecks, unexpected shutdowns, Kernel-Power 41, sleep without wake; ids `a1`, `a2`, ... `boot` of a 6008 is the session of the EventLog 6009 or 6005 right after it, otherwise the session it was read in (the event log writes it before or after the markers of the boot that reports the crash). Never truncated |
 | `reliability` | object | the daily Windows stability index from the Reliability Monitor, see below. Always present |
@@ -243,6 +248,13 @@ for:
 - memory dumps with `dumps.status` `unreadable` (the registry values or the
   dump folder), reason = the error text. A dump file with `readable: false`
   is not an item here: it is listed in `dumps.files` with its `reason`;
+- `stable ids`: the id map could not be read (it is set aside and numbering
+  starts again); a map that does not exist yet (first run) adds nothing;
+- `stable ids save`: the id map could not be written, so the next run may
+  number differently (when the reason starts with "the id map was saved", only its previous copy was not replaced and the next run keeps these ids);
+- `stable ids <letter>`: an item whose key repeats in this run got a one-time
+  number that the next run does not keep (the keys are the log, provider and
+  event id, so this is not expected);
 - the summary itself when it is over its size limit with every group cut
   ("summary over its size limit of 35000 characters"; `groups` is empty and
   `truncated` counts them all; nothing else was cut, the full lists are in
@@ -254,6 +266,23 @@ for:
 prints the item with that id (`g..`, `n..`, `b..`, `a..`, `r..`, `d..`) from the newest
 `events-*.detail.json` in `<dir>/work/` (never from a summary file) and exits 0.
 `--detail-file`, errors and exit codes are as in the shared contract.
+
+Group ids `g` (key: log, provider and event Id) and noise ids `n` (key:
+provider and event Id) are stable numbers: the id map
+`<data dir>/state/ush-events.ids.json` keeps the number of every key it has
+seen, so an item that stays keeps its id when another item goes away, and a
+new key gets the next unused number. The number says nothing about the place
+in the list or the count. Boots `b`, anomalies `a`, Reliability Monitor
+record groups `r` and dump files `d` stay numbered by place.
+
+`python -B skills/ush-events/scripts/events.py --data-dir <dir> --cut`
+prints `{detail_file, summary_file, cut}` for the newest detail file: `cut`
+lists `{id, list, name}` for each id in the detail file's `listed` that the
+summary of the same run does not hold (the groups the budget cut). `name` is
+the provider, event Id and log. `--cut --detail-file <detail_file>` reads that
+detail file and needs no data directory. Neither form starts PowerShell or
+reads the memory dumps. A missing or unreadable detail file, `listed`,
+`summary_file` or summary exits 1 with the reason on stderr.
 
 ## dumps.py (copying memory dumps)
 

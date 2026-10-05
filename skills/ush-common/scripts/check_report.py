@@ -94,6 +94,26 @@ Rules:
   written ``&lt;!--``. So is ``<`` before a letter, ``?``, ``!`` or ``/``
   anywhere in a line (written ``&lt;``), ``]:`` and ``](``. ``<`` before a
   space, a digit or ``=`` is text.
+- Local time with UTC. Outside code blocks, ``YYYY-MM-DD HH:MM (HH:MM UTC)``
+  needs a time with a zone in the JSON (the summary or an ``ush:detail``
+  item; a whole string value that ``datetime.fromisoformat`` reads with a
+  zone, not a value of the skipped keys) whose UTC hour and minute are the
+  part in brackets and whose local time (the zone of this machine) is the
+  part before it; seconds are dropped, never rounded. A time that cannot be
+  converted (year 1601 on Windows) backs nothing. The digits of a matched
+  pair are not checked as numbers. A pair whose text is part of a JSON
+  string value (a quoted message) needs no backing time. Any other
+  ``HH:MM UTC)`` (``30.09.2026 09:26 (07:26 UTC)``, a time without its
+  date) is an error, unless its text is part of a JSON string value (a
+  quoted event sample).
+- Skill script commands. A line of a code block that runs a skill script
+  (``python [-B] .../skills/ush-<name>/scripts/<script>.py``) must give
+  ``--data-dir`` an absolute Windows path (``--data-dir "C:\\x"`` or
+  ``--data-dir=C:\\x``, no ``<``), and an earlier line of the same block
+  must be ``Set-Location`` with an absolute Windows path (no ``<``). A
+  command line ending with a backtick is an error of its own (report-style
+  rule 9: one command per line), never a missing ``--data-dir``. Comment
+  lines (``#``) and lines outside code blocks are not checked.
 
 JSON files are tokenized from their parsed values (strings, numbers and keys),
 not from the raw text, so ``\\u0105`` escapes cannot supply numbers. The values
@@ -111,7 +131,8 @@ another skill is an error.
 The script counts; it does not judge whether a number is right, only whether
 it is backed by the JSON, nor whether an item is described well, only whether
 its id is there. Exit codes: 0 OK, 1 numbers not backed, number words, summary
-items not named or required summary keys missing, 2 the report, its JSON, its
+items not named, required summary keys missing or style problems (the
+local time and the script command rules), 2 the report, its JSON, its
 profile or the number word list could not be checked.
 """
 
@@ -120,6 +141,7 @@ import json
 import re
 import sys
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 # load_script does not put this directory on sys.path; datadir lives next to this file.
@@ -161,6 +183,23 @@ TABLE_SEPARATOR = re.compile(r"^\s*\|[\s:|-]*-[\s:|-]*$")
 # A fence (CommonMark): at most 3 spaces of indent, then 3 or more backticks or
 # tildes; the rest of an opening line is its info string.
 FENCE = re.compile(r"^ {0,3}(?P<fence>`{3,}|~{3,})(?P<rest>.*)$")
+# A local time with its UTC time: "2026-09-30 09:26 (07:26 UTC)".
+TIME_PAIR = re.compile(
+    r"(?P<local>\d{4}-\d{2}-\d{2} \d{2}:\d{2}) \((?P<utc>\d{2}:\d{2}) UTC\)"
+)
+# A UTC time in brackets; outside a whole TIME_PAIR it is an error.
+UTC_TIME = re.compile(r"\d{2}:\d{2} UTC\)")
+# A code block line that runs a skill script.
+SCRIPT_COMMAND = re.compile(
+    r"(?i)\bpython(?:\.exe)?[\"']?\s+(?:-B\s+)?[\"']?[^\"'\s]*skills[\\/]ush-[a-z0-9-]+"
+    r"[\\/]scripts[\\/][a-z0-9_]+\.py"
+)
+# The value of --data-dir: a double- or single-quoted string or a run without spaces.
+DATA_DIR_ARG = re.compile(r"""--data-dir(?:=|\s+)(?P<value>"[^"]*"?|'[^']*'?|\S+)""")
+ABSOLUTE_WINDOWS = re.compile(r"^[A-Za-z]:[\\/]")
+SET_LOCATION = re.compile(
+    r"""(?i)^\s*Set-Location\s+(?:-(?:Literal)?Path\s+)?(?P<value>"[^"]*"?|'[^']*'?|\S+)"""
+)
 # A line shaped like a closing fence, at any indent.
 CLOSING_FENCE = re.compile(r"^[ \t]*(?P<fence>`{3,}|~{3,})[ \t]*$")
 HEADING = re.compile(r"^ {0,3}#{1,6}\s")
@@ -351,6 +390,126 @@ def json_values(data, skip_keys: frozenset[str]) -> set[tuple[str, int]]:
     return found
 
 
+def json_strings(data, skip_keys: frozenset[str]) -> set[str]:
+    """The string values of parsed JSON.
+
+    Walked like ``json_values``: the values of ``skip_keys``, and of keys named
+    by a file path whose field is skipped, are left out.
+    """
+    found: set[str] = set()
+    stack = [data]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            for key, value in item.items():
+                key = str(key)
+                field = path_named_field(key)
+                if (key if field is None else field) not in skip_keys:
+                    stack.append(value)
+        elif isinstance(item, list):
+            stack.extend(item)
+        elif isinstance(item, str):
+            found.add(item)
+    return found
+
+
+def json_times(data, skip_keys: frozenset[str]) -> set[datetime]:
+    """Times with a zone among the string values of parsed JSON, seconds dropped.
+
+    Walked like ``json_values``: the values of ``skip_keys``, and of keys named
+    by a file path whose field is skipped, are left out. A string is a time
+    only when it is one as a whole.
+    """
+    found: set[datetime] = set()
+    stack = [data]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            for key, value in item.items():
+                key = str(key)
+                field = path_named_field(key)
+                if (key if field is None else field) not in skip_keys:
+                    stack.append(value)
+        elif isinstance(item, list):
+            stack.extend(item)
+        elif isinstance(item, str):
+            try:
+                parsed = datetime.fromisoformat(item)
+            except ValueError:
+                continue
+            if parsed.tzinfo is not None:
+                found.add(parsed.replace(second=0, microsecond=0))
+    return found
+
+
+def _time_backed(local: str, utc: str, times: set[datetime], to_local) -> bool:
+    """Whether a JSON time is ``utc`` in UTC and ``local`` in the local zone."""
+    for value in times:
+        try:
+            if (value.astimezone(timezone.utc).strftime("%H:%M") == utc
+                    and to_local(value).strftime("%Y-%m-%d %H:%M") == local):
+                return True
+        except (OSError, OverflowError, ValueError):
+            continue  # a time this machine cannot convert backs nothing
+    return False
+
+
+def time_problems(line: str, number: int, times: set[datetime], to_local,
+                  texts: frozenset[str] = frozenset()) -> tuple[str, list[str]]:
+    """(the line with its time pairs blanked, the problems of its UTC times).
+
+    A pair, or a UTC time outside a pair, is no problem when its text is part
+    of a JSON string value in ``texts`` (a quoted message, event sample or name).
+    """
+    problems = [
+        f"line {number}: {match.group()} matches no time with a zone in the summary "
+        f"or in a detail item named in ush:detail"
+        for match in TIME_PAIR.finditer(line)
+        if not any(match.group() in text for text in texts)
+        and not _time_backed(match["local"], match["utc"], times, to_local)
+    ]
+    line = TIME_PAIR.sub(" ", line)
+    problems += [f"line {number}: {match.group()} is not part of a local time "
+                 f"written YYYY-MM-DD HH:MM (HH:MM UTC)"
+                 for match in UTC_TIME.finditer(line)
+                 if not any(match.group() in text for text in texts)]
+    return line, problems
+
+
+def command_problems(lines: list[str], blocks: list[tuple[int, int]]) -> list[str]:
+    """Skill script commands of code blocks continued with a backtick, or without
+    --data-dir or Set-Location."""
+    problems = []
+    for start, end in blocks:
+        located = False
+        for index in range(start + 1, end):
+            line = lines[index]
+            location = SET_LOCATION.match(line)
+            if location:
+                value = location["value"].strip("\"'")
+                located = bool(ABSOLUTE_WINDOWS.match(value)) and "<" not in value
+            if line.lstrip().startswith("#") or not SCRIPT_COMMAND.search(line):
+                continue
+            values = [match["value"].strip("\"'") for match in DATA_DIR_ARG.finditer(line)]
+            if line.rstrip().endswith("`"):
+                problems.append(
+                    f"line {index + 1}: a skill script command is continued with a "
+                    f"backtick; write it on one line with --data-dir (report-style rule 9)"
+                )
+            elif not any(ABSOLUTE_WINDOWS.match(value) and "<" not in value
+                         for value in values):
+                problems.append(
+                    f"line {index + 1}: a skill script command needs --data-dir with "
+                    f"an absolute Windows path"
+                )
+            if not located:
+                problems.append(
+                    f"line {index + 1}: a skill script command needs a Set-Location "
+                    f"line with an absolute Windows path earlier in its code block"
+                )
+    return problems
+
+
 def load_number_words() -> re.Pattern:
     """A pattern matching any word of ``NUMBER_WORDS_FILE`` as a whole word.
 
@@ -427,10 +586,15 @@ def read_json(path: Path, what: str):
         raise CheckError(f"{what} {path} is not valid JSON: {exc}")
 
 
-def detail_items(summary, ids: list[str], profile: Profile) -> list:
-    """Return the detail-file items with the given ids; every id must exist."""
+def detail_by_id(summary, profile: Profile, why: str) -> tuple[Path, dict]:
+    """(detail file path, {id: item} of its ``profile.detail_sections``).
+
+    A summary without ``detail_file``, a relative path, or a file that is
+    missing, unreadable or not a JSON object is a CheckError naming the file;
+    ``why`` says what needed it.
+    """
     if not isinstance(summary, dict) or not isinstance(summary.get("detail_file"), str):
-        raise CheckError("the report names ush:detail ids but the summary has no detail_file")
+        raise CheckError(f"{why} but the summary has no detail_file")
     path = Path(summary["detail_file"])
     if not path.is_absolute():
         raise CheckError(f"detail_file in the summary is not an absolute path: {path}")
@@ -444,6 +608,12 @@ def detail_items(summary, ids: list[str], profile: Profile) -> list:
             for item in items:
                 if isinstance(item, dict) and isinstance(item.get("id"), str):
                     by_id[item["id"]] = item
+    return path, by_id
+
+
+def detail_items(summary, ids: list[str], profile: Profile) -> list:
+    """Return the detail-file items with the given ids; every id must exist."""
+    path, by_id = detail_by_id(summary, profile, "the report names ush:detail ids")
     missing = [item_id for item_id in ids if item_id not in by_id]
     if missing:
         raise CheckError(
@@ -452,14 +622,27 @@ def detail_items(summary, ids: list[str], profile: Profile) -> list:
     return [by_id[item_id] for item_id in ids]
 
 
-def check(report: Path, skill: str | None = None
-          ) -> tuple[list[str], int, list[str], list[str]]:
+def to_local(dt):
+    """The local time of an aware datetime, in the zone of this machine."""
+    return dt.astimezone()
+
+
+_machine_local = to_local  # check() and main() take a parameter of the same name
+
+
+def check(report: Path, skill: str | None = None, to_local=None
+          ) -> tuple[list[str], int, list[str], list[str], list[str]]:
     """Return (unbacked-number messages, number of checked tokens,
     messages for the summary items the report does not name,
-    number-word messages).
+    number-word messages, style messages).
 
+    Style messages: a local time with UTC that no JSON time backs, a UTC time
+    outside such a pair, and a skill script command in a code block without
+    ``--data-dir`` or an earlier ``Set-Location``. ``to_local`` converts an
+    aware datetime to local time (default: the zone of this machine).
     With ``skill``, a report whose summary is of another skill is an error.
     """
+    local = to_local or _machine_local
     lines = read_text(report, "report").splitlines()
     first = lines[0] if lines else ""
     match = SUMMARY_LINE.match(first)
@@ -469,6 +652,7 @@ def check(report: Path, skill: str | None = None
             "'<!-- ush:summary <absolute path of the summary file> -->'"
         )
     # Code blocks are paste-ready commands: no markers and no reported numbers.
+    blocks = _code_blocks(lines)
     fenced = _fenced_lines(lines)
     # Before the summary path: a comment after the marker would end up in the path.
     _reject_html(lines, fenced)
@@ -480,6 +664,7 @@ def check(report: Path, skill: str | None = None
     summary = read_json(summary_path, "summary file")
     profile = summary_profile(summary, skill)
 
+    style = command_problems(lines, blocks)
     visible = [("" if index in fenced else line) for index, line in enumerate(lines)]
     lines = visible
 
@@ -509,6 +694,13 @@ def check(report: Path, skill: str | None = None
         allowed |= json_values(item, profile.skip_keys)
         backed_words |= json_words(item, profile.skip_keys, number_word)
 
+    times = json_times(summary, profile.skip_keys)
+    texts = json_strings(summary, profile.skip_keys)
+    for item in detail_items(summary, ids, profile) if ids else []:
+        times |= json_times(item, profile.skip_keys)
+        texts |= json_strings(item, profile.skip_keys)
+    texts = frozenset(text for text in texts if "UTC)" in text)
+
     known_ids = item_ids(summary, profile) | set(ids)
 
     in_order = _heading_numbers(lines)
@@ -527,6 +719,8 @@ def check(report: Path, skill: str | None = None
             position = row = 0
         if NOT_CHECKED_LINE.match(line) or DETAIL_LINE.match(line):
             continue
+        line, found = time_problems(line, number, times, local, texts)
+        style += found
         words += [f'line {number}: "{word}" is a number word; write the number in digits'
                   for word in number_word.findall(strip_inline_code(line))
                   if word.lower() not in backed_words]
@@ -551,7 +745,7 @@ def check(report: Path, skill: str | None = None
     missing += [f"not named in the report: {item_id} ({where})"
                 for item_id, where in required_ids(summary, profile)
                 if item_id not in mentioned]
-    return problems, checked, missing, words
+    return problems, checked, missing, words, style
 
 
 def required_ids(summary, profile: Profile) -> list[tuple[str, str]]:
@@ -568,10 +762,14 @@ def required_ids(summary, profile: Profile) -> list[tuple[str, str]]:
 def item_ids(summary, profile: Profile) -> set[str]:
     """Ids of the summary's items, and of the items cut from it.
 
-    For each entry {list, prefix, count_key} of the profile's ``truncated``,
-    the cut items are <prefix><N+1>...<prefix><N+C>, N being the number of
-    items in that list of the summary and C the value of the summary key
-    ``count_key``; the report is told to mention them.
+    Ids are stable between runs: an id is a number kept for the item, not its
+    position in a list, so the id of a cut item does not follow from the list.
+    For each entry {list, prefix, count_key} of the profile's ``truncated``
+    whose summary key ``count_key`` is above 0, the known cut ids are every
+    ``id`` with that prefix in the ``profile.detail_sections`` of the detail
+    file (``detail_file``). A missing ``detail_file``, a missing file or an
+    unreadable one is then a CheckError naming the file, whatever the report
+    mentions. An entry with a count of 0 or none does not read the detail file.
     """
     found: set[str] = set()
     stack = [summary]
@@ -583,13 +781,17 @@ def item_ids(summary, profile: Profile) -> set[str]:
             stack.extend(item.values())
         elif isinstance(item, list):
             stack.extend(item)
+    by_id = None
     for entry in profile.truncated if isinstance(summary, dict) else ():
-        items = dotted(summary, entry["list"])
         truncated, prefix = summary.get(entry["count_key"]), entry["prefix"]
-        if (isinstance(items, list) and isinstance(truncated, int)
-                and not isinstance(truncated, bool)):
-            found.update(f"{prefix}{n}"
-                         for n in range(len(items) + 1, len(items) + truncated + 1))
+        if not (isinstance(truncated, int) and not isinstance(truncated, bool)
+                and truncated > 0):
+            continue
+        if by_id is None:
+            _, by_id = detail_by_id(
+                summary, profile, f"{entry['count_key']} is {truncated}")
+        found.update(item_id for item_id in by_id
+                     if item_id.startswith(prefix) and item_id[len(prefix):].isdigit())
     return found
 
 
@@ -626,7 +828,12 @@ def _indent(line: str) -> int:
 
 
 def _fenced_lines(lines: list[str]) -> set[int]:
-    """Indices of the lines of fenced code blocks, the fences included.
+    """Indices of the lines of fenced code blocks, the fences included."""
+    return {index for start, end in _code_blocks(lines) for index in range(start, end + 1)}
+
+
+def _code_blocks(lines: list[str]) -> list[tuple[int, int]]:
+    """(opening fence index, closing fence index) of every fenced code block.
 
     CommonMark fence rules: a fence line starts with at most 3 spaces, then at
     least 3 backticks or 3 tildes. A backtick opening line with a backtick in
@@ -640,7 +847,7 @@ def _fenced_lines(lines: list[str]) -> set[int]:
     fence at another indent is an error, since a renderer may close the block
     there and show the lines after it.
     """
-    fenced: set[int] = set()
+    blocks: list[tuple[int, int]] = []
     fence, opened_at, indent = None, 0, 0
     for index, line in enumerate(lines):
         match = FENCE.match(line)
@@ -669,12 +876,10 @@ def _fenced_lines(lines: list[str]) -> set[int]:
                     f"the closing fence at exactly the indent of the opening fence"
                 )
             fence = None
-            fenced.add(index)
-        if fence is not None:
-            fenced.add(index)
+            blocks.append((opened_at, index))
     if fence is not None:
         raise CheckError(f"code block opened at line {opened_at + 1} is never closed")
-    return fenced
+    return blocks
 
 
 def _marker_fence(line: str) -> bool:
@@ -786,7 +991,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv=None) -> int:
+def main(argv=None, to_local=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if bool(args.report) == bool(args.latest):
@@ -806,11 +1011,11 @@ def main(argv=None) -> int:
             report = latest_report(data_dir, args.skill)
         else:
             report = Path(args.report).absolute()
-        problems, checked, missing, words = check(report, args.skill)
+        problems, checked, missing, words, style = check(report, args.skill, to_local)
     except CheckError as exc:
         print(f"FAILED: {exc}", file=sys.stderr)
         return EXIT_ERROR
-    for line in problems + words + missing:
+    for line in problems + words + missing + style:
         print(line)
     if problems:
         print(f"FAILED: {report}: {len(problems)} of {checked} numbers are not backed by the JSON")
@@ -822,7 +1027,9 @@ def main(argv=None) -> int:
     if len(missing) > missing_keys:
         print(f"FAILED: {report}: {len(missing) - missing_keys} summary items not named "
               f"in the report")
-    if problems or words or missing:
+    if style:
+        print(f"FAILED: {report}: {len(style)} style problems")
+    if problems or words or missing or style:
         return EXIT_NUMBERS
     print(f"OK: {report}: {checked} numbers checked")
     return EXIT_OK

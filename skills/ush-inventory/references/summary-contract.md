@@ -20,7 +20,7 @@ contract):
   `comparison` and the full lists `programs`, `autostart`, `components`,
   `drivers`, `additions` and `changes` (never truncated), with the same ids
   as the summary, plus `hosts_file` (with `raw_dir`, `expanded_dir` and
-  `path`) and `current_sid`. It also holds what the summary leaves out: the
+  `path`), `current_sid` and `drivers_without_inf_items` (see "Drivers"). It also holds what the summary leaves out: the
   programs, autostart entries, drivers, firewall rules and certificates
   that are part of Windows, the entries with `own: null`, the components
   that are not listed, the changes of own items, the fields the summary
@@ -45,15 +45,30 @@ did not make the summary fit:
 
 | Stage | List | Count key | Cut first |
 |---|---|---|---|
-| 1 | `programs`, down to the 20 newest (all of them when there are fewer) | `truncated` | programs without an install date, then the oldest installs |
-| 2 | `drivers` | `truncated_drivers` | the end of the provider order |
-| 3 | `components` | `truncated_components` | capabilities (they follow the features), then features, each from the end of the name order |
-| 4 | `additions` | `truncated_additions` | the items without a change block, from the end of their group, then the items with one (see "Additions") |
-| 5 | `programs`, below the 20 newest | `truncated` | as in stage 1 |
+| 1 | `programs`, down to the 20 newest (`PROGRAMS_MIN`) | `truncated` | programs without an install date, then the oldest installs |
+| 2 | `drivers`, down to the first 10 (`DRIVERS_MIN`) | `truncated_drivers` | the end of the driver order (`Display` drivers lead it) |
+| 3 | `components`, down to the first 10 (`COMPONENTS_MIN`) | `truncated_components` | capabilities (they follow the features), then features, each from the end of the name order |
+| 4 | `additions`, down to the first 10 (`ADDITIONS_MIN`) | `truncated_additions` | the items without a change block, from the end of their group, then the items with one (see "Additions") |
+| 5 | `drivers`, below the first 10 | `truncated_drivers` | as in stage 2 |
+| 6 | `components`, below the first 10 | `truncated_components` | as in stage 3 |
+| 7 | `additions`, below the first 10 | `truncated_additions` | as in stage 4 |
+| 8 | `programs`, below the 20 newest | `truncated` | as in stage 1 |
+
+Stages 1 to 4 keep a short list of each: a list with fewer items than its
+minimum keeps them all.
 
 Each count key is always in the summary, `0` when nothing was cut. The
-detail file keeps every item, with ids that follow the last one in the
-summary. `autostart` and `changes` are never cut. When the summary does not
+detail file keeps every item; the id of a cut item is its stable number
+(see "Ids" below), not a position after the last one in the summary, so only
+the detail file gives it: `inventory.py --cut [--detail-file <path>]` lists
+the cut items as `{id, list, name}` (the ids in the detail file's `listed`
+that the summary of `summary_file` does not hold) without starting any
+machine job, and `--detail <id>` fetches one. The detail file's `listed` is
+`{list: [id, ...]}`, the ids of the listable items of `programs`,
+`autostart`, `components`, `drivers` and `additions` before the cut (own
+items are never in it), and `summary_file` is the summary of the same run.
+A detail file without `listed` or `summary_file`, or a summary that cannot be
+read, makes `--cut` exit 1 with the missing field or file on stderr. `autostart` and `changes` are never cut. When the summary does not
 fit even with all four lists empty, nothing is cut (every count is `0`),
 the summary goes out over the limit and `not_checked` gets the item
 `summary budget`.
@@ -74,8 +89,9 @@ the summary goes out over the limit and `not_checked` gets the item
 | `file_facts` | for every target file of the autostart entries: the expanded path, whether it exists, its Authenticode status, signer and company | no items: the `facts` of the entries |
 | `optional_features` | `Win32_OptionalFeature` (no administrator rights needed) | components (`feature`) |
 | `capabilities` | `Get-WindowsCapability -Online`, only with administrator rights; without them the job is not run and the source is `unreadable` with the reason `requires administrator rights (not read in this run, which is not elevated); this is not an empty list` | components (`capability`) |
-| `drivers` | `Win32_PnPSignedDriver`, one row per device; a row without `InfName` (a device without a driver) is no item, only counted in `component_counts.drivers_without_inf` | drivers |
+| `drivers` | `Win32_PnPSignedDriver`, one row per device; a row without `InfName` is no item: `drivers_without_inf` counts the `Win32_PnPSignedDriver` rows without an INF file (for example software devices, or a device without a driver), not device state; device state is measured by `ush-health` | drivers |
 | `firewall_rules` | the rule values of three `FirewallRules` keys under `HKLM`: `local` (`SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules`), `app_iso` (`...\FirewallPolicy\RestrictedServices\AppIso\FirewallRules`, rules of Store apps) and `policy` (`SOFTWARE\Policies\Microsoft\WindowsFirewall\FirewallRules`) | additions (`firewall_rule`) |
+| (job `firewall_apps`, not a source) | the `App` values (text only, not `System`, not empty) of all rules, own ones included, in `work/inventory-<stamp>.firewall_apps.input.json`; each is expanded with `[Environment]::ExpandEnvironmentVariables` and checked with `Get-Item -LiteralPath -Force` in the context of the running account. Not run when no rule has such a value. A failed job, or no rows for a non-empty input, is a `not_checked` item `firewall_apps` | the `app_exists` of the rules |
 | `root_certificates` | the thumbprint subkeys of five physical root stores in the registry: `machine_root` (`HKLM\SOFTWARE\Microsoft\SystemCertificates\ROOT`), `machine_policy` (`HKLM\SOFTWARE\Policies\Microsoft\SystemCertificates\Root`), `enterprise` (`HKLM\SOFTWARE\Microsoft\EnterpriseCertificates\Root`), `user_root` (`HKCU\Software\Microsoft\SystemCertificates\Root`), `authroot` (`HKLM\SOFTWARE\Microsoft\SystemCertificates\AuthRoot`); subject, issuer, dates and serial number from `Cert:` | additions (`root_certificate`) |
 | `hosts` | the `hosts` file in the folder of `HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\DataBasePath` (a missing value fails the job; a missing file is read and holds no entries) | additions (`hosts_entry`), `hosts_file` |
 | `administrators` | the members of Administrators (`S-1-5-32-544`) by `Get-LocalGroupMember`, with `Enabled` from `Get-LocalUser` for local and Microsoft accounts; when `Get-LocalGroupMember` fails, ADSI. The source entry has `method`: `local_group_member` or `adsi` (`null` when the job gave nothing) | additions (`administrator`) |
@@ -140,14 +156,14 @@ Besides the shared fields (`schema_version`, `skill` = `"ush-inventory"`,
 | Field | Type | Meaning |
 |---|---|---|
 | `elevated` | bool | the run had administrator rights; it then reads and writes the elevated baseline |
-| `baseline` | object | shared contract, "Baseline": `status` (`none`, `compared`, `unreadable`), `created_at`, `age_days`, `saved`, `reason` |
+| `baseline` | object | shared contract, "Baseline": `status` (`none`, `compared`, `unreadable`), `created_at`, `age_days`, `saved`, `reason`, `reference` (`latest` or the `--compare-to` value, e.g. `7d`) and `reference_file` (the history copy compared with, or `null`). `created_at` and `age_days` are those of the state compared with |
 | `comparison` | object | per item source (`win32_programs`, `msix_programs`, `run_keys`, `startup_folders`, `scheduled_tasks`, `services`, `optional_features`, `capabilities`, `drivers`, `firewall_rules`, `root_certificates`, `hosts`, `administrators`, `defender_exclusions`): `compared`, `no_baseline` or `not_read` (shared contract). A source added to the skill after the baseline was made is `no_baseline` on the first run |
 | `truncated_drivers`, `truncated_components`, `truncated_additions` | int | the items cut from `drivers`, `components` and `additions` (see "Files and output"), `0` when none |
-| `programs` | list | the programs with `own: false`, newest `install_date` first, no date last, then by name; ids `a..`. Each item is without `install_location`, `source` and `own` (in the detail file). Cut to the budget (`truncated`) |
+| `programs` | list | the programs with `own: false`, newest `install_date` first, no date last, then by name; ids `a..`. Each item is without `install_location`, `source` and `own` (in the detail file). A program that has `per_user_pair` is installed more than once by the same publisher: see "Install pairs". Cut to the budget (`truncated`) |
 | `autostart` | list | the autostart entries with `own: false`, by source and key; ids `s..`. Never cut. `approved_raw` and `display_name` are left out, and each fact is without `company`, and without `expanded_path` when it equals `path` (all in the detail file) |
 | `components` | list or `null` | the listed components: features with `state` `enabled` and capabilities with `state` `Installed`, features first, each by name; ids `f..`. Each item has only `id`, `key`, `kind` (`feature`, `capability`), `name` and `state`. `null` when neither `optional_features` nor `capabilities` was read. Cut to the budget (`truncated_components`) |
-| `component_counts` | object | `feature`: `{enabled, disabled, absent, <any other state>, unread}` counts of all features (`enabled`, `disabled` and `absent` always present; `unread` counts `state` `null`), or `null` when `optional_features` was not read; `capability`: `{<state>: number, ..., unread}` of all capabilities, or `null` when `capabilities` was not read; `drivers_without_inf`: the rows of `Win32_PnPSignedDriver` without `InfName` (devices without a driver), or `null` when `drivers` was not read |
-| `drivers` | list or `null` | the drivers whose `own` is not `true` (a third-party `.inf`, or unknown), by `provider`, then `device_name`, `null` last; ids `d..`. Each item has only `id`, `key`, `device_name`, `class`, `provider`, `version`, `date` and `signer`. `null` when `drivers` was not read. Cut to the budget (`truncated_drivers`) |
+| `component_counts` | object | `feature`: `{enabled, disabled, absent, <any other state>, unread}` counts of all features (`enabled`, `disabled` and `absent` always present; `unread` counts `state` `null`), or `null` when `optional_features` was not read; `capability`: `{<state>: number, ..., unread}` of all capabilities, or `null` when `capabilities` was not read; `drivers_without_inf`: the number of `Win32_PnPSignedDriver` rows without an INF file (for example software devices, or a device without a driver), not device state; device state is measured by `ush-health`; `null` when `drivers` was not read. The rows themselves are `drivers_without_inf_items` of the detail file |
+| `drivers` | list or `null` | the drivers whose `own` is not `true` (a third-party `.inf`, or unknown), the classes of `DRIVER_CLASSES_FIRST` (`Display`, case-insensitive) first, then by `provider`, then `device_name`, `null` last; ids `d..`. Each item has only `id`, `key`, `device_name`, `class`, `provider`, `version`, `date` and `signer`. `null` when `drivers` was not read. Cut to the budget (`truncated_drivers`) |
 | `additions` | list or `null` | the items of the five added-to-the-system sources whose `own` is not `true`: first those with a change block, then those without, each group by kind in this order: `administrator`, `defender_exclusion`, `root_certificate`, `firewall_rule`, `hosts_entry`; ids `x..` (see "Additions"). `null` when none of the five sources was read. Cut to the budget (`truncated_additions`) |
 | `hosts_file` | object | `{exists, path_is_default}` and, when any is `null`, `unread_fields` naming it (see "hosts_file") |
 | `own_counts` | object | `programs`: the number of programs with `own: true`; `autostart`: `{kind: number}` of the entries with `own: true`, per `kind`; `unknown`: the number of entries with `own: null`; `drivers`: the drivers with `own: true` (`null` when not read); `firewall_rules`: `{local, app_iso, policy}` numbers of rules with `own: true` per store (`null` when not read); `root_certificates`: the certificates with `own: true` (`null` when not read) |
@@ -155,10 +171,19 @@ Besides the shared fields (`schema_version`, `skill` = `"ush-inventory"`,
 | `own_changes` | object | `{added, removed, changed, by_source}`: the counts of the changes of items that are own on every side they have; those changes are only in the detail file. `by_source` is `{<source>: {added, removed, changed}}` for every item source of `comparison`, zeros included, so the model can say which source they came from (e.g. firewall rules after an update) |
 
 Ids: `a..` programs, `s..` autostart entries, `f..` components, `d..`
-drivers, `x..` additions, `c..` changes. Each list is
-numbered with its listed items first and the items that are only in the
-detail file after them, so the summary has `a1`, `a2`, ... without a gap,
-and a detail-only item has an id after the last one of its list.
+drivers, `x..` additions, `c..` changes. The numbers of `a`, `s`, `f`,
+`d` and `x` are stable between runs (shared contract, "Ids and --detail"):
+the number is not the item's position in its list, so the summary may have
+gaps (`a1`, `a5`, ...) and the id of an item that is only in the detail file
+does not follow from the list. The map from an item's `key` to its number
+is kept in `<data dir>/state/ush-inventory.ids.json` (the same file for a run
+with and without administrator rights); a new item takes a number higher than
+any given before, and the number of an item that went away is not given
+again. A map that cannot be read starts the numbering again and gives a
+`stable ids` item in `not_checked`; a map that is not saved gives
+`stable ids save`; items whose key came twice in one run get ids kept for that
+run only and a `stable ids <letter>` item. The changes `c` are numbered by
+position in each run.
 
 ### Programs (`a..`)
 
@@ -166,6 +191,7 @@ and a detail-only item has an id after the last one of its list.
 |---|---|
 | `key`, `source` | the item key and its source (`win32_programs`, `msix_programs`); `source` only in the detail file |
 | `own` | `true` only for an MSIX app whose `signature_kind` is listed in `windows-own.json`; always `false` for a Win32 program. Only in the detail file (a summary program is always not own) |
+| `per_user_pair` | list of `{id, name}`, sorted by the number in `id` (`a2` before `a10`): the other installs of the same program, with the same name and the same publisher (see "Install pairs"). Absent when the program has no pair, and on every program when `per_user_suffixes.json` could not be used |
 | `name`, `version`, `publisher` | as read; for MSIX `publisher` is the `O=` value of the package `Publisher`, else its `CN=` value |
 | `install_date` | `YYYY-MM-DD` or `null`. Win32: the registry `InstallDate` when it is `YYYYMMDD`; any other format or no value is `null`, never a guessed date. MSIX: PowerShell 5.1 has no install date, so this is the UTC creation date of the `InstallLocation` folder, which is the install **or the last update** of the current version; `null` when the folder is not there. Not compared |
 | `install_location` | the program's folder, or `null`. Only in the detail file |
@@ -173,6 +199,25 @@ and a detail-only item has an id after the last one of its list.
 | `system_component` | Win32 only: `true` when `SystemComponent` = 1 (hidden in Settings), otherwise `false` |
 | `signature_kind` | MSIX only: `Store`, `System`, `Developer` and so on, as read |
 | `from_baseline` | `true` when the subkey could not be opened in this run and the item is the previous baseline's (see "Values not read") |
+
+#### Install pairs
+
+`data/per_user_suffixes.json` is a list of non-empty strings: the name
+suffixes of an install for one user (`" (User)"`). A program whose `name`,
+without one of these suffixes at its end, equals the `name` of another
+program (case-insensitive) with the same publisher gets `per_user_pair` with
+every such program, and each of them gets `per_user_pair` with it. The
+publishers are compared without surrounding spaces and case-insensitively; a
+program with an empty or `null` `publisher` gets no pair, and programs of
+different publishers are no pair even with the same name. So `Microsoft Visual Studio Code`
+and `Microsoft Visual Studio Code (User)` name each other, and an `(User)`
+entry lists both copies of a program installed in `hklm64` and in `hklm32`.
+Programs whose names differ in anything else (e.g. the `(x64)` and `(x86)`
+redistributables) are no pair. The partner's `name` is in the field because
+the partner may be own or cut from the summary. A missing file, invalid JSON
+or anything other than a list of non-empty strings gives the `not_checked`
+item `per_user_suffixes.json`, and no program has the field: that means "not
+checked", not "no pairs".
 
 ### Autostart entries (`s..`)
 
@@ -255,6 +300,14 @@ A `removed` driver is a device that is not present now (unplugged, turned
 off, or given another driver), not a driver that was uninstalled; `added`
 is a device that appeared.
 
+`drivers_without_inf_items` (detail file only) lists the `Win32_PnPSignedDriver`
+rows without an INF file (for example software devices, or a device without a driver; not device state,
+which `ush-health` measures), one `{device_name, class}` per row
+(`DeviceName`, `DeviceClass`; no device id),
+so the report can explain why this number differs from the device problems
+of `ush-health`. `null` when `drivers` was not read, `[]` when it was read and
+every row has an INF file.
+
 ### Additions (`x..`)
 
 Every item has `id`, `key` and `kind`. In the summary a `firewall_rule`
@@ -262,7 +315,9 @@ keeps only `store`, `name`, `action`, `dir`, `active`, `protocol`,
 `protocol_name`, `lport` and `app`, and a `root_certificate` only `store`,
 `subject` (cut to 120 characters), `not_after`, `self_signed` and
 `in_authroot`, plus `windows_first_run` when the certificate has that field;
-the other kinds keep every field but `own` and `source`.
+both keep `app_exists` (rules) and `no_block_reason` only when the item has
+that field (never as a `null` placeholder); the other kinds keep every field
+but `own` and `source`.
 `unread_fields` is kept when there are any. The detail file has every field
 (plus `source` and `own`).
 
@@ -275,8 +330,23 @@ thumbprint is also in another root store; a `defender_exclusion` with an
 `origin` other than `local` (`null` included) or read under a `method` other
 than `preference`. An `administrator` is always in the first group, even one
 the "Rules" of `SKILL.md` forbid removing: members are few and stay listed.
-Each group is ordered by kind, then within a kind; the ids follow that
-order, so a cut to the budget takes the second group first, from its end.
+Every listed item of the second group has `no_block_reason`, the code of the
+first condition that holds, in this order:
+
+| `no_block_reason` | Condition |
+|---|---|
+| `store_app_iso` | a `firewall_rule` in the store `app_iso` |
+| `store_policy` | a `firewall_rule` in the store `policy` |
+| `cert_other_store` | a `root_certificate` in a store other than `machine_root` and `user_root` |
+| `cert_in_authroot` | a `root_certificate` with `in_authroot` `true` |
+| `cert_in_several_stores` | a `root_certificate` whose thumbprint is also in another root store |
+| `defender_origin` | a `defender_exclusion` with `origin` other than `local` (`null` included) |
+| `defender_method` | a `defender_exclusion` read under a `method` other than `preference` |
+
+An item of the first group (and an own item) has no `no_block_reason`.
+Each group is ordered by kind, then within a kind; a cut to the budget
+takes the second group first, from its end (the ids are stable numbers, not
+places in this order).
 Within a kind the order is: `administrator` by
 `name`; `defender_exclusion` by `value`; `root_certificate` by `subject`,
 then `thumbprint`; `firewall_rule` by `store`, then `name`; `hosts_entry`
@@ -290,6 +360,7 @@ breaks ties).
 | `name`, `object_class`, `principal_source` | as `Get-LocalGroupMember` gives them (`object_class` is in the system language). Under `method: adsi`: `name` from the ADSI path, `principal_source` `null`, both in `unread_fields` |
 | `enabled` | from `Get-LocalUser` for a member with `principal_source` `Local` or `MicrosoftAccount`. `null` without `unread_fields` when `Get-LocalUser` found no user with the SID (a group) or the member is of another source; `null` in `unread_fields` when `Get-LocalUser` failed otherwise, or under `method: adsi` for an `object_class` `User` |
 | `is_current` | the member's SID is the running account's (`current_sid` of the detail file); `null` in `unread_fields` when `current_sid` was not read |
+| `builtin` | `true` for the built-in Administrator account (a SID starting with `S-1-5-21-` and ending with `-500`), else `false`; never `null` (a member without a SID is no item) |
 
 `defender_exclusion`:
 
@@ -322,7 +393,9 @@ and in `unread_fields`.
 | `store` | `local`, `app_iso` or `policy` |
 | `action`, `dir`, `active`, `lport`, `rport`, `app`, `svc`, `name`, `profile`, `embed_ctxt` | the rule text's `Action`, `Dir`, `Active`, `LPort`, `RPort`, `App`, `Svc`, `Name`, `Profile`, `EmbedCtxt` as text; a key that appears more than once gives a list, a missing key `null` |
 | `protocol`, `protocol_name` | `Protocol` as a number, and `TCP` (6) or `UDP` (17), else `null` |
+| `lport2` | the values of every other key of the rule text that starts with `LPort` (`LPort2_10`, `LPort2_20`, ...), in key order and in value order within a key, as a list of text; `null` when there is none. Detail file only, not compared |
 | `version` | the rule text's version (`v2.xx`, detail file only) |
+| `app_exists` | only on a rule whose `app` is not `null`, empty or `System` (any case): `true` when the job `firewall_apps` found a file at the expanded path, `false` only when `Get-Item` said "not found" and listing the parent folder confirms it (Windows PowerShell 5.1 also says "not found" for a file in a folder the account may not read, which gives `null`) (no file at this path in the profile of the running account; a path into another account's profile can give `false`). `null` in `unread_fields` when `app` is a list (the key repeated), the job failed or gave no row for the value, the expanded value still holds a `%` (a variable this account does not know; a raw `%SystemRoot%` is fine), the path is not on a local drive (UNC paths and network drives are not checked, so nothing leaves the machine), or `Get-Item` failed otherwise (e.g. access denied in `WindowsApps`). Not compared |
 
 A value that is not a `v2.` rule text has every field `null` and
 `unread_fields` `["rule"]` plus every compared field (`action`, `dir`,
@@ -387,8 +460,9 @@ is not compared on its own, only through `enabled`: `not_set` becoming
 
 Not compared in a run: `facts` when `file_facts` was not read (or either
 side has `facts` in `unread_fields`); `program` when `win32_programs` or
-`msix_programs` was not read; any field that either side names in
-`unread_fields`. A plain `program: null` (no match) is not unread and is
+`msix_programs` was not read, and with `--compare-to` when a program
+subkey was taken from the history copy (see below); any field
+that either side names in `unread_fields`. A plain `program: null` (no match) is not unread and is
 compared.
 
 ## approved
@@ -525,11 +599,30 @@ case:
   `service:<full name>`; the template (the name without its `_<hex>`
   ending) when the baseline has `service:<template>` with `user_service`
   `true`; the full name when the baseline has `service:<template>`
-  otherwise; the template when the name ends in `_` and at least 5 hex
-  digits (e.g. `_1a2b3`, not `_1` or `_64`); else the full name. With the
-  template's entry in the baseline any `_<hex>` ending is enough.
+  otherwise; when the previous baseline has neither key, the same three
+  rules with the state compared with (the history copy with `--compare-to`);
+  the template when the name ends in `_` and at least 5 hex digits (e.g.
+  `_1a2b3`, not `_1` or `_64`); else the full name. With the template's
+  entry in either baseline any `_<hex>` ending is enough.
 
 An entry with `from_baseline: true` keeps its previous `facts` and `own`.
+
+With `--compare-to` the run compares with a history copy, not with the latest
+baseline these values come from, so a value taken from the latest baseline is
+not compared: an item with `from_baseline: true` can be `added` (its key was
+seen in this run) but never `changed`; `approved` and `enabled` taken from the
+baseline because `startup_approved` was not read are no change; and a fact
+taken from the baseline (`facts_from_baseline`) is not compared for its
+target. A program subkey, a Startup shortcut or a task seen in this run but
+not read, which the latest baseline lacks (or which cannot come from it
+because it could not be read), is taken for the comparison from the history
+copy as if `from_baseline: true`: it is never `removed` or `changed`. When
+such an item is a program subkey (`win32_programs`), every
+autostart entry has `program` unread in the comparison: the targets were
+matched to the programs of this run, which lack it, so a `program` that
+differs from the history copy is no change. The
+saved baseline and the lists keep these values as without the flag (such an
+item stays left out of them).
 
 ## not_checked items of ush-inventory
 
@@ -541,10 +634,17 @@ Besides one item per `unreadable` source (`what` = the source name):
 | `win32_programs key <hive>:<subkey>`, `startup_folders <key>`, `scheduled_tasks <key>`, `services <name>`, `file_facts <target>` | one item could not be read (see "Values not read") |
 | `startup_approved <hive>\<key>:<name>` | a `StartupApproved` value that is not binary |
 | `autostart facts` | entries with `own: null`; the reason gives their number |
+| `per_user_suffixes.json` | the suffix file could not be used; no program has `per_user_pair` (see "Install pairs") |
 | `windows-own.json` | the data file could not be used; nothing is own except a certificate trusted by a decision kept in `state/ush-inventory.first-run.json` |
 | `first-run certificates` | `ush-inventory.first-run.json` could not be read (nothing is decided or written; deleting the file starts a new first run), or a new decision could not be saved (it applies to this run only); the reason names the file |
-| `baseline` | the baseline could not be read; it is kept as `.unreadable-<stamp>.json` |
+| `baseline` | the baseline could not be read; it is kept as `.unreadable-<stamp>.json`. Without `--compare-to`: "the baseline could not be read, so nothing was compared"; with it: "the latest baseline could not be read; sources not read in this run keep nothing (the file is kept)", and the comparison with the history copy still takes place |
+| `reference baseline` | with `--compare-to`: "the reference baseline <file> could not be read, so nothing was compared" (`baseline.status` `unreadable`) |
+| `baseline history` | "history not kept: ...": this run's baseline could not be copied to `state/history/`; "the day copy was kept, but old copies were not removed: ...": the copy was made and only older copies stay past 31 days; `baseline.saved` is not changed by either |
 | `baseline save` | this run's baseline was not saved (`baseline.saved` `false`) |
+| `stable ids` | `state/ush-inventory.ids.json` could not be read, so the numbering started again; the file is kept as `.unreadable-<stamp>.json` when the new map is saved |
+| `stable ids save` | the id map was not saved; this run's ids hold, the next run may give other ones (when the reason starts with "the id map was saved", only its previous copy was not replaced and the next run keeps these ids) |
+| `stable ids <letter>` | items whose `key` came twice in this run; the later ones got ids kept for this run only, named in the reason |
 | `<source> without <field>` | rows without their key field (`optional_features without Name`, `capabilities without Name`, `drivers without DeviceID`, `firewall_rules without value name`, `root_certificates without thumbprint`, `administrators without SID`); the reason gives their number |
 | `defender_exclusions origin` | the policy exclusion keys could not be read, so every exclusion has `origin` `null` |
+| `firewall_apps` | the job failed, returned no rows for N programs, or returned no row for some of them; those rules have `app_exists` `null` |
 | `summary budget` | the summary is over the budget even with the four cut lists empty |
