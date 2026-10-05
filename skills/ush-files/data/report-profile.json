@@ -1,0 +1,17 @@
+{
+  "detail_sections": ["folders", "large_files", "changes", "cleanup", "unreadable"],
+  "id_letters": "fldc",
+  "path_keys": ["summary_file", "detail_file", "path", "paths", "unreadable_key",
+                "parent_key", "block", "reference_file",
+                "skipped_key", "expanded_paths"],
+  "id_keys": ["id", "item"],
+  "required_lists": ["changes", "cleanup", "large_files"],
+  "truncated": [
+    {"list": "folders", "prefix": "f", "count_key": "truncated_folders"},
+    {"list": "large_files", "prefix": "l", "count_key": "truncated_large_files"},
+    {"list": "changes", "prefix": "d", "count_key": "truncated_changes"}
+  ],
+  "required_keys": ["drives", "folders", "large_files", "changes", "cleanup", "sources",
+                    "baseline"],
+  "report_prefix": "files-"
+}
