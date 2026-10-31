@@ -124,6 +124,12 @@ class TestManifest(unittest.TestCase):
                 self.assertIsNotNone(front, "SKILL.md has no front matter")
                 names = re.findall(r"(?m)^name:\s*(\S+)\s*$", front.group(1))
                 self.assertEqual(names, [directory.name])
+                # A plain YAML scalar must not hold ": " or " #", or the front matter
+                # fails to parse and Claude Code drops the skill.
+                for value in re.findall(r"(?m)^[a-z-]+:\s*(.*)$", front.group(1)):
+                    if not value.startswith(('"', "'")):
+                        self.assertNotIn(": ", value, "unquoted ': ' in the front matter")
+                        self.assertNotIn(" #", value, "unquoted ' #' in the front matter")
 
 
 class TestSkillPaths(unittest.TestCase):
