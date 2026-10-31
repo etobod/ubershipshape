@@ -182,6 +182,15 @@ class TestSkillPaths(unittest.TestCase):
                     r"(?ms)^\d+\. Tell the user where the report is.*?(?=^\d+\. |^## |\Z)", text)
                 self.assertEqual(len(steps), 1, "one step tells where the report is")
                 self.assertIn("absolute path of the report file", " ".join(steps[0].split()))
+                # A refused write to the data folder: ask for the exception, else stop.
+                flat = " ".join(text.split())
+                for phrase in ("writing a file to the data folder is refused",
+                               "ask the user whether to add the data folder as an exception",
+                               "`permissions.additionalDirectories`",
+                               "`.claude/settings.local.json`",
+                               "stop the skill",
+                               "Never write the file another way"):
+                    self.assertIn(phrase, flat)
         rule = " ".join(read(SKILLS / "ush-common/references/repair-plan.md").split())
         self.assertRegex(
             rule, r"Set-Location[^.]*older plugin version[^.]*\.[^.]*current plugin root")

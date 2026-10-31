@@ -19,6 +19,16 @@ The references write these two folders as `<plugin root>` and
 `<plugin data>`: fill them in from the two lines above. A block for the user
 starts with `Set-Location "<absolute plugin root>"`, the plugin root above.
 
+If writing a file to the data folder is refused (a hook or a permission
+rule blocks the Write or Edit tool), stop there and ask the user whether to
+add the data folder as an exception: its absolute path in
+`permissions.additionalDirectories` of the current project's
+`.claude/settings.local.json` (create the file or the key when missing and
+keep every other entry), unless the refusal names another place that
+counts. Only on a yes add it and write the file again; on a no, or without
+an answer, stop the skill and tell the user that nothing was saved and why.
+Never write the file another way (a shell command, another folder).
+
 ## When to use
 
 - The user asks to review the event logs, or what the logs say.
