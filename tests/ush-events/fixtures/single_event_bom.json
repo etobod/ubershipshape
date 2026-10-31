@@ -1,0 +1,1 @@
+﻿{"ProviderName": "Invented-Storage-Provider", "Id": 129, "Level": 3, "LogName": "System", "RecordId": 4711, "TimeCreated": "2026-09-18T09:15:30.1234567+02:00", "Message": "Reset to device, ‎\\Device\\RaidPort0, was issued at ‎18.‎09.‎2026.", "Properties": ["\\Device\\RaidPort0", "0"]}

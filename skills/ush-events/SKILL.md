@@ -1,0 +1,311 @@
+---
+name: ush-events
+description: Review the Windows System and Application event logs of the last 30 days and write a report of recurring errors, crashes (bugchecks), unexpected shutdowns, boot sessions, the daily stability index of the Reliability Monitor, memory dumps linked to their bugchecks, and known noise. Use when the user asks to check the event logs, why the machine crashed, restarted or froze, about memory dumps (minidumps, MEMORY.DMP, whether a crash left a dump, archiving or cleaning up dumps), to export or back up the System or Application log to an .evtx file, to clear (empty) one of those logs, or for a general health check of this Windows machine. Read-only by default.
+---
+
+# ush-events
+
+Reads the `System` and `Application` event logs and the Reliability Monitor
+(stability index and records, through WMI) without elevation, lets a script
+count and group them, and writes a Markdown report for the user.
+The script counts; you judge and write; the user decides what to act on.
+
+## Plugin paths
+
+- Plugin root: `${CLAUDE_PLUGIN_ROOT}`
+- Data folder: `${CLAUDE_PLUGIN_DATA}`
+
+The references write these two folders as `<plugin root>` and
+`<plugin data>`: fill them in from the two lines above. A block for the user
+starts with `Set-Location "<absolute plugin root>"`, the plugin root above.
+
+## When to use
+
+- The user asks to review the event logs, or what the logs say.
+- The user asks about a crash, blue screen, sudden restart, freeze or a
+  device that stopped working, and wants to see what Windows recorded.
+- As part of a general health check of this machine.
+- The user asks about memory dumps: whether a crash left one, where they
+  are, or to archive them (optionally removing the originals).
+- The user asks to export (back up) the `System` or `Application` log, or
+  to clear one of them.
+
+Not for: the `Security` log, analysing a dump's content (no debugger),
+trends over months. Say so if the user asks
+for these.
+
+## Rules
+
+- **Read-only by default.** `events.py` and `dumps.py` without flags change
+  nothing on the machine; `logs.py --export` writes only under `<data dir>`.
+  Do not run anything that needs administrator rights yourself (it would
+  also leave its own events in the log). A recommended change is proposed
+  in words, and the report holds no block. This skill has no `--block`
+  printer, so after the user decides you take the block from this
+  `SKILL.md`'s template, filled with values from the detail file and with
+  every guard of the template kept; in words only where no template exists
+  for that change (rule 8 of `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/report-style.md`).
+  You write it into a repair plan per `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/repair-plan.md`,
+  check the plan with `python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-common/scripts/check_repair_plan.py" <file>`, and tell the user which file to open and
+  what to paste where; the block never goes into the chat or the report.
+  After a new run has read the value back, write the result under `Notatki`
+  and move the plan to `plans/done/` only when every value the plan sets reads
+  back as set (see the step before judging); otherwise it stays open; never
+  delete it. The templates are the dump copy (step 8) and the log export and
+  clear (step 10): the user runs them themselves in an elevated PowerShell; you
+  then read the result back.
+- **Nothing leaves the machine.** No web search, no upload, no online tool.
+- **Read only the summary JSON.** Never open the raw captures or other files
+  in `<data dir>/work/`. Single items come from `--detail <id>`.
+- **The data directory.** `<data dir>` below is where the scripts
+  write: `--data-dir` when given, else `USH_DATA_DIR` (an absolute path),
+  else the plugin data folder (`--default-data-dir`). Take its absolute value from the
+  summary's `summary_file` (the directory above `work/`). In the report
+  text outside code blocks write it as `&lt;data dir>` in plain text,
+  never in inline code (a `<` before a letter fails the check, and inline
+  code shows `&lt;` as it is), and never the expanded path: it contains
+  the account name, which a report must not carry. The expanded path
+  appears only in the `ush:summary` marker and in code blocks. Every block
+  that runs a skill script starts with `Set-Location "<absolute plugin
+  root>"` and passes `--data-dir "<absolute data dir>"` (rule 9 of
+  `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/report-style.md`): an elevated shell of
+  another account has a different `%LOCALAPPDATA%`.
+- **Every number in the report comes from the JSON**: from the summary, or
+  from a detail item you fetched with `--detail` and named in the report's
+  `<!-- ush:detail ... -->` line. Do not compute totals, averages,
+  percentages or differences that are not in the JSON; do not write a
+  number from memory or from the user's message. Describe instead of
+  counting when the JSON has no number for it.
+- **Empty is not unreadable.** A source with `status` `unreadable`, a
+  `coverage_start`, `boots: null`, `reliability.status` `unreadable`,
+  `reliability_records: null`, `dumps.status` `unreadable`, a dump file
+  with `readable: false` or `truncated` > 0 must be reported as
+  such (see the degradation cases in `references/report-format.md`), never
+  as "clean".
+- **The trend is the script's, and it is not a weight.** Each group's
+  `trend` (`rising`, `falling`, `stable`, `too_few`, `unknown`) comes from
+  the rule in `data/trend.json`; give it as written. `unknown` and
+  `too_few` are neither rising nor calm: never report them as `stable` or
+  as a warning. A trend never sets or changes a finding's weight.
+
+## Steps
+
+1. From the project root run:
+
+   ```
+   python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-events/scripts/events.py" --default-data-dir "${CLAUDE_PLUGIN_DATA}"
+   ```
+
+   It prints the summary JSON on stdout and writes it, with a detail file, to
+   `<data dir>/work/`. Use `--days <n>` only if the user asks for a different
+   window. The field meanings are in `references/summary-contract.md`.
+
+2. Read the summary. If you need one item in full (for example a group left
+   out by `truncated`, or a boot session), fetch it:
+
+   ```
+   python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-events/scripts/events.py" --default-data-dir "${CLAUDE_PLUGIN_DATA}" --detail <id> --detail-file <detail_file>
+   ```
+
+   `<detail_file>` is the `detail_file` value from the summary, so the item
+   comes from the same run that the report checker checks against.
+
+   Group ids are stable numbers kept between runs, not places in the list,
+   so a group the summary cut cannot be guessed from `truncated`. List the
+   cut groups with their ids and names first:
+
+   ```
+   python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-events/scripts/events.py" --default-data-dir "${CLAUDE_PLUGIN_DATA}" --cut --detail-file <detail_file>
+   ```
+
+   Ids: `g..` groups, `n..` noise, `b..` boot sessions, `a..` anomalies,
+   `r..` Reliability Monitor record groups, `d..` memory dump files.
+   Remember every id you fetched and used.
+
+3. Judge the findings: what is a real fault, what is harmless, what needs
+   watching. Weigh them with the scale in `references/summary-contract.md`
+   (`high`, `medium`, `low`). Known noise is reported separately, with its
+   count and reason, never hidden.
+
+   Before judging, list `<data dir>/plans/` (not `done/`); for an open plan of this skill,
+   compare this run's values with the values its run blocks set (its `Odczyt po zmianie`
+   names how to read them back), write the result under `Notatki`, and move it to
+   `plans/done/` (never over an existing file) only when every value the plan
+   sets (by a run block or by a step in words) reads back as set; otherwise
+   it stays open. If `plans/` cannot be listed, say so and give the reason; it
+   is not "no plans".
+
+4. Write the report in the language the user addressed you in, following
+   `references/report-format.md`, and save it as
+   `<data dir>/reports/events-<YYYY-MM-DD-HHMM>.md` (local time of the run).
+   The first line is `<!-- ush:summary <summary_file> -->` with the absolute
+   `summary_file` path from the summary.
+
+5. Every recommendation carries `weight`, `kind` (`change`, `observe`,
+   `consult_service`), `risk`, `evidence` (numbers and ids from the JSON),
+   `permissions` and `rollback`, as defined in
+   `references/summary-contract.md`.
+
+6. After saving, run:
+
+   ```
+   python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-common/scripts/check_report.py" "<absolute data dir>/reports/events-<YYYY-MM-DD-HHMM>.md"
+   ```
+
+   (`python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-common/scripts/check_report.py" --default-data-dir "${CLAUDE_PLUGIN_DATA}" --latest --skill ush-events`
+   checks the newest `events-*.md` instead.) The checker is shared by all
+   skills; it reads the ush-events rules from `data/report-profile.json`.
+
+   It prints `OK` when every number is backed by the JSON, every group, anomaly
+   and dump file of the summary is named, and the markers are in place. `OK` means each number occurs somewhere in the JSON, not that it
+   is used for the right thing: small numbers (days, hours, minutes) almost
+   always occur, so the rule above still binds you. Otherwise it names each unbacked number with its line: remove or
+   correct that number (or fetch the item with `--detail` and name its id in
+   `ush:detail`), save, and run the check again until it prints `OK`. A line
+   `not named in the report: <id> (<list>)` means the report leaves out that
+   group, anomaly or dump file: name it in the section it belongs to (a group
+   that is not a finding goes on the "Other groups" line, see
+   `references/report-format.md`), save, and run the check again. Do not
+   hand the report to the user before it prints `OK`.
+
+7. Tell the user where the report is (the absolute path of the report file, in the chat answer only) and give the dashboard and the main
+   findings in a few lines.
+
+8. Memory dumps, only when `dumps.files` holds a dump worth keeping (for
+   example one linked to a bugcheck) or the user asks to archive dumps.
+   Reading a dump usually needs administrator rights, so do not run the copy
+   yourself. The report proposes archiving in words and holds no block
+   (rule 8 of `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/report-style.md`). Only after
+   the user decides to archive, put this template block for an elevated
+   PowerShell into a repair plan per `repair-plan.md` (see Rules), never
+   into the chat, with the absolute plugin root and the absolute
+   data directory filled in from the summary:
+
+   ```
+   # Copies every readable memory dump to <data dir>\dumps\, checks each copy
+   # by SHA-256 against the original and records it in manifest.json there.
+   # It deletes nothing and overwrites no earlier copy.
+   Set-Location "<absolute plugin root>"
+   python -B skills/ush-events/scripts/dumps.py --copy --data-dir "<absolute data dir>"
+   ```
+
+   The template has one variant: add `--delete-source` only when the user
+   asked for the originals to be removed; then replace the block's sentence "It deletes nothing and
+   overwrites no earlier copy." with "It overwrites no earlier copy. It
+   deletes each original only after its copy is verified; the deletion
+   cannot be undone."
+   Never give `--delete-source` without `--copy`. With `--delete-source`
+   the block's rollback is "cannot be undone": the undo section of the plan
+   gets, for the block's id, the no-undo marker
+   `<!-- ush:noundo ush-events <id> -->` followed by a line of words saying
+   that the deletion of the originals cannot be undone (per
+   `repair-plan.md`), never a fenced block.
+   Without `--delete-source` the copy changes nothing outside the data
+   directory: the undo section gets `<!-- ush:noundo ush-events <id> -->`
+   followed by a line saying there is nothing to undo on the machine (the
+   copies stay in `<data dir>\dumps\`).
+
+   Before you give the block, read the current UTC time from the machine
+   (never guess it) and note it:
+
+   ```
+   python -B -c "from datetime import datetime, timezone; print(datetime.now(timezone.utc).isoformat())"
+   ```
+
+   After the user says it ran,
+   read `<data dir>/dumps/manifest.json` (not the dumps); this run's entries
+   are those with `copied_at` not earlier than that time - never simply the
+   newest ones, which may belong to an earlier run - and tell the
+   user, per dump, whether `verified` is `true`, where the `copy` is and,
+   with `--delete-source`, whether `source_deleted` is `true`; name every
+   entry with a `reason`. An entry with `verified` `false` and `copy` `null`
+   is a copy that was made but failed its check and was discarded: the dump
+   is not archived. A dump with no entry from this run was not recorded:
+   ask for the script's output. Its `results` give the reason (not
+   readable, not enough space, name taken by another file, or the copy
+   failed), and its `error`, if any, says why the run stopped; when that is
+   a failed manifest write, the dump being handled may already have a
+   verified copy in `dumps/` without an entry, and the dumps after it were
+   not handled. When the `error` says the manifest could not be updated
+   after the removal step, do not trust that entry's `source_deleted`: the
+   original may already be gone; take the outcome from `results`. Fields, when
+   an entry is written, and exit codes are in
+   `references/summary-contract.md`.
+
+9. Exporting a log, only when the user asks for it (or asks to clear a
+   log, which starts with an export). This needs no elevation and writes
+   only to `<data dir>`, so you may run it yourself:
+
+   ```
+   python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-events/scripts/logs.py" --default-data-dir "${CLAUDE_PLUGIN_DATA}" --export <System|Application>
+   ```
+
+   Tell the user from its JSON whether `export.verified` is `true`, where
+   `export.file` is and, if not verified, the `export.reason`. The file is
+   also recorded in `<data dir>/exports/manifest.json`. An export left
+   unverified because the oldest records of a `Circular` log were
+   overwritten during it is not a fault of the machine: run it again. A log
+   with no records can never be verified (the `reason` says there is
+   nothing to verify): do not run it again, and it cannot be cleared.
+
+10. Clearing a log, only when the user explicitly asks for it. Never run it
+    yourself and never pass `--clear` in any other step. Put this block for
+    an elevated PowerShell into a repair plan per `repair-plan.md` (see
+    Rules), not into the chat, with the log name, the absolute
+    plugin root and the absolute data directory filled in, as a
+    recommendation in the layout of rule 4 of
+    `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/report-style.md`, with these fields:
+
+    - `weight`: low (the user asked for it; it fixes no fault);
+    - `kind`: change;
+    - `risk`: high; clearing is irreversible, and `ush-events` loses the
+      history of that log (clearing `System` removes the boot sessions,
+      trends and bugchecks it would report);
+    - `evidence`: the user's request and the log's name;
+    - `permissions`: administrator (an elevated PowerShell);
+    - `rollback`: none, it is irreversible; the export and the `-rest` file
+      are a copy to open in Event Viewer, they cannot be loaded back into
+      the log.
+
+    Its rollback is "cannot be undone": the undo section of the plan gets,
+    for the block's id, the no-undo marker
+    `<!-- ush:noundo ush-events <id> -->` followed by a line of words saying
+    so (per `repair-plan.md`), never a fenced block.
+
+    ```
+    # Exports the <log> log to <data dir>\exports\, verifies the file by its
+    # record ids and records it with its SHA-256 in manifest.json there. Only
+    # after a verified export it clears the log with a backup of everything in
+    # it at that moment (<log>-<stamp>-rest.evtx) and reads the backup and the
+    # log back. Irreversible: the files can be opened in Event Viewer but not
+    # loaded back into the log.
+    Set-Location "<absolute plugin root>"
+    python -B skills/ush-events/scripts/logs.py --export <log> --clear --data-dir "<absolute data dir>"
+    ```
+
+    After the user says it ran, ask for the JSON the script printed: it,
+    not the manifest, decides the result (`<data dir>/exports/manifest.json`
+    only tells where the files are; it has no `clear` fields). Tell the user
+    whether `export.verified` and `clear.cleared` are `true`, where both
+    files are, `clear.record_count_after`, and every `reason`:
+    - `clear` `null`: nothing was cleared, because the export was not
+      verified (give `export.reason`) or the run stopped before clearing
+      (give the top-level `error`).
+    - `cleared` `true`: cleared and confirmed.
+    - `cleared` `false` with the elevation message, or `clear.exit_code`
+      `null` (`wevtutil cl` never ran): nothing was cleared and the export
+      stays.
+    - `clear.exit_code` not `null` and `record_count_after` `null` (the log
+      could not be read back): whether the log was cleared is unknown; say
+      so plainly and give the `reason`. Never conclude either way.
+    - Otherwise compare `record_count_after` with `backup_record_count`, or
+      with `export.record_count` when `backup_record_count` is `null`. With
+      `exit_code` `0`: below it the log was cleared (with `cleared` `false`
+      a check afterwards failed: say it could not be confirmed, never "not
+      cleared"); not below it, `wevtutil cl` reported success but the log
+      still holds its records. With a non-zero `exit_code` (`wevtutil cl`
+      failed or was stopped by a timeout): not below it, the log was most
+      likely not cleared; below it, whether the log was cleared is unknown,
+      because a full `Circular` log can lose a few records to overwriting
+      on its own. Give the `reason` in every case.
+    Fields and exit codes are in `references/summary-contract.md`.

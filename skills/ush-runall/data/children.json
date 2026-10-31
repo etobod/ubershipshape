@@ -1,0 +1,9 @@
+[
+  {"skill": "ush-health", "script": "health.py", "timeout_s": 1800},
+  {"skill": "ush-events", "script": "events.py", "timeout_s": 1800},
+  {"skill": "ush-settings", "script": "settings.py", "timeout_s": 1800},
+  {"skill": "ush-inventory", "script": "inventory.py", "timeout_s": 1800},
+  {"skill": "ush-processes", "script": "processes.py", "timeout_s": 1800},
+  {"skill": "ush-files", "script": "files.py", "timeout_s": 3600},
+  {"skill": "ush-advice", "script": "advice.py", "timeout_s": 1800}
+]

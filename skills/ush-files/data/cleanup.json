@@ -1,0 +1,99 @@
+{
+  "entries": [
+    {
+      "id": "temp-user",
+      "what": "temporary files of the user",
+      "paths": [
+        "%TEMP%"
+      ],
+      "min_age_days": 2,
+      "risk": "low",
+      "needs_admin": false,
+      "conditions": "close the programs that may hold temporary files",
+      "rollback": "cannot be undone",
+      "block": "& {\n  if (-not $env:TEMP) { throw 'TEMP is not set; nothing deleted' }\n  $roots = @($env:TEMP)\n  $cutoff = (Get-Date).AddDays(-2)\n  $deleted = 0; $failed = 0; $kept = 0; $notRead = 0; $firstError = $null\n  foreach ($root in $roots) {\n    if (-not (Test-Path -LiteralPath $root -PathType Container)) { \"Not there, nothing to delete: $root\"; continue }\n    try { $rootAttributes = (Get-Item -LiteralPath $root -Force -ErrorAction Stop).Attributes } catch { $notRead++; if (-not $firstError) { $firstError = \"$($root) - $($_.Exception.Message)\" }; \"Skipped, the folder could not be read, nothing deleted in it: $root\"; continue }\n    if ($rootAttributes -band [IO.FileAttributes]::ReparsePoint) { \"Skipped, the folder is a link (reparse point), nothing deleted in it: $root\"; continue }\n    $dirs = New-Object 'System.Collections.Generic.Stack[string]'\n    $dirs.Push($root)\n    while ($dirs.Count -gt 0) {\n      $dir = $dirs.Pop()\n      Get-ChildItem -LiteralPath $dir -Directory -Force -ErrorAction SilentlyContinue -ErrorVariable dirErrors | Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } | ForEach-Object { $dirs.Push($_.FullName) }\n      Get-ChildItem -LiteralPath $dir -File -Force -ErrorAction SilentlyContinue -ErrorVariable fileErrors | Where-Object { -not ([int]$_.Attributes -band 0x401000) } | ForEach-Object { if ($_.LastWriteTime -lt $cutoff -and $_.CreationTime -lt $cutoff) { try { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop; $deleted++ } catch { $failed++ } } else { $kept++ } }\n      if ($dirErrors.Count -gt 0 -or $fileErrors.Count -gt 0) { $notRead++; if (-not $firstError) { $firstError = \"$($dir) - $(@(@($dirErrors) + @($fileErrors))[0].Exception.Message)\" } }\n    }\n  }\n  \"Deleted files: $deleted. Not deleted (in use or denied): $failed. Kept (written or created in the last 2 days): $kept. Folders that could not be read: $notRead.\"\n  if ($notRead -gt 0) { \"The counts are incomplete: $notRead folders could not be read, so the files in them were neither deleted nor counted. First error: $firstError\" }\n}"
+    },
+    {
+      "id": "temp-windows",
+      "what": "temporary files of Windows",
+      "paths": [
+        "%SystemRoot%\\Temp"
+      ],
+      "min_age_days": 2,
+      "risk": "low",
+      "needs_admin": true,
+      "conditions": "no program installation is running",
+      "rollback": "cannot be undone",
+      "block": "& {\n  $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())\n  if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { 'Not elevated: run this block in PowerShell opened with Run as administrator; nothing deleted'; return }\n  if (-not $env:SystemRoot) { throw 'SystemRoot is not set; nothing deleted' }\n  $roots = @((Join-Path $env:SystemRoot 'Temp'))\n  $cutoff = (Get-Date).AddDays(-2)\n  $deleted = 0; $failed = 0; $kept = 0; $notRead = 0; $firstError = $null\n  foreach ($root in $roots) {\n    if (-not (Test-Path -LiteralPath $root -PathType Container)) { \"Not there, nothing to delete: $root\"; continue }\n    try { $rootAttributes = (Get-Item -LiteralPath $root -Force -ErrorAction Stop).Attributes } catch { $notRead++; if (-not $firstError) { $firstError = \"$($root) - $($_.Exception.Message)\" }; \"Skipped, the folder could not be read, nothing deleted in it: $root\"; continue }\n    if ($rootAttributes -band [IO.FileAttributes]::ReparsePoint) { \"Skipped, the folder is a link (reparse point), nothing deleted in it: $root\"; continue }\n    $dirs = New-Object 'System.Collections.Generic.Stack[string]'\n    $dirs.Push($root)\n    while ($dirs.Count -gt 0) {\n      $dir = $dirs.Pop()\n      Get-ChildItem -LiteralPath $dir -Directory -Force -ErrorAction SilentlyContinue -ErrorVariable dirErrors | Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } | ForEach-Object { $dirs.Push($_.FullName) }\n      Get-ChildItem -LiteralPath $dir -File -Force -ErrorAction SilentlyContinue -ErrorVariable fileErrors | Where-Object { -not ([int]$_.Attributes -band 0x401000) } | ForEach-Object { if ($_.LastWriteTime -lt $cutoff -and $_.CreationTime -lt $cutoff) { try { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop; $deleted++ } catch { $failed++ } } else { $kept++ } }\n      if ($dirErrors.Count -gt 0 -or $fileErrors.Count -gt 0) { $notRead++; if (-not $firstError) { $firstError = \"$($dir) - $(@(@($dirErrors) + @($fileErrors))[0].Exception.Message)\" } }\n    }\n  }\n  \"Deleted files: $deleted. Not deleted (in use or denied): $failed. Kept (written or created in the last 2 days): $kept. Folders that could not be read: $notRead.\"\n  if ($notRead -gt 0) { \"The counts are incomplete: $notRead folders could not be read, so the files in them were neither deleted nor counted. First error: $firstError\" }\n}"
+    },
+    {
+      "id": "windows-update-download",
+      "what": "downloaded Windows updates",
+      "paths": [
+        "%SystemRoot%\\SoftwareDistribution\\Download"
+      ],
+      "min_age_days": 10,
+      "risk": "medium",
+      "needs_admin": true,
+      "conditions": "no Windows update is running and no restart is pending after an update",
+      "rollback": "cannot be undone",
+      "block": "& {\n  $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())\n  if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { 'Not elevated: run this block in PowerShell opened with Run as administrator; nothing deleted'; return }\n  if (-not $env:SystemRoot) { throw 'SystemRoot is not set; nothing deleted' }\n  $roots = @((Join-Path $env:SystemRoot 'SoftwareDistribution\\Download'))\n  $running = @(Get-Service -Name wuauserv, bits -ErrorAction Stop | Where-Object { $_.Status -eq 'Running' } | ForEach-Object { $_.Name })\n  try {\n    foreach ($name in $running) { Stop-Service -Name $name -ErrorAction Stop }\n    $cutoff = (Get-Date).AddDays(-10)\n    $deleted = 0; $failed = 0; $kept = 0; $notRead = 0; $firstError = $null\n    foreach ($root in $roots) {\n      if (-not (Test-Path -LiteralPath $root -PathType Container)) { \"Not there, nothing to delete: $root\"; continue }\n      try { $rootAttributes = (Get-Item -LiteralPath $root -Force -ErrorAction Stop).Attributes } catch { $notRead++; if (-not $firstError) { $firstError = \"$($root) - $($_.Exception.Message)\" }; \"Skipped, the folder could not be read, nothing deleted in it: $root\"; continue }\n      if ($rootAttributes -band [IO.FileAttributes]::ReparsePoint) { \"Skipped, the folder is a link (reparse point), nothing deleted in it: $root\"; continue }\n      $dirs = New-Object 'System.Collections.Generic.Stack[string]'\n      $dirs.Push($root)\n      while ($dirs.Count -gt 0) {\n        $dir = $dirs.Pop()\n        Get-ChildItem -LiteralPath $dir -Directory -Force -ErrorAction SilentlyContinue -ErrorVariable dirErrors | Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } | ForEach-Object { $dirs.Push($_.FullName) }\n        Get-ChildItem -LiteralPath $dir -File -Force -ErrorAction SilentlyContinue -ErrorVariable fileErrors | Where-Object { -not ([int]$_.Attributes -band 0x401000) } | ForEach-Object { if ($_.LastWriteTime -lt $cutoff -and $_.CreationTime -lt $cutoff) { try { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop; $deleted++ } catch { $failed++ } } else { $kept++ } }\n        if ($dirErrors.Count -gt 0 -or $fileErrors.Count -gt 0) { $notRead++; if (-not $firstError) { $firstError = \"$($dir) - $(@(@($dirErrors) + @($fileErrors))[0].Exception.Message)\" } }\n      }\n    }\n    \"Deleted files: $deleted. Not deleted (in use or denied): $failed. Kept (written or created in the last 10 days): $kept. Folders that could not be read: $notRead.\"\n    if ($notRead -gt 0) { \"The counts are incomplete: $notRead folders could not be read, so the files in them were neither deleted nor counted. First error: $firstError\" }\n  } finally {\n    foreach ($name in $running) { Start-Service -Name $name -ErrorAction Continue }\n    Get-Service -Name wuauserv, bits | ForEach-Object { \"$($_.Name): $($_.Status)\" }\n  }\n}"
+    },
+    {
+      "id": "delivery-optimization",
+      "what": "the Delivery Optimization cache",
+      "paths": [
+        "%SystemRoot%\\ServiceProfiles\\NetworkService\\AppData\\Local\\Microsoft\\Windows\\DeliveryOptimization\\Cache"
+      ],
+      "min_age_days": 0,
+      "risk": "low",
+      "needs_admin": true,
+      "conditions": "no update download is running",
+      "rollback": "cannot be undone",
+      "block": "& {\n  $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())\n  if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { 'Not elevated: run this block in PowerShell opened with Run as administrator; nothing deleted'; return }\n  if (-not $env:SystemRoot) { throw 'SystemRoot is not set; nothing deleted' }\n  try {\n    Delete-DeliveryOptimizationCache -Force -ErrorAction Stop\n    'Delete-DeliveryOptimizationCache finished without an error'\n  } catch {\n    \"Delete-DeliveryOptimizationCache failed: $($_.Exception.Message)\"\n  }\n  $cache = Join-Path $env:SystemRoot 'ServiceProfiles\\NetworkService\\AppData\\Local\\Microsoft\\Windows\\DeliveryOptimization\\Cache'\n  try { $null = Get-Item -LiteralPath $cache -Force -ErrorAction Stop } catch [System.Management.Automation.ItemNotFoundException] { \"The cache folder is not there, no file left: $cache\"; return } catch { \"Could not read the cache folder, files left not known: $($_.Exception.Message)\"; return }\n  $readErrors = @()\n  $left = @(Get-ChildItem -LiteralPath $cache -File -Recurse -Force -ErrorAction SilentlyContinue -ErrorVariable readErrors)\n  if ($readErrors.Count -gt 0) { \"Could not read the cache folder in full ($($readErrors.Count) read errors), so the number of files left is not known: $($readErrors[0].Exception.Message)\" }\n  else { \"Files left in the cache: $($left.Count)\" }\n}"
+    },
+    {
+      "id": "crash-dumps-user",
+      "what": "crash dumps of the user's programs",
+      "paths": [
+        "%LOCALAPPDATA%\\CrashDumps"
+      ],
+      "min_age_days": 30,
+      "risk": "low",
+      "needs_admin": false,
+      "conditions": "the dumps are not needed for a bug report",
+      "rollback": "cannot be undone",
+      "block": "& {\n  if (-not $env:LOCALAPPDATA) { throw 'LOCALAPPDATA is not set; nothing deleted' }\n  $roots = @((Join-Path $env:LOCALAPPDATA 'CrashDumps'))\n  $cutoff = (Get-Date).AddDays(-30)\n  $deleted = 0; $failed = 0; $kept = 0; $notRead = 0; $firstError = $null\n  foreach ($root in $roots) {\n    if (-not (Test-Path -LiteralPath $root -PathType Container)) { \"Not there, nothing to delete: $root\"; continue }\n    try { $rootAttributes = (Get-Item -LiteralPath $root -Force -ErrorAction Stop).Attributes } catch { $notRead++; if (-not $firstError) { $firstError = \"$($root) - $($_.Exception.Message)\" }; \"Skipped, the folder could not be read, nothing deleted in it: $root\"; continue }\n    if ($rootAttributes -band [IO.FileAttributes]::ReparsePoint) { \"Skipped, the folder is a link (reparse point), nothing deleted in it: $root\"; continue }\n    $dirs = New-Object 'System.Collections.Generic.Stack[string]'\n    $dirs.Push($root)\n    while ($dirs.Count -gt 0) {\n      $dir = $dirs.Pop()\n      Get-ChildItem -LiteralPath $dir -Directory -Force -ErrorAction SilentlyContinue -ErrorVariable dirErrors | Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } | ForEach-Object { $dirs.Push($_.FullName) }\n      Get-ChildItem -LiteralPath $dir -File -Force -ErrorAction SilentlyContinue -ErrorVariable fileErrors | Where-Object { -not ([int]$_.Attributes -band 0x401000) } | ForEach-Object { if ($_.LastWriteTime -lt $cutoff -and $_.CreationTime -lt $cutoff) { try { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop; $deleted++ } catch { $failed++ } } else { $kept++ } }\n      if ($dirErrors.Count -gt 0 -or $fileErrors.Count -gt 0) { $notRead++; if (-not $firstError) { $firstError = \"$($dir) - $(@(@($dirErrors) + @($fileErrors))[0].Exception.Message)\" } }\n    }\n  }\n  \"Deleted files: $deleted. Not deleted (in use or denied): $failed. Kept (written or created in the last 30 days): $kept. Folders that could not be read: $notRead.\"\n  if ($notRead -gt 0) { \"The counts are incomplete: $notRead folders could not be read, so the files in them were neither deleted nor counted. First error: $firstError\" }\n}"
+    },
+    {
+      "id": "wer-reports",
+      "what": "Windows Error Reporting reports",
+      "paths": [
+        "%ProgramData%\\Microsoft\\Windows\\WER\\ReportArchive",
+        "%ProgramData%\\Microsoft\\Windows\\WER\\ReportQueue"
+      ],
+      "min_age_days": 30,
+      "risk": "low",
+      "needs_admin": true,
+      "conditions": "the reports are not needed for a diagnosis (ush-events)",
+      "rollback": "cannot be undone",
+      "block": "& {\n  $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())\n  if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { 'Not elevated: run this block in PowerShell opened with Run as administrator; nothing deleted'; return }\n  if (-not $env:ProgramData) { throw 'ProgramData is not set; nothing deleted' }\n  $roots = @((Join-Path $env:ProgramData 'Microsoft\\Windows\\WER\\ReportArchive'), (Join-Path $env:ProgramData 'Microsoft\\Windows\\WER\\ReportQueue'))\n  $cutoff = (Get-Date).AddDays(-30)\n  $deleted = 0; $failed = 0; $kept = 0; $notRead = 0; $firstError = $null\n  foreach ($root in $roots) {\n    if (-not (Test-Path -LiteralPath $root -PathType Container)) { \"Not there, nothing to delete: $root\"; continue }\n    try { $rootAttributes = (Get-Item -LiteralPath $root -Force -ErrorAction Stop).Attributes } catch { $notRead++; if (-not $firstError) { $firstError = \"$($root) - $($_.Exception.Message)\" }; \"Skipped, the folder could not be read, nothing deleted in it: $root\"; continue }\n    if ($rootAttributes -band [IO.FileAttributes]::ReparsePoint) { \"Skipped, the folder is a link (reparse point), nothing deleted in it: $root\"; continue }\n    $dirs = New-Object 'System.Collections.Generic.Stack[string]'\n    $dirs.Push($root)\n    while ($dirs.Count -gt 0) {\n      $dir = $dirs.Pop()\n      Get-ChildItem -LiteralPath $dir -Directory -Force -ErrorAction SilentlyContinue -ErrorVariable dirErrors | Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } | ForEach-Object { $dirs.Push($_.FullName) }\n      Get-ChildItem -LiteralPath $dir -File -Force -ErrorAction SilentlyContinue -ErrorVariable fileErrors | Where-Object { -not ([int]$_.Attributes -band 0x401000) } | ForEach-Object { if ($_.LastWriteTime -lt $cutoff -and $_.CreationTime -lt $cutoff) { try { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop; $deleted++ } catch { $failed++ } } else { $kept++ } }\n      if ($dirErrors.Count -gt 0 -or $fileErrors.Count -gt 0) { $notRead++; if (-not $firstError) { $firstError = \"$($dir) - $(@(@($dirErrors) + @($fileErrors))[0].Exception.Message)\" } }\n    }\n  }\n  \"Deleted files: $deleted. Not deleted (in use or denied): $failed. Kept (written or created in the last 30 days): $kept. Folders that could not be read: $notRead.\"\n  if ($notRead -gt 0) { \"The counts are incomplete: $notRead folders could not be read, so the files in them were neither deleted nor counted. First error: $firstError\" }\n}"
+    },
+    {
+      "id": "recycle-bin",
+      "what": "the recycle bin of every fixed drive",
+      "paths": [
+        "<drive>:\\$Recycle.Bin"
+      ],
+      "ignore_names": [
+        "desktop.ini"
+      ],
+      "min_age_days": 0,
+      "risk": "low",
+      "needs_admin": false,
+      "conditions": "the user has looked through the recycle bin",
+      "rollback": "cannot be undone",
+      "block": "& {\n  Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | ForEach-Object {\n    $drive = $_.DeviceID\n    try {\n      Clear-RecycleBin -DriveLetter $drive.TrimEnd(':') -Force -ErrorAction Stop\n      \"Recycle bin emptied on drive $($drive)\"\n    } catch {\n      $err = $_.Exception\n      if (($err -is [ComponentModel.Win32Exception] -and $err.NativeErrorCode -eq 3) -or $err.Message -like '*cannot find the path specified*') { \"Recycle bin already empty on drive $($drive)\" }\n      else { \"Recycle bin NOT emptied on drive $($drive): $($err.Message)\" }\n    }\n  }\n  try { \"Items left in the recycle bin of this account (all drives): $((New-Object -ComObject Shell.Application).Namespace(10).Items().Count)\" }\n  catch { \"Could not read the recycle bin back ($($_.Exception.Message)); the next run of the skill measures it\" }\n}"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "products": {
+    "25H2|AMD64": "Windows 11 Version 25H2 for x64-based Systems",
+    "25H2|ARM64": "Windows 11 Version 25H2 for ARM64-based Systems",
+    "24H2|AMD64": "Windows 11 Version 24H2 for x64-based Systems",
+    "24H2|ARM64": "Windows 11 Version 24H2 for ARM64-based Systems",
+    "23H2|AMD64": "Windows 11 Version 23H2 for x64-based Systems",
+    "23H2|ARM64": "Windows 11 Version 23H2 for ARM64-based Systems"
+  }
+}

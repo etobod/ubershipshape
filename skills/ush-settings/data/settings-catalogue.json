@@ -1,0 +1,1324 @@
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "id": "input_implicit_text",
+      "area": "privacy",
+      "level": "standard",
+      "title": "Implicit text collection for typing personalization",
+      "rationale": "When allowed, Windows collects typed text to personalize input. Expected restricted (1): typing suggestions learn less from what you type.",
+      "read": {
+        "type": "registry",
+        "locations": [
+          {
+            "hive": "HKCU",
+            "path": "Software\\Policies\\Microsoft\\InputPersonalization",
+            "name": "RestrictImplicitTextCollection",
+            "role": "policy"
+          },
+          {
+            "hive": "HKCU",
+            "path": "Software\\Microsoft\\InputPersonalization",
+            "name": "RestrictImplicitTextCollection",
+            "role": "preference"
+          }
+        ]
+      },
+      "expected": [
+        1
+      ],
+      "default": 0,
+      "apply": {
+        "location": 1,
+        "value": 1,
+        "kind": "DWord"
+      }
+    },
+    {
+      "id": "input_implicit_ink",
+      "area": "privacy",
+      "level": "standard",
+      "title": "Implicit ink collection for handwriting personalization",
+      "rationale": "When allowed, Windows collects handwriting (ink) samples to personalize recognition. Expected restricted (1): handwriting recognition learns less from your writing.",
+      "read": {
+        "type": "registry",
+        "locations": [
+          {
+            "hive": "HKCU",
+            "path": "Software\\Policies\\Microsoft\\InputPersonalization",
+            "name": "RestrictImplicitInkCollection",
+            "role": "policy"
+          },
+          {
+            "hive": "HKCU",
+            "path": "Software\\Microsoft\\InputPersonalization",
+            "name": "RestrictImplicitInkCollection",
+            "role": "preference"
+          }
+        ]
+      },
+      "expected": [
+        1
+      ],
+      "default": 0,
+      "apply": {
+        "location": 1,
+        "value": 1,
+        "kind": "DWord"
+      }
+    },
+    {
+      "id": "input_harvest_contacts",
+      "area": "privacy",
+      "level": "standard",
+      "title": "Contact harvesting for input personalization",
+      "rationale": "When on, contact names are added to the input personalization dictionary. Expected off (0): contact names may be suggested less often while typing.",
+      "read": {
+        "type": "registry",
+        "locations": [
+          {
+            "hive": "HKCU",
+            "path": "Software\\Microsoft\\InputPersonalization\\TrainedDataStore",
+            "name": "HarvestContacts",
+            "role": "preference"
+          }
+        ]
+      },
+      "expected": [
+        0
+      ],
+      "default": 1,
+      "apply": {
+        "location": 0,
+        "value": 0,
+        "kind": "DWord"
+      }
+    },
+    {
+      "id": "inking_typing_personalization",
+      "area": "privacy",
+      "level": "standard",
+      "title": "Inking and typing personalization",
+      "rationale": "Consent to build a personal inking and typing dictionary. Expected off (0): typing and handwriting suggestions are less personalized. The Windows default is not certain, so a missing value is reported as unknown.",
+      "read": {
+        "type": "registry",
+        "locations": [
+          {
+            "hive": "HKCU",
+            "path": "Software\\Microsoft\\Personalization\\Settings",
+            "name": "AcceptedPrivacyPolicy",
+            "role": "preference"
+          }
+        ]
+      },
+      "expected": [
+        0
+      ],
+      "default": null,
+      "apply": {
+        "location": 0,
+        "value": 0,
+        "kind": "DWord"
+      }
+    },
+    {
+      "id": "search_bing",
+      "area": "privacy",
+      "level": "standard",
+      "title": "Web (Bing) results in Windows search",
+      "rationale": "When on, what you type into Windows search is also sent to Bing for web results. Expected off (0): search shows local results only.",
+      "read": {
+        "type": "registry",
+        "locations": [
+          {
+            "hive": "HKCU",
+            "path": "Software\\Microsoft\\Windows\\CurrentVersion\\Search",
+            "name": "BingSearchEnabled",
+            "role": "preference"
+          }
+        ]
+      },
+      "expected": [
+        0
+      ],
+      "default": 1,
+      "apply": {
+        "location": 0,
+        "value": 0,
+        "kind": "DWord"
+      }
+    },
+    {
+      "id": "search_box_suggestions",
+      "area": "privacy",
+      "level": "standard",
+      "title": "Search box web suggestions",
+      "rationale": "When allowed, the search box shows web suggestions and recent online searches. Expected disabled (1): no web suggestions in the search box. The block writes the policy in HKLM, because writing under HKCU\\Software\\Policies needs administrator rights and an elevated shell may write the HKCU of another account; both policy locations are read.",
+      "read": {
+        "type": "registry",
+        "locations": [
+          {
+            "hive": "HKLM",
+            "path": "SOFTWARE\\Policies\\Microsoft\\Windows\\Explorer",
+            "name": "DisableSearchBoxSuggestions",
+            "role": "policy"
+          },
+          {
+            "hive": "HKCU",
+            "path": "Software\\Policies\\Microsoft\\Windows\\Explorer",
+            "name": "DisableSearchBoxSuggestions",
+            "role": "policy"
+          }
+        ]
+      },
+      "expected": [
+        1
+      ],
+      "default": 0,
+      "apply": {
+        "location": 0,
+        "value": 1,
+        "kind": "DWord"
+      }
+    },
+    {
+      "id": "tailored_experiences",
+      "area": "privacy",
+      "level": "standard",
+      "title": "Tailored experiences with diagnostic data",
+      "rationale": "When on, Microsoft uses diagnostic data to offer personalized tips, ads and recommendations. Expected off (0): no cost beyond less personalized tips.",
+      "read": {
+        "type": "registry",
+        "locations": [
+          {
+            "hive": "HKCU",
+            "path": "Software\\Policies\\Microsoft\\Windows\\CloudContent",
+            "name": "DisableTailoredExperiencesWithDiagnosticData",
+            "role": "policy",
+            "map": {
+              "1": 0,
+              "0": 1
+            }
+          },
+          {
+            "hive": "HKCU",
+            "path": "Software\\Microsoft\\Windows\\CurrentVersion\\Privacy",
+            "name": "TailoredExperiencesWithDiagnosticDataEnabled",
+            "role": "preference"
+          }
+        ]
+      },
+      "expected": [
+        0
+      ],
+      "default": 1,
+      "apply": {
+        "location": 1,
+        "value": 0,
+        "kind": "DWord"
+      }
+    },
+    {
+      "id": "telemetry_level",
+      "area": "telemetry",
+      "level": "standard",
+      "title": "Diagnostic data level",
+      "rationale": "How much diagnostic data Windows sends to Microsoft. Expected 0 or 1 (required diagnostic data only): optional diagnostic data is not sent, which can limit some troubleshooting offers. On Windows Home the value 0 works as 1.",
+      "read": {
+        "type": "registry",
+        "locations": [
+          {
+            "hive": "HKLM",
+            "path": "SOFTWARE\\Policies\\Microsoft\\Windows\\DataCollection",
+            "name": "AllowTelemetry",
+            "role": "policy"
+          },
+          {
+            "hive": "HKLM",
+            "path": "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\DataCollection",
+            "name": "AllowTelemetry",
+            "role": "preference"
+          }
+        ]
+      },
+      "expected": [
+        0,
+        1
+      ],
+      "default": null,
+      "apply": {
+        "location": 1,
+        "value": 1,
+        "kind": "DWord"
+      }
+    },
+    {
+      "id": "diagtrack_service",
+      "area": "telemetry",
+      "level": "strict",
+      "title": "Connected User Experiences and Telemetry service (DiagTrack)",
+      "rationale": "The service that sends diagnostic data. Expected disabled or absent. Cost: some compatibility and diagnostic functions stop working (for example compatibility checks and diagnostic data viewing).",
+      "read": {
+        "type": "service",
+        "name": "DiagTrack"
+      },
+      "expected": [
+        "Disabled",
+        "absent"
+      ],
+      "apply": {
+        "start_type": "Disabled"
+      }
+    },
+    {
+      "id": "advertising_id",
+      "area": "ads",
+      "level": "standard",
+      "title": "Advertising ID",
+      "rationale": "A per-user identifier that apps can use for personalized ads. Expected off (0): ads in apps are less personalized; no functional cost.",
+      "read": {
+        "type": "registry",
+        "locations": [
+          {
+            "hive": "HKLM",
+            "path": "SOFTWARE\\Policies\\Microsoft\\Windows\\AdvertisingInfo",
+            "name": "DisabledByGroupPolicy",
+            "role": "policy",
+            "map": {
+              "1": 0
+            }
+          },
+          {
+            "hive": "HKCU",
+            "path": "Software\\Microsoft\\Windows\\CurrentVersion\\AdvertisingInfo",
+            "name": "Enabled",
+            "role": "preference"
+          }
+        ]
+      },
+      "expected": [
+        0
+      ],
+      "default": 1,
+      "apply": {
+        "location": 1,
+        "value": 0,
+        "kind": "DWord"
+      }
+    },
+    {
+      "id": "start_suggestions",
+      "area": "ads",
+      "level": "standard",
+      "title": "Suggestions in Start",
+      "rationale": "Shows suggested apps and content in Start. Expected off: no cost beyond not seeing these suggestions.",
+      "read": {
+        "type": "registry",
+        "locations": [
+          {
+            "hive": "HKCU",
+            "path": "Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager",
+            "name": "SystemPaneSuggestionsEnabled",
+            "role": "preference"
+          }
+        ]
+      },
+      "expected": [
+        0
+      ],
+      "default": 1,
+      "apply": {
+        "location": 0,
+        "value": 0,
+        "kind": "DWord"
+      }
+    },
+    {
+      "id": "tips_suggestions",
+      "area": "ads",
+      "level": "standard",
+      "title": "Tips and suggestions when using Windows",
+      "rationale": "Shows tips, tricks and suggestions while you use Windows. Expected off: no cost beyond not seeing these suggestions.",
+      "read": {
+        "type": "registry",
+        "locations": [
+          {
+            "hive": "HKCU",
+            "path": "Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager",
+            "name": "SubscribedContent-338389Enabled",
+            "role": "preference"
+          }
+        ]
+      },
+      "expected": [
+        0
+      ],
+      "default": 1,
+      "apply": {
+        "location": 0,
+        "value": 0,
+        "kind": "DWord"
+      }
+    },
+    {
+      "id": "settings_suggested_content",
+      "area": "ads",
+      "level": "standard",
+      "title": "Suggested content in the Settings app",
+      "rationale": "Shows suggested content in the Settings app. Expected off: no cost beyond not seeing these suggestions.",
+      "read": {
+        "type": "registry",
+        "locations": [
+          {
+            "hive": "HKCU",
+            "path": "Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager",
+            "name": "SubscribedContent-338393Enabled",
+            "role": "preference"
+          }
+        ]
+      },
+      "expected": [
+        0
+      ],
+      "default": 1,
+      "apply": {
+        "location": 0,
+        "value": 0,
+        "kind": "DWord"
+      }
+    },
+    {
+      "id": "silent_app_installs",
+      "area": "ads",
+      "level": "standard",
+      "title": "Automatic installation of suggested apps",
+      "rationale": "Lets Windows install suggested apps without asking. Expected off: no cost beyond not seeing these suggestions.",
+      "read": {
+        "type": "registry",
+        "locations": [
+          {
+            "hive": "HKCU",
+            "path": "Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager",
+            "name": "SilentInstalledAppsEnabled",
+            "role": "preference"
+          }
+        ]
+      },
+      "expected": [
+        0
+      ],
+      "default": 1,
+      "apply": {
+        "location": 0,
+        "value": 0,
+        "kind": "DWord"
+      }
+    },
+    {
+      "id": "lock_screen_tips",
+      "area": "ads",
+      "level": "standard",
+      "title": "Fun facts and tips on the lock screen",
+      "rationale": "Shows fun facts, tips and promotions on the lock screen. Expected off: no cost beyond not seeing these suggestions.",
+      "read": {
+        "type": "registry",
+        "locations": [
+          {
+            "hive": "HKCU",
+            "path": "Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager",
+            "name": "RotatingLockScreenOverlayEnabled",
+            "role": "preference"
+          }
+        ]
+      },
+      "expected": [
+        0
+      ],
+      "default": 1,
+      "apply": {
+        "location": 0,
+        "value": 0,
+        "kind": "DWord"
+      }
+    },
+    {
+      "id": "start_recommendations",
+      "area": "ads",
+      "level": "standard",
+      "title": "Recommendations for tips and new apps in Start",
+      "rationale": "Shows recommendations for tips, shortcuts and new apps in Start. Expected off (0): no cost beyond not seeing these recommendations.",
+      "read": {
+        "type": "registry",
+        "locations": [
+          {
+            "hive": "HKCU",
+            "path": "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+            "name": "Start_IrisRecommendations",
+            "role": "preference"
+          }
+        ]
+      },
+      "expected": [
+        0
+      ],
+      "default": 1,
+      "apply": {
+        "location": 0,
+        "value": 0,
+        "kind": "DWord"
+      }
+    },
+    {
+      "id": "copilot_app",
+      "area": "ai",
+      "level": "strict",
+      "title": "Copilot app",
+      "rationale": "The Copilot app installed for the current account. Expected absent. Cost: the Copilot AI features are not available until the app is installed again.",
+      "read": {
+        "type": "appx",
+        "name": "Microsoft.Copilot"
+      },
+      "expected": [
+        "absent"
+      ],
+      "apply": {
+        "remove": true
+      },
+      "rollback_manual": "Install Microsoft Copilot again from the Microsoft Store."
+    },
+    {
+      "id": "copilot_policy",
+      "area": "ai",
+      "level": "strict",
+      "title": "Turn off Windows Copilot policy",
+      "rationale": "Informational. The policy that turned off the older Windows Copilot sidebar. It does not remove or disable the current Copilot app, which copilot_app checks. Turning Copilot off makes its AI features unavailable.",
+      "read": {
+        "type": "registry",
+        "locations": [
+          {
+            "hive": "HKLM",
+            "path": "SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsCopilot",
+            "name": "TurnOffWindowsCopilot",
+            "role": "policy"
+          },
+          {
+            "hive": "HKCU",
+            "path": "Software\\Policies\\Microsoft\\Windows\\WindowsCopilot",
+            "name": "TurnOffWindowsCopilot",
+            "role": "policy"
+          }
+        ]
+      },
+      "expected": null,
+      "default": 0,
+      "apply": null
+    },
+    {
+      "id": "recall_feature",
+      "area": "ai",
+      "level": "strict",
+      "title": "Recall optional feature",
+      "rationale": "Recall saves snapshots of the screen so you can search past activity. Expected disabled or absent. Cost: the Recall AI features are not available.",
+      "read": {
+        "type": "optional_feature",
+        "name": "Recall"
+      },
+      "expected": [
+        "Disabled",
+        "absent"
+      ],
+      "apply": {
+        "state": "Disabled"
+      }
+    },
+    {
+      "id": "recall_snapshots_policy",
+      "area": "ai",
+      "level": "strict",
+      "title": "Turn off saving snapshots for Recall",
+      "rationale": "The policy that stops Recall from saving screen snapshots. Applies only on a machine where the Recall feature exists. Expected set (1). Cost: the Recall AI features are not available.",
+      "read": {
+        "type": "registry",
+        "locations": [
+          {
+            "hive": "HKLM",
+            "path": "SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsAI",
+            "name": "DisableAIDataAnalysis",
+            "role": "policy"
+          },
+          {
+            "hive": "HKCU",
+            "path": "Software\\Policies\\Microsoft\\Windows\\WindowsAI",
+            "name": "DisableAIDataAnalysis",
+            "role": "policy"
+          }
+        ]
+      },
+      "expected": [
+        1
+      ],
+      "default": 0,
+      "apply": {
+        "location": 0,
+        "value": 1,
+        "kind": "DWord"
+      },
+      "applies_if": {
+        "entry": "recall_feature",
+        "in": [
+          "Enabled",
+          "Disabled"
+        ]
+      }
+    },
+    {
+      "id": "wu_no_auto_update",
+      "area": "updates",
+      "level": "standard",
+      "title": "Automatic updates turned off by policy",
+      "rationale": "A policy value of 1 turns off automatic Windows updates, leaving security fixes uninstalled. Expected 0 or missing: updates install automatically, which may restart the machine outside active hours.",
+      "read": {
+        "type": "registry",
+        "locations": [
+          {
+            "hive": "HKLM",
+            "path": "SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU",
+            "name": "NoAutoUpdate",
+            "role": "policy"
+          }
+        ]
+      },
+      "expected": [
+        0
+      ],
+      "default": 0,
+      "apply": {
+        "location": 0,
+        "remove": true
+      }
+    },
+    {
+      "id": "wu_au_options",
+      "area": "updates",
+      "level": "standard",
+      "title": "Automatic update behaviour policy",
+      "rationale": "Informational. The policy that sets how updates are downloaded and installed (notify, download only, scheduled install).",
+      "read": {
+        "type": "registry",
+        "locations": [
+          {
+            "hive": "HKLM",
+            "path": "SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU",
+            "name": "AUOptions",
+            "role": "policy"
+          }
+        ]
+      },
+      "expected": null,
+      "default": null,
+      "apply": null
+    },
+    {
+      "id": "wu_no_auto_reboot",
+      "area": "updates",
+      "level": "standard",
+      "title": "No automatic restart with signed-in users policy",
+      "rationale": "Informational. The policy that stops Windows Update from restarting while a user is signed in.",
+      "read": {
+        "type": "registry",
+        "locations": [
+          {
+            "hive": "HKLM",
+            "path": "SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU",
+            "name": "NoAutoRebootWithLoggedOnUsers",
+            "role": "policy"
+          }
+        ]
+      },
+      "expected": null,
+      "default": null,
+      "apply": null
+    },
+    {
+      "id": "delivery_optimization",
+      "area": "updates",
+      "level": "standard",
+      "title": "Delivery Optimization download mode",
+      "rationale": "Whether updates may be downloaded from and uploaded to other PCs on the internet. Expected a mode without internet peers: updates may download a little slower, no upload to strangers.",
+      "read": {
+        "type": "delivery_optimization"
+      },
+      "expected": [
+        "HttpOnly",
+        "Lan",
+        "Simple",
+        "Bypass"
+      ],
+      "apply": null,
+      "manual": "Settings > Windows Update > Advanced options > Delivery Optimization: turn off 'Allow downloads from other devices' or choose 'Devices on my local network'. Rollback: choose 'Devices on the internet and my local network' there."
+    },
+    {
+      "id": "antivirus_active",
+      "area": "security",
+      "level": "standard",
+      "title": "An antivirus is active",
+      "rationale": "Whether Windows Security Center reports at least one antivirus product with real-time protection on. Expected true: no cost beyond the antivirus's own resource use.",
+      "read": {
+        "type": "security_center_av"
+      },
+      "expected": [
+        true
+      ],
+      "apply": null,
+      "manual": "Settings > Privacy & security > Windows Security > Virus & threat protection: turn on real-time protection of the installed antivirus, or of Microsoft Defender when no other antivirus is installed. Rollback: turn it off in the same place."
+    },
+    {
+      "id": "defender_mode",
+      "area": "security",
+      "level": "standard",
+      "title": "Microsoft Defender running mode",
+      "rationale": "Informational. Normal when Defender is the active antivirus; 'Not running' or passive when another antivirus is active.",
+      "read": {
+        "type": "defender_status",
+        "field": "AMRunningMode"
+      },
+      "expected": null,
+      "apply": null
+    },
+    {
+      "id": "defender_realtime",
+      "area": "security",
+      "level": "standard",
+      "title": "Defender real-time protection",
+      "rationale": "Real-time scanning of files and processes when Defender is the active antivirus. Expected on: small CPU and disk cost while files are scanned.",
+      "read": {
+        "type": "defender_status",
+        "field": "RealTimeProtectionEnabled"
+      },
+      "expected": [
+        true
+      ],
+      "apply": null,
+      "manual": "Windows Security > Virus & threat protection > Manage settings: turn on 'Real-time protection'. Rollback: turn it off in the same place (Windows turns it back on after a while).",
+      "applies_if": {
+        "entry": "defender_mode",
+        "in": [
+          "Normal"
+        ]
+      }
+    },
+    {
+      "id": "defender_tamper",
+      "area": "security",
+      "level": "standard",
+      "title": "Defender tamper protection",
+      "rationale": "Stops other programs from changing Defender security settings. Expected on: settings can only be changed through Windows Security.",
+      "read": {
+        "type": "defender_status",
+        "field": "IsTamperProtected"
+      },
+      "expected": [
+        true
+      ],
+      "apply": null,
+      "manual": "Windows Security > Virus & threat protection > Manage settings: turn on 'Tamper Protection'. Rollback: turn it off in the same place.",
+      "applies_if": {
+        "entry": "defender_mode",
+        "in": [
+          "Normal"
+        ]
+      }
+    },
+    {
+      "id": "firewall_domain",
+      "area": "security",
+      "level": "standard",
+      "title": "Windows Firewall, Domain profile",
+      "rationale": "Whether Windows Firewall filters traffic on networks of the Domain profile. Expected on: unsolicited incoming connections are blocked unless a rule allows them.",
+      "read": {
+        "type": "firewall_profile",
+        "profile": "Domain"
+      },
+      "expected": [
+        true
+      ],
+      "apply": {
+        "enabled": true
+      }
+    },
+    {
+      "id": "firewall_private",
+      "area": "security",
+      "level": "standard",
+      "title": "Windows Firewall, Private profile",
+      "rationale": "Whether Windows Firewall filters traffic on networks of the Private profile. Expected on: unsolicited incoming connections are blocked unless a rule allows them.",
+      "read": {
+        "type": "firewall_profile",
+        "profile": "Private"
+      },
+      "expected": [
+        true
+      ],
+      "apply": {
+        "enabled": true
+      }
+    },
+    {
+      "id": "firewall_public",
+      "area": "security",
+      "level": "standard",
+      "title": "Windows Firewall, Public profile",
+      "rationale": "Whether Windows Firewall filters traffic on networks of the Public profile. Expected on: unsolicited incoming connections are blocked unless a rule allows them.",
+      "read": {
+        "type": "firewall_profile",
+        "profile": "Public"
+      },
+      "expected": [
+        true
+      ],
+      "apply": {
+        "enabled": true
+      }
+    },
+    {
+      "id": "uac_enabled",
+      "area": "security",
+      "level": "standard",
+      "title": "User Account Control",
+      "rationale": "Runs programs without administrator rights until you approve elevation. Expected on (1): a prompt before changes that need administrator rights.",
+      "read": {
+        "type": "registry",
+        "locations": [
+          {
+            "hive": "HKLM",
+            "path": "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+            "name": "EnableLUA",
+            "role": "preference"
+          }
+        ]
+      },
+      "expected": [
+        1
+      ],
+      "default": 1,
+      "apply": {
+        "location": 0,
+        "value": 1,
+        "kind": "DWord"
+      }
+    },
+    {
+      "id": "uac_admin_prompt",
+      "area": "security",
+      "level": "standard",
+      "title": "User Account Control prompt for administrators",
+      "rationale": "How UAC asks an administrator for elevation. Expected 2 (always ask) or 5 (ask for non-Windows programs, the Windows default): a prompt before elevation.",
+      "read": {
+        "type": "registry",
+        "locations": [
+          {
+            "hive": "HKLM",
+            "path": "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+            "name": "ConsentPromptBehaviorAdmin",
+            "role": "preference"
+          }
+        ]
+      },
+      "expected": [
+        2,
+        5
+      ],
+      "default": 5,
+      "apply": {
+        "location": 0,
+        "value": 5,
+        "kind": "DWord"
+      }
+    },
+    {
+      "id": "uac_secure_desktop",
+      "area": "security",
+      "level": "standard",
+      "title": "User Account Control prompt on the secure desktop",
+      "rationale": "Shows the UAC prompt on a separate desktop that other programs cannot drive. Expected on (1): the screen dims for a moment at each prompt.",
+      "read": {
+        "type": "registry",
+        "locations": [
+          {
+            "hive": "HKLM",
+            "path": "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+            "name": "PromptOnSecureDesktop",
+            "role": "preference"
+          }
+        ]
+      },
+      "expected": [
+        1
+      ],
+      "default": 1,
+      "apply": {
+        "location": 0,
+        "value": 1,
+        "kind": "DWord"
+      }
+    },
+    {
+      "id": "smartscreen_apps",
+      "area": "security",
+      "level": "standard",
+      "title": "SmartScreen for apps and files",
+      "rationale": "SmartScreen checks downloaded apps and files against a reputation service before they run. Expected on: a warning before running unknown downloads; file reputation checks contact Microsoft.",
+      "read": {
+        "type": "registry",
+        "locations": [
+          {
+            "hive": "HKLM",
+            "path": "SOFTWARE\\Policies\\Microsoft\\Windows\\System",
+            "name": "EnableSmartScreen",
+            "role": "policy",
+            "map": {
+              "0": "Off",
+              "1": "On"
+            }
+          },
+          {
+            "hive": "HKLM",
+            "path": "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer",
+            "name": "SmartScreenEnabled",
+            "role": "preference",
+            "map": {
+              "Off": "Off",
+              "Warn": "On",
+              "Prompt": "On",
+              "RequireAdmin": "On"
+            }
+          }
+        ]
+      },
+      "expected": [
+        "On"
+      ],
+      "default": "On",
+      "apply": {
+        "location": 1,
+        "remove": true
+      }
+    },
+    {
+      "id": "memory_integrity",
+      "area": "security",
+      "level": "standard",
+      "title": "Memory integrity (hypervisor-protected code integrity)",
+      "rationale": "Uses virtualization to protect the kernel from malicious code. Expected running: a small performance cost, and incompatible drivers cannot load.",
+      "read": {
+        "type": "device_guard",
+        "service": 2
+      },
+      "expected": [
+        true
+      ],
+      "apply": null,
+      "manual": "Windows Security > Device security > Core isolation details: turn on 'Memory integrity' and restart; first check that Windows reports no incompatible drivers, since an incompatible driver can stop the machine from starting. Rollback: turn it off in the same place and restart."
+    },
+    {
+      "id": "smart_app_control",
+      "area": "security",
+      "level": "standard",
+      "title": "Smart App Control",
+      "rationale": "Informational. Smart App Control blocks untrusted apps; its state is On, Off or Evaluation. Once turned off it can only be turned on again by reinstalling Windows.",
+      "read": {
+        "type": "registry",
+        "locations": [
+          {
+            "hive": "HKLM",
+            "path": "SYSTEM\\CurrentControlSet\\Control\\CI\\Policy",
+            "name": "VerifiedAndReputablePolicyState",
+            "role": "preference",
+            "map": {
+              "0": "Off",
+              "1": "On",
+              "2": "Evaluation"
+            }
+          }
+        ]
+      },
+      "expected": null,
+      "default": null,
+      "apply": null
+    },
+    {
+      "id": "power_scheme",
+      "area": "power",
+      "level": "standard",
+      "title": "Active power plan",
+      "rationale": "Informational. The active power plan.",
+      "read": {
+        "type": "power_scheme"
+      },
+      "expected": null,
+      "apply": null
+    },
+    {
+      "id": "hibernation_enabled",
+      "area": "power",
+      "level": "standard",
+      "title": "Hibernation",
+      "rationale": "Informational. Whether hibernation is enabled (HibernateEnabled, else the Windows default HibernateEnabledDefault); fast startup depends on it.",
+      "read": {
+        "type": "registry",
+        "locations": [
+          {
+            "hive": "HKLM",
+            "path": "SYSTEM\\CurrentControlSet\\Control\\Power",
+            "name": "HibernateEnabled",
+            "role": "preference"
+          },
+          {
+            "hive": "HKLM",
+            "path": "SYSTEM\\CurrentControlSet\\Control\\Power",
+            "name": "HibernateEnabledDefault",
+            "role": "preference"
+          }
+        ]
+      },
+      "expected": null,
+      "default": null,
+      "apply": null
+    },
+    {
+      "id": "fast_startup",
+      "area": "power",
+      "level": "strict",
+      "title": "Fast startup",
+      "rationale": "Fast startup hibernates the kernel at shutdown so the next start is quicker. Expected off (0). Cost: a longer start; in exchange a full shutdown clears the state of drivers.",
+      "read": {
+        "type": "registry",
+        "locations": [
+          {
+            "hive": "HKLM",
+            "path": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Power",
+            "name": "HiberbootEnabled",
+            "role": "preference"
+          }
+        ]
+      },
+      "expected": [
+        0
+      ],
+      "default": 1,
+      "apply": {
+        "location": 0,
+        "value": 0,
+        "kind": "DWord"
+      },
+      "applies_if": {
+        "entry": "hibernation_enabled",
+        "in": [
+          1
+        ]
+      }
+    },
+    {
+      "id": "wake_timers_ac",
+      "area": "power",
+      "level": "standard",
+      "title": "Allow wake timers (plugged in)",
+      "rationale": "Informational. Whether scheduled tasks may wake the machine from sleep while plugged in (0 off, 1 on, 2 important wake timers only).",
+      "read": {
+        "type": "powercfg_setting",
+        "subgroup": "SUB_SLEEP",
+        "setting": "RTCWAKE",
+        "power": "ac"
+      },
+      "expected": null,
+      "apply": null
+    },
+    {
+      "id": "wake_timers_dc",
+      "area": "power",
+      "level": "standard",
+      "title": "Allow wake timers (on battery)",
+      "rationale": "Whether scheduled tasks may wake the machine from sleep on battery (0 off, 1 on, 2 important wake timers only). Expected 0 or 2: maintenance tasks do not wake the machine on battery and may run later.",
+      "read": {
+        "type": "powercfg_setting",
+        "subgroup": "SUB_SLEEP",
+        "setting": "RTCWAKE",
+        "power": "dc"
+      },
+      "expected": [
+        0,
+        2
+      ],
+      "apply": {
+        "value": 0
+      }
+    },
+    {
+      "id": "wifi_power_management",
+      "area": "power",
+      "level": "strict",
+      "title": "Wi-Fi adapter power management",
+      "rationale": "PnPCapabilities 24 stops Windows from turning off the Wi-Fi adapter to save power, which can fix dropped connections after sleep or idle. Expected 24. Cost: higher battery use; the adapter is not turned off to save power.",
+      "read": {
+        "type": "wifi_adapter_value",
+        "name": "PnPCapabilities"
+      },
+      "expected": [
+        24
+      ],
+      "default": 0,
+      "apply": {
+        "value": 24,
+        "kind": "DWord"
+      }
+    },
+    {
+      "id": "dns_servers",
+      "area": "network",
+      "level": "standard",
+      "title": "DNS servers",
+      "rationale": "Informational. The DNS servers of each connected network adapter.",
+      "read": {
+        "type": "dns"
+      },
+      "expected": null,
+      "apply": null
+    },
+    {
+      "id": "proxy_user_enabled",
+      "area": "network",
+      "level": "standard",
+      "title": "Manual proxy for the current user",
+      "rationale": "Whether a manual proxy server is set for the current user. Expected off (0): traffic goes directly, unless a network requires a proxy.",
+      "read": {
+        "type": "registry",
+        "locations": [
+          {
+            "hive": "HKCU",
+            "path": "Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
+            "name": "ProxyEnable",
+            "role": "preference"
+          }
+        ]
+      },
+      "expected": [
+        0
+      ],
+      "default": 0,
+      "apply": {
+        "location": 0,
+        "value": 0,
+        "kind": "DWord"
+      }
+    },
+    {
+      "id": "proxy_user_autoconfig",
+      "area": "network",
+      "level": "standard",
+      "title": "Proxy auto-configuration script for the current user",
+      "rationale": "A setup script address that decides which proxy to use. Expected empty: traffic goes directly, unless a network requires a proxy script.",
+      "read": {
+        "type": "registry",
+        "locations": [
+          {
+            "hive": "HKCU",
+            "path": "Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
+            "name": "AutoConfigURL",
+            "role": "preference"
+          }
+        ]
+      },
+      "expected": [
+        ""
+      ],
+      "default": "",
+      "apply": {
+        "location": 0,
+        "remove": true
+      }
+    },
+    {
+      "id": "winhttp_proxy",
+      "area": "network",
+      "level": "standard",
+      "title": "WinHTTP proxy (system services)",
+      "rationale": "The proxy used by system services such as Windows Update. Expected direct: services connect directly, unless a network requires a proxy.",
+      "read": {
+        "type": "winhttp_proxy"
+      },
+      "expected": [
+        "direct"
+      ],
+      "apply": null,
+      "manual": "In an elevated shell, 'netsh winhttp show proxy' shows the setting and 'netsh winhttp reset proxy' sets direct access. Rollback: 'netsh winhttp set proxy <server:port>' with the previous server from the report."
+    },
+    {
+      "id": "vss_max_space",
+      "area": "storage",
+      "level": "standard",
+      "title": "Maximum space for restore points and shadow copies",
+      "rationale": "Informational. The maximum disk space for shadow copies (restore points) on each volume. Read only with administrator rights.",
+      "read": {
+        "type": "shadow_storage"
+      },
+      "expected": null,
+      "apply": null
+    },
+    {
+      "id": "camera_access_system",
+      "area": "permissions",
+      "level": "standard",
+      "title": "Camera access for the device",
+      "rationale": "Informational. Whether apps on this device may use the camera at all, by policy or by the device-wide switch in Settings.",
+      "read": {
+        "type": "registry",
+        "locations": [
+          {
+            "hive": "HKLM",
+            "path": "SOFTWARE\\Policies\\Microsoft\\Windows\\AppPrivacy",
+            "name": "LetAppsAccessCamera",
+            "role": "policy",
+            "map": {
+              "1": "Allow",
+              "2": "Deny"
+            }
+          },
+          {
+            "hive": "HKLM",
+            "path": "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\webcam",
+            "name": "Value",
+            "role": "preference"
+          }
+        ]
+      },
+      "expected": null,
+      "default": "Allow",
+      "apply": null
+    },
+    {
+      "id": "microphone_access_system",
+      "area": "permissions",
+      "level": "standard",
+      "title": "Microphone access for the device",
+      "rationale": "Informational. Whether apps on this device may use the microphone at all, by policy or by the device-wide switch in Settings.",
+      "read": {
+        "type": "registry",
+        "locations": [
+          {
+            "hive": "HKLM",
+            "path": "SOFTWARE\\Policies\\Microsoft\\Windows\\AppPrivacy",
+            "name": "LetAppsAccessMicrophone",
+            "role": "policy",
+            "map": {
+              "1": "Allow",
+              "2": "Deny"
+            }
+          },
+          {
+            "hive": "HKLM",
+            "path": "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\microphone",
+            "name": "Value",
+            "role": "preference"
+          }
+        ]
+      },
+      "expected": null,
+      "default": "Allow",
+      "apply": null
+    },
+    {
+      "id": "location_access_system",
+      "area": "permissions",
+      "level": "standard",
+      "title": "Location access for the device",
+      "rationale": "Informational. Whether apps on this device may use the location at all, by policy or by the device-wide switch in Settings.",
+      "read": {
+        "type": "registry",
+        "locations": [
+          {
+            "hive": "HKLM",
+            "path": "SOFTWARE\\Policies\\Microsoft\\Windows\\AppPrivacy",
+            "name": "LetAppsAccessLocation",
+            "role": "policy",
+            "map": {
+              "1": "Allow",
+              "2": "Deny"
+            }
+          },
+          {
+            "hive": "HKLM",
+            "path": "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\location",
+            "name": "Value",
+            "role": "preference"
+          }
+        ]
+      },
+      "expected": null,
+      "default": "Allow",
+      "apply": null
+    },
+    {
+      "id": "camera_access_user",
+      "area": "permissions",
+      "level": "standard",
+      "title": "Camera access for the current user",
+      "rationale": "Informational. Whether apps may use the camera for the current user (the switch in Settings > Privacy & security).",
+      "read": {
+        "type": "registry",
+        "locations": [
+          {
+            "hive": "HKCU",
+            "path": "Software\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\webcam",
+            "name": "Value",
+            "role": "preference"
+          }
+        ]
+      },
+      "expected": null,
+      "default": "Allow",
+      "apply": null
+    },
+    {
+      "id": "microphone_access_user",
+      "area": "permissions",
+      "level": "standard",
+      "title": "Microphone access for the current user",
+      "rationale": "Informational. Whether apps may use the microphone for the current user (the switch in Settings > Privacy & security).",
+      "read": {
+        "type": "registry",
+        "locations": [
+          {
+            "hive": "HKCU",
+            "path": "Software\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\microphone",
+            "name": "Value",
+            "role": "preference"
+          }
+        ]
+      },
+      "expected": null,
+      "default": "Allow",
+      "apply": null
+    },
+    {
+      "id": "location_access_user",
+      "area": "permissions",
+      "level": "standard",
+      "title": "Location access for the current user",
+      "rationale": "Informational. Whether apps may use the location for the current user (the switch in Settings > Privacy & security).",
+      "read": {
+        "type": "registry",
+        "locations": [
+          {
+            "hive": "HKCU",
+            "path": "Software\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\location",
+            "name": "Value",
+            "role": "preference"
+          }
+        ]
+      },
+      "expected": null,
+      "default": "Allow",
+      "apply": null
+    }
+  ]
+}

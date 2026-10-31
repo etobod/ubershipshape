@@ -1,0 +1,13 @@
+{
+  "name": "ubershipshape",
+  "owner": {
+    "name": "etobod"
+  },
+  "plugins": [
+    {
+      "name": "ubershipshape",
+      "source": "./",
+      "description": "Read-only checks of a Windows machine with Markdown reports and paste-ready repair blocks."
+    }
+  ]
+}

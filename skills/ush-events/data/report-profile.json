@@ -1,0 +1,11 @@
+{
+  "detail_sections": ["groups", "noise", "boots", "anomalies", "reliability_records",
+                      "dump_files"],
+  "id_letters": "gnabrd",
+  "path_keys": ["summary_file", "detail_file", "name", "path", "dump_path", "minidump_dir",
+                "dump_file"],
+  "id_keys": ["id", "dump", "bugcheck", "bugcheck_candidates"],
+  "required_lists": ["groups", "anomalies", "dumps.files"],
+  "truncated": {"list": "groups", "prefix": "g"},
+  "report_prefix": "events-"
+}
