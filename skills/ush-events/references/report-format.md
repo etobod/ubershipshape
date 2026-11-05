@@ -3,7 +3,7 @@
 The report is Markdown in the language the user addressed the skill in. It is
 saved as `<data dir>/reports/events-<YYYY-MM-DD-HHMM>.md` and checked with
 `python -B "<plugin root>/skills/ush-common/scripts/check_report.py" <report>` (or
-`--latest --skill ush-events` for the newest `events-*.md`), which reads the
+`--default-data-dir "<plugin data>" --latest --skill ush-events` for the newest `events-*.md`), which reads the
 ush-events rules from `data/report-profile.json`.
 Follow `<plugin root>/skills/ush-common/references/report-style.md`: it says how every
 report is written (time, numbers, dash, recommendation layout, language);

@@ -4,7 +4,7 @@ The report is Markdown in the language the user addressed the skill in. It is
 saved as `<data dir>/reports/health-<YYYY-MM-DD-HHMM>.md` (local time of the
 run) and checked with
 `python -B "<plugin root>/skills/ush-common/scripts/check_report.py" <report>` (or
-`--latest --skill ush-health` for the newest `health-*.md`), which reads the
+`--default-data-dir "<plugin data>" --latest --skill ush-health` for the newest `health-*.md`), which reads the
 ush-health rules from `data/report-profile.json`.
 Follow `<plugin root>/skills/ush-common/references/report-style.md`: it says how every
 report is written (time, numbers, dash, recommendation layout, language);

@@ -22,14 +22,18 @@ The references write these two folders as `<plugin root>` and
 starts with `Set-Location "<absolute plugin root>"`, the plugin root above.
 
 If writing a file to the data folder is refused (a hook or a permission
-rule blocks the Write or Edit tool), stop there and ask the user whether to
-add the data folder as an exception: its absolute path in
-`permissions.additionalDirectories` of the current project's
-`.claude/settings.local.json` (create the file or the key when missing and
-keep every other entry), unless the refusal names another place that
-counts. Only on a yes add it and write the file again; on a no, or without
-an answer, stop the skill and tell the user that nothing was saved and why.
-Never write the file another way (a shell command, another folder).
+rule blocks the Write or Edit tool), stop there. Never change a settings file
+yourself. Tell the user that nothing was saved and why, and give them one
+line to type in this session, without quotes: `/add-dir <data folder>`, the
+absolute data folder written with forward slashes. It allows the folder for
+this session only, with no settings file edit. To allow it for good, they can
+add the same forward-slash path to `permissions.additionalDirectories` in
+their user settings `~/.claude/settings.json` (never in a project's `.claude`
+folder); that applies from the next session, so after only that change the
+skill is run again in a new session. Write the file again with the same tool
+only after the user says they ran `/add-dir`. If it is refused again, stop the
+skill and tell the user that nothing was saved and why. Never write the file
+another way (a shell command, another folder).
 
 ## When to use
 
@@ -183,7 +187,8 @@ a change automatically. Say so if the user asks for these.
    python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-common/scripts/check_report.py" "<absolute data dir>/reports/settings-<YYYY-MM-DD-HHMM>.md"
    ```
 
-   (`--latest --skill ush-settings` checks the newest `settings-*.md`
+   (`python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-common/scripts/check_report.py" --default-data-dir "${CLAUDE_PLUGIN_DATA}" --latest --skill ush-settings`
+   checks the newest `settings-*.md`
    instead.) The checker is shared by all skills; it reads the ush-settings
    rules from `data/report-profile.json`. Correct the report and run the
    check again until it prints `OK`. `OK` means each number occurs somewhere

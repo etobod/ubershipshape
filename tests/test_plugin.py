@@ -170,6 +170,19 @@ class TestSkillPaths(unittest.TestCase):
                         problems.append(f"{name}:{number}: {line.strip()}")
         self.assertEqual(problems, [])
 
+    def test_latest_hint_names_a_data_dir(self):
+        # A "--latest --skill" hint without a data directory makes check_report
+        # exit with a usage error, also when no "python" command is on its line.
+        problems = []
+        for path in skill_docs() + reference_docs():
+            name = path.relative_to(SKILLS).as_posix()
+            for number, line in enumerate(read(path).splitlines(), 1):
+                if "--latest --skill" not in line:
+                    continue
+                if not DATA_DIR_FLAG.search(line) and "--default-data-dir" not in line:
+                    problems.append(f"{name}:{number}: {line.strip()}")
+        self.assertEqual(problems, [])
+
     def test_header_report_path_and_repair_rule(self):
         for doc in skill_docs():
             text = read(doc)
@@ -182,13 +195,20 @@ class TestSkillPaths(unittest.TestCase):
                     r"(?ms)^\d+\. Tell the user where the report is.*?(?=^\d+\. |^## |\Z)", text)
                 self.assertEqual(len(steps), 1, "one step tells where the report is")
                 self.assertIn("absolute path of the report file", " ".join(steps[0].split()))
-                # A refused write to the data folder: ask for the exception, else stop.
+                # A refused write to the data folder: the user adds the exception, the
+                # model changes no settings, and a second refusal stops the skill.
                 flat = " ".join(text.split())
                 for phrase in ("writing a file to the data folder is refused",
-                               "ask the user whether to add the data folder as an exception",
+                               "Never change a settings file yourself",
+                               "without quotes: `/add-dir <data folder>`",
+                               "written with forward slashes",
+                               "for this session only, with no settings file edit",
                                "`permissions.additionalDirectories`",
-                               "`.claude/settings.local.json`",
-                               "stop the skill",
+                               "`~/.claude/settings.json`",
+                               "never in a project's `.claude` folder",
+                               "only after the user says they ran `/add-dir`",
+                               "the skill is run again in a new session",
+                               "If it is refused again, stop the skill",
                                "Never write the file another way"):
                     self.assertIn(phrase, flat)
         rule = " ".join(read(SKILLS / "ush-common/references/repair-plan.md").split())
