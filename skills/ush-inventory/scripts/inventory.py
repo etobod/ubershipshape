@@ -45,7 +45,7 @@ see ``skills/ush-common/scripts/psrun.py``):
   included) names it as ``InfName``; null for an ``Extension`` package and for
   every package when ``drivers`` was not read. A failed job, an exit code other
   than 0 or a text that is no XML listing makes the source unreadable. The summary
-  lists the packages with ``present_device`` false (``o..``, never cut).
+  lists the packages with ``present_device`` false (``o..``, cut to the budget).
 - ``firewall_rules``: the rule values of the ``FirewallRules`` keys of the local
   store (``local``), of Store apps (``app_iso``) and of the policy (``policy``);
   a missing key is no rules, a key that cannot be read fails the source. The
@@ -122,23 +122,25 @@ The summary goes to stdout and to ``work/inventory-<UTC stamp>.summary.json``;
 the detail file ``work/inventory-<UTC stamp>.detail.json`` holds every program,
 every autostart entry, every component, every driver, every driver package, every
 addition and every change with the same ids. ``--detail <id>`` prints one item of the newest detail
-file. To keep the summary within ``SUMMARY_MAX_CHARS`` seven lists are cut from
+file. To keep the summary within ``SUMMARY_MAX_CHARS`` eight lists are cut from
 their end, first each down to its minimum: ``programs`` (``truncated``; programs
 without an install date, then the oldest installs) down to ``PROGRAMS_MIN``,
+``vendor_folders`` (``truncated_vendor_folders``) down to ``VENDOR_FOLDERS_MIN``,
 ``driver_packages`` (``truncated_driver_packages``; the first packages in id
 order stay) down to ``DRIVER_PACKAGES_MIN``,
 ``drivers`` (``truncated_drivers``; the ``DRIVER_CLASSES_FIRST`` classes lead the
 list) down to ``DRIVERS_MIN``, ``components`` (``truncated_components``) down to
-``COMPONENTS_MIN`` and ``additions`` (``truncated_additions``; the items without a
-change block in SKILL.md first, then the ones with a block) down to
-``ADDITIONS_MIN``; then ``components``, ``drivers``, ``driver_packages`` and
-``additions`` below their minimum, each only after the one before is empty, and
-only then ``programs`` below ``PROGRAMS_MIN``. A ``null`` list stays ``null``.
+``COMPONENTS_MIN``; then ``components``, ``drivers`` and ``driver_packages``
+below their minimum, each only after the one before is empty; then ``additions``
+(``truncated_additions``; the items without a change block in SKILL.md first,
+then the ones with a block) down to ``ADDITIONS_MIN``; then ``vendor_folders``
+and ``additions`` below their minimum, each only after the one before is empty,
+and only then ``programs`` below ``PROGRAMS_MIN``. A ``null`` list stays ``null``.
 When ``autostart`` and ``changes`` are over the budget on
-their own, the five lists keep their minimums and ``autostart``
+their own, the six lists keep their minimums and ``autostart``
 (``truncated_autostart``, with ``autostart_counts``) and ``changes``
 (``truncated_changes``, with ``change_counts``) are cut, down to ``AUTOSTART_MIN``
-and ``CHANGES_MIN``, then to nothing, and then the five lists to nothing. The
+and ``CHANGES_MIN``, then to nothing, and then the six lists to nothing. The
 changes named by a rule of ``data/collapsed_names.json`` (the firewall rules named
 by an unresolved ``ms-resource:`` string) are collapsed in the summary into one
 counted entry per change type. A program whose name, without a suffix of
@@ -178,8 +180,11 @@ FIRST_RUN_SCHEMA = 1
 SCHEMA_VERSION = 1
 SUMMARY_MAX_CHARS = 35000
 DETAIL_SECTIONS = ("programs", "autostart", "components", "drivers", "driver_packages",
-                   "additions", "changes", "leftovers")
+                   "additions", "changes", "leftovers", "vendor_folders")
 DEFAULT_OWN_FILE = Path(__file__).absolute().parents[1] / "data" / "windows-own.json"
+# The roots whose direct child folders are listed, the folder names that ship with
+# Windows and the exact publishers of a vendor folder name; read at run time.
+VENDOR_FOLDERS_FILE = Path(__file__).absolute().parents[1] / "data" / "vendor-folders.json"
 # The name suffixes of a per-user install (" (User)"); read at run time.
 PER_USER_SUFFIXES_FILE = (Path(__file__).absolute().parents[1] / "data"
                           / "per_user_suffixes.json")
@@ -249,7 +254,15 @@ ADMIN_REASON = ("requires administrator rights (not read in this run, which is n
 # The lists cut to fit the budget, in this order, with the key that counts the cut items.
 # driver_packages (the orphan packages) is cut like the other short lists: down to
 # DRIVER_PACKAGES_MIN first, and to nothing only after drivers and before additions.
+# vendor_folders (the folders no rule matches, each not judged one repeating the
+# shared not_judged cause) is cut down to VENDOR_FOLDERS_MIN first of the short lists,
+# since it can grow long and every folder is a lead the detail file and the not_checked
+# cause still cover; it keeps VENDOR_FOLDERS_MIN until the additions are at
+# ADDITIONS_MIN, and goes below it only then, before the additions go below theirs:
+# it never pushes the additions (what was added to the system) below their minimum,
+# and the additions never push it below its own while they are above theirs.
 CUT_LISTS = (("programs", "truncated"),
+             ("vendor_folders", "truncated_vendor_folders"),
              ("driver_packages", "truncated_driver_packages"),
              ("drivers", "truncated_drivers"),
              ("components", "truncated_components"), ("additions", "truncated_additions"),
@@ -257,8 +270,9 @@ CUT_LISTS = (("programs", "truncated"),
 # A cut autostart or changes list carries the per-type counts of the whole list here.
 COUNT_KEYS = {"autostart": "autostart_counts", "changes": "change_counts"}
 # The items each list keeps before any list is cut further: the newest programs and
-# the first driver packages, drivers, components and additions.
+# the first vendor folders, driver packages, drivers, components and additions.
 PROGRAMS_MIN = 20
+VENDOR_FOLDERS_MIN = 10
 DRIVER_PACKAGES_MIN = 10
 DRIVERS_MIN = 10
 COMPONENTS_MIN = 10
@@ -887,6 +901,59 @@ foreach ($p in @($in.keys)) {
 $result = $rows.ToArray()
 """
 
+# __INPUT__ is replaced by the quoted path of {"roots": [...]}: raw roots such as
+# "%ProgramFiles%", expanded here. Read only: one row per root with its direct
+# child folders. A root that cannot be listed (a variable left unexpanded, not
+# there, access denied) is "unreadable" with the reason and no folders. A child
+# that is a reparse point (a junction) is only marked, never opened. A child whose
+# entries cannot be listed has has_entries null and the reason, never false.
+VENDOR_FOLDERS_BODY = r"""$in = [System.IO.File]::ReadAllText(__INPUT__, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+function Message($err) {
+  $ex = $err.Exception
+  if ($null -ne $ex.InnerException) { $ex = $ex.InnerException }
+  return S $ex.Message
+}
+$rows = New-Object System.Collections.Generic.List[object]
+foreach ($r in @($in.roots)) {
+  $raw = S $r
+  if (-not $raw) { continue }
+  $expanded = ([System.Environment]::ExpandEnvironmentVariables($raw)).TrimEnd('\')
+  $row = [ordered]@{ root = $raw; expanded = $expanded; status = 'unreadable'; reason = $null
+    folders = $null }
+  try {
+    if ($expanded.Contains('%')) { throw 'the root holds a variable this account does not know' }
+    if (-not [System.IO.Path]::IsPathRooted($expanded)) { throw 'the root is not a full path' }
+    $children = (New-Object System.IO.DirectoryInfo $expanded).GetDirectories()
+    $list = New-Object System.Collections.Generic.List[object]
+    foreach ($d in $children) {
+      $f = [ordered]@{ name = S $d.Name; path = S $d.FullName; reparse_point = $false
+        has_entries = $null; reason = $null; last_write = $null }
+      try { $f.last_write = $d.LastWriteTimeUtc.ToString('s') + 'Z' } catch { }
+      if (($d.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        $f.reparse_point = $true
+      } else {
+        try {
+          $e = [System.IO.Directory]::EnumerateFileSystemEntries($d.FullName).GetEnumerator()
+          try { $f.has_entries = [bool]$e.MoveNext() } finally { $e.Dispose() }
+        } catch {
+          $f.has_entries = $null
+          $f.reason = Message $_
+        }
+      }
+      $list.Add([pscustomobject]$f)
+    }
+    $row.status = 'read'
+    $row.folders = $list.ToArray()
+  } catch {
+    $row.status = 'unreadable'
+    $row.folders = $null
+    $row.reason = Message $_
+  }
+  $rows.Add([pscustomobject]$row)
+}
+$result = $rows.ToArray()
+"""
+
 # Works without administrator rights (Get-WindowsOptionalFeature does not).
 # InstallState stays a number; Python maps it.
 OPTIONAL_FEATURES_BODY = r"""$rows = @(Get-CimInstance -ClassName Win32_OptionalFeature | ForEach-Object {
@@ -1282,6 +1349,42 @@ def load_additions_own(data: dict):
                                     "serial": e["serial"].strip().upper()}
                                    for e in first_run],
         "hosts_default_dir": hosts_dir,
+    }, None
+
+
+def load_vendor_folders(path: Path):
+    """The data file of the vendor folders as ``(config, None)``, or ``(None, reason)``.
+
+    ``roots`` is the list of raw root strings (``%ProgramFiles%``), ``windows_names``
+    a set of case-folded folder names and ``vendors`` ``{case-folded folder name:
+    {case-folded publisher}}``. A file that cannot be used gives no config, so no
+    folder is called unmatched by a list that was not read.
+    """
+    name = Path(path).name
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        return None, f"{name} could not be read: {type(exc).__name__}: {exc}"
+    if not isinstance(data, dict):
+        return None, f"{name} does not hold an object"
+    roots = data.get("roots")
+    if not is_strings(roots) or not roots or not all(root.strip() for root in roots):
+        return None, f"{name}: roots is not a list of non-empty strings"
+    names = data.get("windows_names")
+    if not is_strings(names):
+        return None, f"{name}: windows_names is not a list of strings"
+    vendors = data.get("vendors")
+    if not isinstance(vendors, dict) or not all(
+            is_strings(publishers) for publishers in vendors.values()):
+        return None, f"{name}: vendors is not an object of lists of strings"
+    folded = {}
+    for folder, publishers in vendors.items():
+        folded.setdefault(folder.strip().casefold(), set()).update(
+            p.strip().casefold() for p in publishers if p.strip())
+    return {
+        "roots": [root.strip() for root in roots],
+        "windows_names": {n.strip().casefold() for n in names},
+        "vendors": folded,
     }, None
 
 
@@ -3575,6 +3678,246 @@ def collect_install_folders(col: Collector, folders: list) -> dict:
     return parts
 
 
+# Vendor folders: a folder name that is a GUID (Windows Installer caches a product or
+# a patch by its code), the leaf of the root where such names are skipped, and the
+# keys of component_counts.
+GUID_NAME = re.compile(
+    r"^\{[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}$", re.IGNORECASE)
+INSTALLER_LEAF = "installer"
+VENDOR_COUNTS = ("vendor_folders_read", "vendor_folders_matched", "vendor_folders_unmatched",
+                 "vendor_folders_unknown", "reparse_points", "installer_guid_folders")
+VENDOR_SUMMARY = ("id", "key", "path", "root", "matched", "has_entries", "last_write")
+
+
+def collect_vendor_folders(col: Collector, roots: list) -> list:
+    """Run ``vendor_folders`` for ``roots``: ``[{root, expanded, status, reason,
+    folders}]`` in the order of ``roots``, ``folders`` the job's child rows or None.
+
+    The job is recorded as the source ``vendor_folders``. A job that failed (or whose
+    input could not be written) makes every root ``unreadable`` with the job's reason;
+    the source names it in not_checked. Otherwise a root without a row, or whose row
+    is not clearly read, is ``unreadable`` with a reason and named in not_checked.
+    """
+    input_path = col.work / f"inventory-{col.stamp}.vendor_folders.input.json"
+    try:
+        input_path.write_text(json.dumps({"roots": roots}, ensure_ascii=True),
+                              encoding="utf-8")
+    except OSError as exc:
+        result = {"status": "unreadable", "rows": [],
+                  "reason": f"the root list could not be written: "
+                            f"{type(exc).__name__}: {exc}"}
+    else:
+        body = VENDOR_FOLDERS_BODY.replace("__INPUT__", psrun.ps_quote(input_path))
+        result = col.job("vendor_folders", body)
+    if result["status"] != "read":
+        # Every root gives a row, so a job without rows did not list any root.
+        reason = result["reason"] or "the vendor_folders job gave no row for any root"
+        col.record("vendor_folders", "unreadable", reason)
+        return [{"root": root, "expanded": None, "status": "unreadable", "reason": reason,
+                 "folders": None} for root in roots]
+    by_root = {}
+    for row in result["rows"]:
+        if isinstance(row, dict) and text(row.get("root")) is not None:
+            by_root.setdefault(row["root"], row)
+    rows = []
+    for root in roots:
+        row = by_root.get(root)
+        entry = {"root": root, "expanded": None, "status": "unreadable", "reason": None,
+                 "folders": None}
+        if row is None:
+            entry["reason"] = "the vendor_folders job gave no row for this root"
+        else:
+            entry["expanded"] = text(row.get("expanded"))
+            folders = row.get("folders")
+            if row.get("status") == "read" and entry["expanded"] is not None \
+                    and isinstance(folders, (list, dict)):
+                entry.update(status="read", folders=as_list(folders))
+            elif row.get("status") == "read":
+                entry["reason"] = ("the vendor_folders row says read but gives no expanded "
+                                   "root or no folder list")
+            else:
+                entry["reason"] = (text(row.get("reason"))
+                                   or "the vendor_folders job gave no reason")
+        if entry["status"] != "read":
+            col.skip(f"vendor_folders {root}", entry["reason"])
+        rows.append(entry)
+    if any(entry["status"] == "read" for entry in rows):
+        col.record("vendor_folders", "read")
+    else:
+        col.record("vendor_folders", "unreadable", "no root could be listed")
+    return rows
+
+
+def vendor_children(col: Collector, config: dict, rows: list) -> tuple[list, int, int]:
+    """``(folders, reparse points, installer GUID folders)``: the child folders of the
+    read roots after the skips, each ``{id, key, name, path, root, has_entries,
+    reason, last_write, matched, matched_by}``, by root and then by name.
+
+    Skipped: a reparse point, a GUID-named folder of the ``Installer`` root, and a
+    name of ``windows_names``. A row that is not a direct child of its root, or does
+    not say whether it is a reparse point, is not judged and is named in not_checked.
+    A folder whose entries were not listed has ``has_entries`` None and a reason.
+    """
+    folders, reparse, guid, malformed = [], 0, 0, 0
+    for place, row in enumerate(rows):
+        if row["status"] != "read":
+            continue
+        expanded = row["expanded"].rstrip("\\/")
+        installer = expanded.rsplit("\\", 1)[-1].casefold() == INSTALLER_LEAF
+        for child in row["folders"]:
+            child = child if isinstance(child, dict) else {}
+            name, path = text(child.get("name")), text(child.get("path"))
+            if name is None or path is None or not isinstance(child.get("reparse_point"), bool) \
+                    or path.rstrip("\\/").rsplit("\\", 1)[0].casefold() != expanded.casefold():
+                malformed += 1
+                continue
+            if child["reparse_point"]:
+                reparse += 1
+                continue
+            if installer and GUID_NAME.match(name.strip()):
+                guid += 1
+                continue
+            if name.strip().casefold() in config["windows_names"]:
+                continue
+            has_entries = child.get("has_entries")
+            has_entries = has_entries if isinstance(has_entries, bool) else None
+            reason = text(child.get("reason"))
+            if has_entries is None and reason is None:
+                reason = "the vendor_folders job did not say whether the folder holds entries"
+            folders.append({"id": None, "key": f"vendor_folder:{path.casefold()}",
+                            "name": name, "path": path, "root": row["root"],
+                            "has_entries": has_entries, "reason": reason,
+                            "last_write": text(child.get("last_write")),
+                            "matched": None, "matched_by": [], "_place": place})
+    if malformed:
+        col.skip("vendor_folders rows",
+                 f"{malformed} child folder row(s) are not a direct child of their root or "
+                 f"do not say whether they are a reparse point, so they are not judged")
+    folders.sort(key=lambda f: (f["_place"], f["name"].casefold(), f["path"]))
+    for folder in folders:
+        del folder["_place"]
+    return folders, reparse, guid
+
+
+def find_vendor_folders(col: Collector, config, rows: list, programs: dict, autostart: list,
+                        dirs: dict, statuses: dict, previous: dict,
+                        numbering=None) -> tuple[list | None, dict, dict]:
+    """``(listed, counts, detail section)`` of the top-level vendor folders.
+
+    A folder is matched only by an exact rule: an installed program's
+    ``install_location`` (one ``usable_folder`` accepts, so never a root such as
+    ``C:\\ProgramData`` nor anything under the Windows folder) is the folder or lies
+    under it; an autostart, service or task target lies under it; or the data file's
+    ``vendors`` entry for its name lists a publisher an installed program has
+    (case-folded, exact). Every other folder is unmatched; ``listed`` holds every
+    folder no rule matches with a ``v`` id (key ``vendor_folder:<case-folded path>``)
+    and its ``matched`` (false, or null when not judged).
+
+    ``listed`` and every count are None when the data file could not be used or no
+    root could be listed; ``listed`` is None also when a program source was not read
+    and the baseline has none of its programs. Whenever ``listed`` is None the
+    section's ``folders`` is None too; its ``roots`` is None only when the data file
+    could not be used (the roots are then unknown). When an autostart source, a
+    program source (whose baseline programs stand in), a target path or a program
+    registry key was not read, a folder no rule matches is listed with ``matched``
+    None and ``not_judged`` (the shared cause text, also in not_checked), counted in
+    ``vendor_folders_unknown``: no folder is unmatched because something was not read.
+    """
+    counts = dict.fromkeys(VENDOR_COUNTS)
+    section = {"roots": None if config is None else
+               [{k: row[k] for k in ("root", "expanded", "status", "reason")}
+                for row in rows], "folders": None}
+    if config is None or not any(row["status"] == "read" for row in rows):
+        return None, counts, section
+    folders, reparse, guid = vendor_children(col, config, rows)
+    counts.update(vendor_folders_read=len(folders), reparse_points=reparse,
+                  installer_guid_folders=guid)
+
+    missing = [s for s in PROGRAM_SOURCES
+               if statuses.get(s) not in READ_STATUSES and not previous.get(s)]
+    if missing:
+        col.skip("vendor_folders",
+                 f"no folder is called unmatched: the program source(s) "
+                 f"{', '.join(missing)} were not read and the baseline holds none of "
+                 f"their programs")
+        return None, counts, section
+    section["folders"] = folders
+
+    dir_paths = {name: value.get("path") for name, value in (dirs or {}).items()
+                 if isinstance(value, dict)}
+    skipped = {d.rstrip("\\/").casefold() for d in dir_paths.values() if text(d)}
+    system_root = text(dir_paths.get("SystemRoot"))
+    locations, publishers = [], set()
+    for source in PROGRAM_SOURCES:
+        for item in (programs.get(source) or {}).values():
+            if not isinstance(item, dict):
+                continue
+            location = usable_folder(item.get("install_location"), skipped, system_root)
+            if location:
+                locations.append(location)
+            publisher = publisher_of(item)
+            if publisher:
+                publishers.add(publisher)
+    targets, unknown_targets = [], 0
+    for entry in autostart:
+        unread = "targets" in (entry.get("unread_fields") or [])
+        for path, raw, _ in entry_targets(entry):
+            if path is not None:
+                targets.append(path)
+            elif raw is not None:
+                unread = True
+        unknown_targets += 1 if unread else 0
+
+    causes = [f"the source {s}" for s in AUTOSTART_SOURCES
+              if statuses.get(s) not in READ_STATUSES]
+    causes += [f"the source {s} (only its baseline programs were matched)"
+               for s in PROGRAM_SOURCES if statuses.get(s) not in READ_STATUSES]
+    if unknown_targets:
+        causes.append(f"the target path of {unknown_targets} autostart entr"
+                      f"{'y' if unknown_targets == 1 else 'ies'}")
+    unread_keys = {}
+    for source, key in col.unread_keys:
+        if source in PROGRAM_SOURCES and key not in (programs.get(source) or {}):
+            unread_keys[source] = unread_keys.get(source, 0) + 1
+    for source in PROGRAM_SOURCES:
+        if unread_keys.get(source):
+            causes.append(f"{unread_keys[source]} program key(s) of {source} that are in "
+                          f"no baseline")
+
+    for folder in folders:
+        by = []
+        if any(under(location, folder["path"]) for location in locations):
+            by.append("install_location")
+        if any(under(target, folder["path"]) for target in targets):
+            by.append("target")
+        if publishers & config["vendors"].get(folder["name"].strip().casefold(), set()):
+            by.append("vendor")
+        folder["matched_by"] = by
+        folder["matched"] = True if by else (None if causes else False)
+    shown = [folder for folder in folders if folder["matched"] is not True]
+    numbering_of(numbering).assign("v", shown)
+    unmatched = sum(1 for folder in shown if folder["matched"] is False)
+    unknown = len(shown) - unmatched
+    not_judged = "; ".join(causes)
+    if unknown:
+        col.skip("vendor_folders",
+                 f"{unknown} top-level folder(s) that no rule matches are listed with "
+                 f"matched null (not judged), because a folder could belong to what was "
+                 f"not read: {not_judged}")
+    counts.update(vendor_folders_matched=sum(1 for f in folders if f["matched"] is True),
+                  vendor_folders_unmatched=unmatched, vendor_folders_unknown=unknown)
+    listed = []
+    for folder in shown:
+        item = {k: folder[k] for k in VENDOR_SUMMARY}
+        if folder["matched"] is None:
+            item["not_judged"] = not_judged
+        if folder["has_entries"] is None:
+            item["unread_fields"] = ["has_entries"]
+            item["has_entries_reason"] = folder["reason"]
+        listed.append(item)
+    return listed, counts, section
+
+
 def program_keys(entry: dict) -> list | None:
     """The registry keys a removed program may have left, from its ``publisher`` and
     display ``name`` written exactly (never a prefix or a similar name):
@@ -4057,41 +4400,43 @@ def fit_budget(summary: dict) -> str:
     The lists of ``CUT_LISTS`` are cut from their end, in stages, each stage only
     when the one before could not make the summary fit. First the minimums:
     ``programs`` (programs without an install date, then the oldest installs) down
-    to ``PROGRAMS_MIN``, ``driver_packages`` down to ``DRIVER_PACKAGES_MIN``,
+    to ``PROGRAMS_MIN``, ``vendor_folders`` down to ``VENDOR_FOLDERS_MIN``,
+    ``driver_packages`` down to ``DRIVER_PACKAGES_MIN``,
     ``drivers`` down to ``DRIVERS_MIN``, ``components`` down to
     ``COMPONENTS_MIN`` and ``additions`` (the items without a change block, from the
     end of their group, then the items with one) down to ``ADDITIONS_MIN`` (a list
     with fewer items keeps them all), except that ``components``, then ``drivers``
     and then ``driver_packages`` go to nothing before ``additions`` are cut to their
-    minimum. Then ``additions`` down to nothing, and ``programs`` below
-    ``PROGRAMS_MIN``. A ``null`` list (its source not read) stays ``null`` and its
+    minimum. Then ``vendor_folders`` down to nothing, ``additions`` down to nothing,
+    and ``programs`` below ``PROGRAMS_MIN``. A ``null`` list (its source not read) stays ``null`` and its
     count key ``0``. Only
     when that is not enough, so ``autostart`` and ``changes`` are over the budget on
-    their own, do the five lists go back to their minimums and ``autostart`` and
+    their own, do the six lists go back to their minimums and ``autostart`` and
     ``changes`` get cut: down to ``AUTOSTART_MIN`` and ``CHANGES_MIN``, then to
     nothing, and then ``components``, ``drivers``, ``driver_packages``,
-    ``additions`` and ``programs`` to nothing, in that order. Each count
+    ``vendor_folders``, ``additions`` and ``programs`` to nothing, in that order. Each count
     key of ``CUT_LISTS`` counts the cut items (``truncated_changes`` the cut changes,
     a collapsed entry by its ``count``); a cut
     ``autostart`` or ``changes`` also gets the per-type counts of the whole list in
     its ``COUNT_KEYS`` key (``null`` while it is not cut). A summary that is too long
-    even with all seven lists empty is not cut at all and says so in not_checked.
+    even with all eight lists empty is not cut at all and says so in not_checked.
     """
     text_out = dump(summary)
     originals = {name: summary.get(name) for name, _ in CUT_LISTS}
     if len(text_out) > SUMMARY_MAX_CHARS:
         count_keys = dict(CUT_LISTS)
         kept = {name: len(items or []) for name, items in originals.items()}
-        minimums = {"programs": PROGRAMS_MIN, "driver_packages": DRIVER_PACKAGES_MIN,
+        minimums = {"programs": PROGRAMS_MIN, "vendor_folders": VENDOR_FOLDERS_MIN,
+                    "driver_packages": DRIVER_PACKAGES_MIN,
                     "drivers": DRIVERS_MIN,
                     "components": COMPONENTS_MIN, "additions": ADDITIONS_MIN,
                     "autostart": AUTOSTART_MIN, "changes": CHANGES_MIN}
         floors = {name: min(minimums[name], kept[name]) for name in minimums}
         short_lists = [name for name, _ in CUT_LISTS if name not in COUNT_KEYS]
         # Components go before drivers go below their minimum, drivers before driver
-        # packages; additions go last.
+        # packages, driver packages before vendor folders; additions go last.
         last_stages = [("components", 0), ("drivers", 0), ("driver_packages", 0),
-                       ("additions", 0), ("programs", 0)]
+                       ("vendor_folders", 0), ("additions", 0), ("programs", 0)]
 
         def fits(name: str, count: int) -> bool:
             items = originals[name]
@@ -4120,14 +4465,16 @@ def fit_budget(summary: dict) -> str:
                 kept[name] = floor
             return False
 
-        # programs, driver_packages, drivers and components to their floors, then
-        # components, drivers and driver_packages to nothing, then additions.
-        fitted = run_stages([(name, floors[name]) for name in short_lists[:4]]
+        # programs, vendor_folders, driver_packages, drivers and components to their
+        # floors, then components, drivers and driver_packages to nothing, then
+        # additions to their floor, and only then vendor_folders to nothing.
+        fitted = run_stages([(name, floors[name]) for name in short_lists
+                             if name != "additions"]
                             + last_stages[:3]
                             + [("additions", floors["additions"])]
                             + last_stages[3:])
         if not fitted:
-            # autostart and changes are over the budget on their own: the five short
+            # autostart and changes are over the budget on their own: the six short
             # lists keep their floors, and these two are cut.
             for name in short_lists:
                 if originals[name] is not None:
@@ -4456,6 +4803,7 @@ NOT_AUTOSTART = {
     "drivers": "no block for a driver, ever",
     "driver_packages": "this skill has no change block for a driver package",
     "changes": "a change has no block; give the id of the item it names",
+    "vendor_folders": "this skill has no block for a folder; ush-files has its own clean-up",
 }
 
 
@@ -5259,6 +5607,9 @@ CUT_LABELS = {
     "drivers": lambda item: item.get("device_name"),
     "driver_packages": lambda item: item.get("original_name"),
     "additions": cut_label_addition,
+    # The folder name: the last part of its path.
+    "vendor_folders": lambda item: (ntpath.basename(str(item.get("path") or "").rstrip("\\/"))
+                                    or item.get("name")),
 }
 
 
@@ -5507,6 +5858,20 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
                  f"the removed programs were not saved, the next run will not know "
                  f"them: {removed_save_reason}")
 
+    # Top-level vendor folders that no installed program matches (as saved, so a
+    # program source not read in this run brings its baseline programs).
+    vendor_config, vendor_reason = load_vendor_folders(VENDOR_FOLDERS_FILE)
+    if vendor_config is None:
+        col.record("vendor_folders", "unreadable",
+                   f"no top-level folder is listed: {vendor_reason}")
+        vendor_rows = []
+    else:
+        vendor_rows = collect_vendor_folders(col, vendor_config["roots"])
+    listed_vendor_folders, vendor_counts, vendor_section = find_vendor_folders(
+        col, vendor_config, vendor_rows, merged_sources, autostart, current["file_facts"],
+        statuses, previous, numbering)
+    component_counts.update(vendor_counts)
+
     detail = {
         "schema_version": SCHEMA_VERSION,
         "skill": SKILL,
@@ -5522,6 +5887,8 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
         "driver_packages": packages,
         "additions": additions,
         "leftovers": leftovers,
+        "vendor_folders": vendor_section["folders"],
+        "vendor_folder_roots": vendor_section["roots"],
         "hosts_file": col.hosts_file,
         "current_sid": col.current_sid,
         "changes": changes,
@@ -5529,7 +5896,8 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
         "listed": {name: [item["id"] for item in items or []] for name, items in (
             ("programs", listed_programs), ("autostart", listed_autostart),
             ("components", listed_components), ("drivers", listed_drivers),
-            ("driver_packages", listed_packages), ("additions", listed_additions), ("changes", changes[:listed_changes]))},
+            ("driver_packages", listed_packages), ("additions", listed_additions), ("changes", changes[:listed_changes]),
+            ("vendor_folders", listed_vendor_folders))},
         "summary_file": str(summary_file),
     }
     detail_file.write_text(dump(detail) + "\n", encoding="utf-8")
@@ -5580,6 +5948,7 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
         "summary_file": str(summary_file),
         "detail_file": str(detail_file),
         "truncated": 0,
+        "truncated_vendor_folders": 0,
         "truncated_driver_packages": 0,
         "truncated_drivers": 0,
         "truncated_components": 0,
@@ -5598,6 +5967,7 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
         "driver_packages": listed_packages,
         "additions": listed_additions,
         "leftovers": leftovers,
+        "vendor_folders": listed_vendor_folders,
         "hosts_file": hosts_file,
         "own_counts": {"programs": own_count, "autostart": own_autostart,
                        "unknown": unknown,

@@ -173,10 +173,33 @@ def leftover_keys_absent(out_path):
              "values": None, "subkeys": None} for key in data.get("keys") or []]
 
 
+# The Windows default expansions of the ``vendor_folders`` roots (defaults, not readings).
+VENDOR_ROOT_EXPANSIONS = {
+    "%ProgramFiles%": "C:\\Program Files",
+    "%ProgramFiles(x86)%": "C:\\Program Files (x86)",
+    "%ProgramData%": "C:\\ProgramData",
+    "%WINDIR%\\Installer": "C:\\Windows\\Installer",
+}
+
+
+def vendor_folders_empty(out_path):
+    """The default ``vendor_folders`` answer: one row per root of the job's input file
+    (``<out stem>.input.json`` next to ``out_path``), read and holding no folders, so a
+    clean fixture stays clean (plan 025 M1)."""
+    out_path = Path(out_path)
+    input_path = out_path.with_name(out_path.name[:-len(".json")] + ".input.json")
+    data = json.loads(input_path.read_text(encoding="utf-8-sig"))
+    return [{"root": root, "expanded": VENDOR_ROOT_EXPANSIONS.get(root, root),
+             "status": "read", "reason": None, "folders": []}
+            for root in data.get("roots") or []]
+
+
 class FakePowerShell:
     """Stands in for run_ps. Jobs not listed answer ``ok([])``; ``firewall_apps`` not
-    listed answers ``exists`` true for every value of its input file, and
-    ``leftover_keys`` not listed answers every key of its input file as not there."""
+    listed answers ``exists`` true for every value of its input file,
+    ``leftover_keys`` not listed answers every key of its input file as not there, and
+    ``vendor_folders`` not listed answers every root of its input file as read and
+    empty."""
 
     def __init__(self, responses=None):
         self.responses = default_responses()
@@ -190,6 +213,8 @@ class FakePowerShell:
             response = ok(firewall_apps_present(out_path))
         elif job == "leftover_keys" and job not in self.responses:
             response = ok(leftover_keys_absent(out_path))
+        elif job == "vendor_folders" and job not in self.responses:
+            response = ok(vendor_folders_empty(out_path))
         else:
             response = self.responses.get(job, ok([]))
         if response[0] == "ok":

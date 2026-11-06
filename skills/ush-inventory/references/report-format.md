@@ -54,9 +54,10 @@ shared by all skills (see `<plugin root>/skills/ush-health/references/report-for
   `install_location`, a service's `display_name`, a fact's `company`, and a
   fact's `expanded_path` when it equals `path`. When the report needs one,
   fetch the item with `--detail <id>` and name it in an `ush:detail` line.
-- Item ids (`a1`, `s2`, `f3`, `d4`, `o5`, `x6`, `c7`) are not numbers when they
+- Item ids (`a1`, `s2`, `f3`, `d4`, `o5`, `x6`, `v7`, `c8`) are not numbers when they
   name an item of the summary, an item named in `ush:detail` or an item cut
-  from the summary (`truncated`, `truncated_driver_packages`, `truncated_drivers`,
+  from the summary (`truncated`, `truncated_vendor_folders`,
+  `truncated_driver_packages`, `truncated_drivers`,
   `truncated_components`, `truncated_additions`, `truncated_autostart`,
   `truncated_changes`). A word of that shape that
   is no such id is checked as a number.
@@ -82,7 +83,7 @@ shared by all skills (see `<plugin root>/skills/ush-health/references/report-for
 ## Items the report must name
 
 Every `id` of the summary lists `programs`, `autostart`, `components`,
-`drivers`, `driver_packages`, `additions`, `leftovers` and `changes` appears in a visible line of the
+`drivers`, `driver_packages`, `additions`, `leftovers`, `vendor_folders` and `changes` appears in a visible line of the
 report, as a word of its own (`s12` does not name `s1`). Several ids on one
 line are fine (`a4, a5, a6: ...`). A mention inside a fenced code block or
 on a marker line does not count. The check lists each missing id as
@@ -90,7 +91,7 @@ on a marker line does not count. The check lists each missing id as
 summary (the `truncated*` counts) and items fetched with `--detail` are not
 required. A list that is `null` (its sources were not read) requires
 nothing, but the keys `components`, `component_counts`, `drivers`,
-`driver_packages`, `additions` and `hosts_file` must be in the summary: a summary without them
+`driver_packages`, `additions`, `hosts_file` and `vendor_folders` must be in the summary: a summary without them
 is of an older shape and fails with
 `required key missing from the summary: <key>`.
 
@@ -121,6 +122,7 @@ is of an older shape and fails with
    | 6 | Driver packages | o1, o2 with no present device | 🔍 see below |
    | 7 | Added to the system | x2 hosts entry | 🔍 see below |
    | 8 | Leftovers of removed programs | l1 folder and task | 🔧 see below |
+   | 9 | Vendor folders: no installed program, or not judged | v1, v2 | 🔍 see below |
 
    `#` is the section number of the area, `State` a few words with the ids
    and the numbers from the JSON, `Action` a legend symbol and a few words
@@ -365,6 +367,58 @@ is of an older shape and fails with
      `WindowsApps`, a profile, its `Downloads`, `Desktop` or `Documents`, or
      its `AppData` folders such as `Temp` and `Microsoft`) or under the
      Windows folder gives no leftover; a program folder inside one of them can.
+   - Vendor folders with no installed program, or not judged: the facts first, then your
+     judgement. Every listed folder (`v..`, a top-level folder under
+     `Program Files`, `Program Files (x86)`, `ProgramData` or
+     `Windows\Installer` that no installed program matches, `matched`
+     `false`, or that the run could not judge, `matched` `null`) on its own line
+     with its id, `path` (in a fenced code block), `has_entries` and
+     `last_write` (rule 1 of `report-style.md`); the report names every `v..`
+     id the summary holds, the not judged ones included. When
+     `truncated_vendor_folders` > 0 the list is cut to the budget: say how
+     many folders were cut (the number from the JSON) and that the detail
+     file has them (`--cut` lists the cut items, see SKILL.md); never name a
+     cut folder's id unless you fetched it with `--detail`, in an `ush:detail`
+     line. A folder with
+     `has_entries` `null` could not be listed: give `has_entries_reason`,
+     never "empty". The folders with `matched` `false` are the ones no
+     installed program matches. The folders with `matched` `null` go into
+     their own group, "not judged", each on its own line with its id and
+     `path`, after one line with the cause (`not_judged`, the same text for
+     all of them): something they could belong to was not read, so the run
+     cannot say whether a program matches them; never write "no installed
+     program matches" for one, never count it among the unmatched, and offer
+     the run again in an elevated shell (and, when the cause is a source or
+     a program key, the cause named in "Not checked"). Then, each on its own
+     line with its number from `component_counts`: folders read
+     (`vendor_folders_read`), matched (`vendor_folders_matched`), with no
+     installed program (`vendor_folders_unmatched`), not judged
+     (`vendor_folders_unknown`, when above 0), junctions skipped
+     (`reparse_points`) and GUID folders of `Windows\Installer` skipped
+     (`installer_guid_folders`). Then your judgement, marked as such, per
+     folder with `matched` `false` (never for a not judged one): what it likely holds (data or settings of a removed program, a
+     shared component, a tool installed without an uninstall entry) and
+     whether it looks worth a look. "No installed program matches" is a fact
+     about the uninstall entries and autostart targets read, not proof that
+     the folder is unused or safe to delete; say so once. This skill has no
+     block for a folder. An empty list (`[]`) with `truncated_vendor_folders`
+     `0` says that every folder read is matched or a Windows name. With
+     `truncated_vendor_folders` above `0` the folders were cut to the budget,
+     not absent: give the count, never call the list clean or empty.
+
+   Leftovers (the SKILL.md rule "Leftovers are named"): an autostart entry
+   with an existing target whose `signature_status` is set and not `Valid`,
+   and every RunOnce value (`kind` `run_once`), are named in the autostart
+   section with the fact that makes them one (`signature_status`, or "a
+   RunOnce value": a step that never finished or one waiting for the next
+   logon, and the run cannot tell which, since the JSON holds no write or
+   logon time); orphan
+   driver packages and unmatched vendor folders in their own sections above.
+   A driver package and a vendor folder with `matched` `false` whose names
+   match in the JSON are one entry (a folder with `matched` `null` is never
+   merged: it stays in its "not judged" group): the folder's line names the package's id (`o..`) and the
+   package's line names the folder's id (`v..`), with the matching name;
+   the recommendation, if any, cites both.
 
    In "Comparison", after the `own_changes` line, give
    `own_changes.by_source` for each source whose three counts are not all
@@ -546,12 +600,23 @@ Never report missing data as "no changes" or "clean":
   checked" holds `driver_packages present_device`; say that the packages
   were read but the present devices were not, so no package can be called
   unused, and give `component_counts.driver_packages`.
+- `vendor_folders` `null` (the data file could not be used, no root could
+  be listed, or a program source was not read and the baseline holds none
+  of its programs; "Not checked" names which): say "not read" with the
+  reason, never "no folders". A `not_checked` item `vendor_folders <root>`:
+  that root was not listed, the others were. A `not_checked` item
+  `vendor_folders` with folders listed with `matched` `null`
+  (`vendor_folders_unknown` above 0): those folders were not judged because
+  something they could belong to was not read; name them in the "not
+  judged" group of "Vendor folders" with the cause, never as "matched" and
+  never as "no installed program matches", and offer the elevated re-run.
 - A `not_checked` item `<source> without <field>` (e.g. `drivers without
   DeviceID`): that many rows had no key and are in no list; give the
   number from its `reason`.
 - `defender_exclusions origin` in "Not checked": the policy lists could not
   be read, so every exclusion has `origin` `null` and gets no block.
-- Truncated lists: `truncated`, `truncated_driver_packages`, `truncated_drivers`,
+- Truncated lists: `truncated`, `truncated_vendor_folders`,
+  `truncated_driver_packages`, `truncated_drivers`,
   `truncated_components`, `truncated_additions`, `truncated_autostart` or
   `truncated_changes` > 0 means the summary
   holds only part of that list; the cut items are in the detail file.

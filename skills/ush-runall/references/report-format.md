@@ -274,6 +274,20 @@ ties them (the same name, id, path or time in the JSON). A link is never
 invented: without one, write that the findings of the children have no
 common point.
 
+Leftovers of `ush-inventory` (the SKILL.md rule "Leftovers are named"): an
+autostart entry with an existing target whose `signature_status` is set and
+not `Valid`, every RunOnce value (`kind` `run_once`), every orphan driver
+package (`ush-inventory o..`) and every unmatched vendor folder
+(`ush-inventory v..` with `matched` `false`) are named in the recommendations with their evidence
+(a leftover that is also a change item `c..` stays in "Changes" as well,
+named there as a change; one that is no change is never put there: it is a
+current fact, not a change since the last run) and your judgement of
+whether each is worth a look. A driver package and a vendor folder with
+`matched` `false` whose names match in the JSON form one entry here, with both sources and the
+matching name. A vendor folder with `matched` `null` was not judged: it is
+no leftover, so name it once with its `not_judged` cause, never as a folder
+no installed program matches.
+
 ### 8. Contradicting findings
 
 Findings of different children that say different things about the same

@@ -148,6 +148,20 @@ driver, fixing anything automatically. Say so if the user asks for these.
   remove". A package with `present_device` `null` (an `Extension` package,
   or every package when the drivers were not read) is never called unused.
   There is no block for a driver package.
+- **Leftovers are named, the model judges them.** The report names each of
+  these with its evidence and says whether it is worth a look: an autostart
+  entry with a target that exists (`exists` `true`) and whose
+  `signature_status` is set and not `Valid` (unsigned included; a `null`
+  status is a missing or unchecked file, never a signature finding); every
+  RunOnce value (`kind` `run_once`): it may be a step that never finished
+  or one waiting for the next logon, and the JSON has no time that tells
+  them apart, so give both readings and say that the run cannot tell which; every orphan driver
+  package (`o..`); every unmatched vendor folder (`v..` with `matched`
+  `false`; one with `matched` `null` was not judged and is no leftover: name
+  it in its own "not judged" group with its `not_judged` cause). A driver package
+  and a vendor folder with `matched` `false` whose names match in the JSON (the package's provider
+  or original name and the folder's name) go into one entry with both ids.
+  None of them is a verdict: the script lists facts, the judgement is yours.
 - **Defender exclusions.** Under the source's `method: registry` no Defender
   exclusion gets a block: Defender is not running (usually another antivirus
   is active), so `Remove-MpPreference` fails as `Get-MpPreference` did. Say
@@ -192,7 +206,8 @@ driver, fixing anything automatically. Say so if the user asks for these.
    comes from the same run that the report checker checks against.
 
    Ids are stable between runs, not places in the list, so the id of an
-   item cut from the summary (`truncated`, `truncated_driver_packages`, `truncated_drivers`,
+   item cut from the summary (`truncated`, `truncated_vendor_folders`,
+   `truncated_driver_packages`, `truncated_drivers`,
    `truncated_components`, `truncated_additions`, `truncated_autostart`,
    `truncated_changes`, or a change collapsed into a counted entry)
    cannot be guessed. Find the cut items with:
@@ -206,7 +221,10 @@ driver, fixing anything automatically. Say so if the user asks for these.
 
    Ids: `a..` programs, `s..` autostart entries, `f..` components
    (features and capabilities), `d..` drivers, `o..` driver packages with
-   no present device, `x..` additions, `l..`
+   no present device, `x..` additions, `v..` top-level vendor folders no
+   rule matches (`matched` `false`, or `null` with `not_judged` when
+   something they could belong to was not read; cut to the budget like
+   `o..`, `truncated_vendor_folders` counts the cut ones), `l..`
    leftovers of removed programs (never cut; their parts name the `s..`
    and `x..` ids of the same items), `c..` changes. Remember every id you
    fetched and used. For a leftover the report proposes a plan in words
@@ -215,7 +233,9 @@ driver, fixing anything automatically. Say so if the user asks for these.
 
 3. Judge the findings: which autostart entries the user likely does not
    need, which ones point to a missing or unsigned file, which changes are
-   worth a look. Weigh them with the scale in the shared contract
+   worth a look, and each leftover of the rule "Leftovers are named" (an
+   existing autostart target with a set status other than `Valid`, a RunOnce value, an orphan driver package,
+   an unmatched vendor folder). Weigh them with the scale in the shared contract
    `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/summary-contract.md` (`high`, `medium`,
    `low`). The script sets no threshold: the judgement is yours.
 

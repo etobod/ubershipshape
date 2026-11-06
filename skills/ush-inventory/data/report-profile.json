@@ -1,14 +1,16 @@
 {
   "detail_sections": ["programs", "autostart", "changes", "components", "drivers",
-                      "driver_packages", "additions", "leftovers"],
-  "id_letters": "ascfdoxl",
+                      "driver_packages", "additions", "leftovers", "vendor_folders"],
+  "id_letters": "ascfdoxlv",
   "path_keys": ["summary_file", "detail_file", "key", "program", "install_location",
-                "targets", "path", "expanded_path", "app", "value", "reference_file", "folder"],
+                "targets", "path", "expanded_path", "app", "value", "reference_file", "folder",
+                "root"],
   "id_keys": ["id"],
   "required_lists": ["programs", "autostart", "changes", "components", "drivers",
-                     "driver_packages", "additions", "leftovers"],
+                     "driver_packages", "additions", "leftovers", "vendor_folders"],
   "truncated": [
     {"list": "programs", "prefix": "a", "count_key": "truncated"},
+    {"list": "vendor_folders", "prefix": "v", "count_key": "truncated_vendor_folders"},
     {"list": "driver_packages", "prefix": "o", "count_key": "truncated_driver_packages"},
     {"list": "drivers", "prefix": "d", "count_key": "truncated_drivers"},
     {"list": "components", "prefix": "f", "count_key": "truncated_components"},
@@ -18,6 +20,6 @@
     {"list": "changes", "prefix": "c", "count_key": "collapsed_changes"}
   ],
   "required_keys": ["components", "component_counts", "drivers", "driver_packages",
-                    "additions", "hosts_file"],
+                    "additions", "hosts_file", "vendor_folders"],
   "report_prefix": "inventory-"
 }

@@ -132,6 +132,17 @@ or running anything on a schedule. Say so if the user asks for these.
   of a recommendation may come from the strongest linked finding; then the
   report says why. Without a real link (the same name, id, path or time in
   the JSON) the report does not invent one.
+- **Leftovers are named, the model judges them.** From the `ush-inventory`
+  item the report names each of these with its evidence and says whether it
+  is worth a look: an autostart entry with a target that exists and whose
+  `signature_status` is set and not `Valid` (a `null` status is a missing or
+  unchecked file, never a signature finding); every RunOnce value (`kind` `run_once`); every orphan
+  driver package (`ush-inventory o..`); every unmatched vendor folder
+  (`ush-inventory v..` with `matched` `false`; one with `matched` `null`
+  was not judged: name it with its `not_judged` cause, never as a
+  leftover). A driver package and a vendor folder with `matched`
+  `false` whose names match in the JSON go into one entry with both sources (the rule "Links
+  between skills").
 - **Firewall rules as facts.** Describe each `firewall_ports` item by facts:
   the program listens only on the loopback address (`loopback_only` `true`)
   or on other addresses too, and the rule's `profile` set against
@@ -204,8 +215,9 @@ or running anything on a schedule. Say so if the user asks for these.
 
 4. Judge the findings across the children: weigh them with the scale of the
    shared contract (`high`, `medium`, `low`), link the findings about the
-   same thing, set contradicting findings side by side, and read the
-   firewall items against the network categories. The script sets no
+   same thing, set contradicting findings side by side, name the leftovers
+   of the rule "Leftovers are named", and read the firewall items against
+   the network categories. The script sets no
    threshold: the judgement is yours.
 
    Before judging, list `<data dir>/plans/` (not `done/`); for an open plan of a skill run in

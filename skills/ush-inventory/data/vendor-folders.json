@@ -1,0 +1,33 @@
+{
+  "roots": ["%ProgramFiles%", "%ProgramFiles(x86)%", "%ProgramData%", "%WINDIR%\\Installer"],
+  "windows_names": [
+    "$PatchCache$",
+    "Common Files",
+    "Internet Explorer",
+    "Microsoft",
+    "Microsoft.NET",
+    "ModifiableWindowsApps",
+    "MSBuild",
+    "Package Cache",
+    "Packages",
+    "Reference Assemblies",
+    "regid.1991-06.com.microsoft",
+    "ssh",
+    "Uninstall Information",
+    "USOPrivate",
+    "USOShared",
+    "Windows Defender",
+    "Windows Defender Advanced Threat Protection",
+    "Windows Mail",
+    "Windows Media Player",
+    "Windows Multimedia Platform",
+    "Windows NT",
+    "Windows Photo Viewer",
+    "Windows Portable Devices",
+    "Windows Security",
+    "Windows Sidebar",
+    "WindowsApps",
+    "WindowsPowerShell"
+  ],
+  "vendors": {}
+}

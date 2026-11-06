@@ -129,6 +129,8 @@ def _summary_data(summary_file, detail_file, *, programs, changes, truncated, ba
         "hosts_file": {"exists": True, "path_is_default": True},
         # Plan 024 M2: driver_packages joins the profile's required_keys, empty here.
         "driver_packages": [],
+        # Plan 025 M1: vendor_folders joins the profile's required_keys, empty here.
+        "vendor_folders": [],
     }
 
 
@@ -744,6 +746,155 @@ class TestDriverPackagesProfile(unittest.TestCase):
             any("not named in the report" in line and re.search(r"\bo1\b", line)
                 for line in output.splitlines()),
             f"expected 'not named in the report' naming o1; output:\n{output}")
+
+
+# Plan 025 M1 (K7): vendor folders no installed program matches (v..) are a required
+# list of the profile.
+VENDOR_FOLDER_ITEM = {
+    "id": "v1",
+    "key": "vendor_folder:c:\\programdata\\contoso",
+    "path": "C:\\ProgramData\\Contoso",
+    "root": "%ProgramData%",
+    "matched": False,
+    "has_entries": True,
+    "last_write": "2025-11-02T09:15:00Z",
+}
+# Plan 025, option C: a folder no rule matches while an autostart target was not read
+# is listed too, with matched null and the cause in not_judged.
+NOT_JUDGED_FOLDER_ITEM = {
+    "id": "v2",
+    "key": "vendor_folder:c:\\program files\\fabrikam",
+    "path": "C:\\Program Files\\Fabrikam",
+    "root": "%ProgramFiles%",
+    "matched": None,
+    "has_entries": True,
+    "last_write": "2025-10-14T08:00:00Z",
+    "not_judged": "the target path of 1 autostart entry",
+}
+
+
+def _summary_vendor_folders(summary_file, detail_file):
+    """The driver package summary plus one unmatched vendor folder of 5 read."""
+    summary = _summary_packages(summary_file, detail_file)
+    summary["sources"].append({"name": "vendor_folders", "status": "read", "reason": None})
+    summary["component_counts"].update({
+        "vendor_folders_read": 5,
+        "vendor_folders_matched": 4,
+        "vendor_folders_unmatched": 1,
+        "reparse_points": 2,
+        "installer_guid_folders": 6,
+    })
+    summary["vendor_folders"] = [dict(VENDOR_FOLDER_ITEM)]
+    return summary
+
+
+def _report_vendor_folders_lines(summary_file):
+    """The driver package report plus a Vendor folders section; numbers from
+    _summary_vendor_folders."""
+    lines = _report_packages_lines(summary_file)
+    at = lines.index("## Not checked")
+    lines[at:at] = [
+        "## Vendor folders",
+        ("- v1: C:\\ProgramData\\Contoso (root %ProgramData%) holds entries, last written "
+         "2025-11-02; no installed program matches it."),
+        ("- Top-level folders read: 5, matched: 4, not matched: 1; reparse points "
+         "skipped: 2; Installer folders named by a product code: 6."),
+        "",
+    ]
+    return lines
+
+
+class TestVendorFoldersProfile(unittest.TestCase):
+    # The helpers of TestProfile, without running its tests a second time.
+    setUp = TestProfile.setUp
+    _assert_real_profile = TestProfile._assert_real_profile
+    _write_summary = TestProfile._write_summary
+    _write_report = TestProfile._write_report
+    _run = TestProfile._run
+    _run_guarded = TestProfile._run_guarded
+
+    def _write_vendor_summary(self, name):
+        """Write the summary and its detail file, with the detail list
+        ``vendor_folders`` (every folder read) and the roots' status beside it."""
+        summary_file, summary = self._write_summary(name, _summary_vendor_folders)
+        detail_file = Path(summary["detail_file"])
+        detail = json.loads(detail_file.read_text(encoding="utf-8"))
+        detail["vendor_folder_roots"] = [{"root": "%ProgramData%", "expanded": "C:\\ProgramData",
+                                          "status": "read", "reason": None}]
+        detail["vendor_folders"] = [dict(VENDOR_FOLDER_ITEM, name="Contoso", reason=None,
+                                         matched=False, matched_by=[])]
+        detail_file.write_text(json.dumps(detail), encoding="utf-8")
+        return summary_file
+
+    def test_folder_fetched_in_detail_passes(self):
+        """A report that names a vendor folder in an ``ush:detail`` line finds it in
+        the detail file's ``vendor_folders`` list."""
+        self._assert_real_profile()
+        summary_file = self._write_vendor_summary("inventory-vendor-folders-detail")
+        lines = _report_vendor_folders_lines(summary_file)
+        at = lines.index("## Vendor folders") + 1
+        lines[at:at] = ["<!-- ush:detail v1 -->"]
+        code, output = self._run_guarded(self._write_report(lines, "vendor-folder-detail.md"))
+        self.assertEqual(code, 0, f"a report fetching v1 should pass; output:\n{output}")
+        self.assertIn("OK", output)
+
+    def test_unmatched_folder_must_be_named(self):
+        self._assert_real_profile()
+        path = Path(self.check.SKILLS_DIR) / SKILL / "data" / "report-profile.json"
+        profile = json.loads(path.read_text(encoding="utf-8"))
+        self.assertIn("v", profile.get("id_letters") or "", profile.get("id_letters"))
+        self.assertIn("vendor_folders", profile.get("required_lists") or [],
+                      profile.get("required_lists"))
+        self.assertIn("vendor_folders", profile.get("required_keys") or [],
+                      profile.get("required_keys"))
+
+        summary_file = self._write_vendor_summary("inventory-vendor-folders")
+        named = _report_vendor_folders_lines(summary_file)
+        code, output = self._run_guarded(
+            self._write_report(named, "inventory-2026-11-06-0930.md"))
+        self.assertEqual(code, 0, f"the report naming v1 should pass; output:\n{output}")
+        self.assertIn("OK", output)
+
+        left_out = [line for line in named if not line.startswith("- v1:")]
+        self.assertFalse(any(re.search(r"\bv1\b", line) for line in left_out[1:]))
+        code, output = self._run_guarded(self._write_report(left_out, "no-vendor-folder.md"))
+        self.assertEqual(code, 1, f"output:\n{output}")
+        self.assertTrue(
+            any("not named in the report" in line and re.search(r"\bv1\b", line)
+                for line in output.splitlines()),
+            f"expected 'not named in the report' naming v1; output:\n{output}")
+
+    def test_not_judged_folder_must_be_named(self):
+        """A listed folder with matched null (not judged) is a required v id too."""
+        self._assert_real_profile()
+        summary_file = self._write_vendor_summary("inventory-vendor-folders-not-judged")
+        summary = json.loads(Path(summary_file).read_text(encoding="utf-8"))
+        summary["vendor_folders"].append(dict(NOT_JUDGED_FOLDER_ITEM))
+        summary["component_counts"].update({"vendor_folders_matched": 3,
+                                            "vendor_folders_unknown": 1})
+        Path(summary_file).write_text(json.dumps(summary), encoding="utf-8")
+
+        lines = _report_vendor_folders_lines(summary_file)
+        at = lines.index("## Not checked")
+        lines[at:at] = [
+            "## Vendor folders not judged",
+            ("- v2: C:\\Program Files\\Fabrikam (root %ProgramFiles%) not judged: "
+             "the target path of 1 autostart entry could not be read."),
+            "",
+        ]
+        code, output = self._run_guarded(
+            self._write_report(lines, "inventory-2026-11-06-0931.md"))
+        self.assertEqual(code, 0, f"the report naming v1 and v2 should pass; output:\n{output}")
+        self.assertIn("OK", output)
+
+        left_out = [line for line in lines if not line.startswith("- v2:")]
+        self.assertFalse(any(re.search(r"\bv2\b", line) for line in left_out))
+        code, output = self._run_guarded(self._write_report(left_out, "no-not-judged.md"))
+        self.assertEqual(code, 1, f"output:\n{output}")
+        self.assertTrue(
+            any("not named in the report" in line and re.search(r"\bv2\b", line)
+                for line in output.splitlines()),
+            f"expected 'not named in the report' naming v2; output:\n{output}")
 
 
 if __name__ == "__main__":

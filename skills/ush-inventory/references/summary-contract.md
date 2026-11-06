@@ -18,8 +18,8 @@ contract):
 - `work/inventory-<YYYYmmdd-HHMMSS>.detail.json` - the detail file:
   `schema_version`, `skill`, `generated_at`, `elevated`, `sources`,
   `comparison` and the full lists `programs`, `autostart`, `components`,
-  `drivers`, `driver_packages`, `additions`, `leftovers` and `changes` (never truncated), with the same ids
-  as the summary, plus `hosts_file` (with `raw_dir`, `expanded_dir` and
+  `drivers`, `driver_packages`, `additions`, `leftovers`, `vendor_folders` (every folder read, see "Vendor folders") and `changes` (never truncated), with the same ids
+  as the summary, plus `vendor_folder_roots`, `hosts_file` (with `raw_dir`, `expanded_dir` and
   `path`), `current_sid` and `drivers_without_inf_items` (see "Drivers"). It also holds what the summary leaves out: the
   programs, autostart entries, drivers, firewall rules and certificates
   that are part of Windows, the entries with `own: null`, the components
@@ -39,37 +39,45 @@ and the list of target files to `work/inventory-<stamp>.file_facts.input.json`
 (raw captures: never read them). The script changes nothing on the machine
 and exits 0; a `.lnk` shortcut is only read, never saved.
 
-To keep the summary within its budget of 35 000 characters seven lists may
+To keep the summary within its budget of 35 000 characters eight lists may
 be cut from their end, in these stages, each only when the one before it
 did not make the summary fit:
 
 | Stage | List | Count key | Cut first |
 |---|---|---|---|
 | 1 | `programs`, down to the 20 newest (`PROGRAMS_MIN`) | `truncated` | programs without an install date, then the oldest installs |
-| 2 | `driver_packages`, down to the first 10 (`DRIVER_PACKAGES_MIN`) | `truncated_driver_packages` | the end of the package order (`provider`, `original_name`, `version`) |
-| 3 | `drivers`, down to the first 10 (`DRIVERS_MIN`) | `truncated_drivers` | the end of the driver order (`Display` drivers lead it) |
-| 4 | `components`, down to the first 10 (`COMPONENTS_MIN`) | `truncated_components` | capabilities (they follow the features), then features, each from the end of the name order |
-| 5 | `components`, below the first 10 | `truncated_components` | as in stage 4 |
-| 6 | `drivers`, below the first 10 | `truncated_drivers` | as in stage 3 |
-| 7 | `driver_packages`, below the first 10 | `truncated_driver_packages` | as in stage 2 |
-| 8 | `additions`, down to the first 10 (`ADDITIONS_MIN`) | `truncated_additions` | the items without a change block, from the end of their group, then the items with one (see "Additions") |
-| 9 | `additions`, below the first 10 | `truncated_additions` | as in stage 8 |
-| 10 | `programs`, below the 20 newest | `truncated` | as in stage 1 |
-| 11 | `autostart`, down to the first 20 (`AUTOSTART_MIN`) | `truncated_autostart` | the end of the autostart order |
-| 12 | `changes`, down to the first 20 (`CHANGES_MIN`) | `truncated_changes` | the end of the change order, so the collapsed entries at its front go last (a collapsed entry is cut whole) |
-| 13 | `autostart`, below the first 20 | `truncated_autostart` | as in stage 11 |
-| 14 | `changes`, below the first 20 | `truncated_changes` | as in stage 12 |
-| 15 | `components`, `drivers`, `driver_packages`, `additions`, then `programs`, each to nothing | as in stages 5, 6, 7, 9 and 10 | as in stages 5, 6, 7, 9 and 10 |
+| 2 | `vendor_folders`, down to the first 10 (`VENDOR_FOLDERS_MIN`) | `truncated_vendor_folders` | the end of the folder order (by the order of `roots`, then by name) |
+| 3 | `driver_packages`, down to the first 10 (`DRIVER_PACKAGES_MIN`) | `truncated_driver_packages` | the end of the package order (`provider`, `original_name`, `version`) |
+| 4 | `drivers`, down to the first 10 (`DRIVERS_MIN`) | `truncated_drivers` | the end of the driver order (`Display` drivers lead it) |
+| 5 | `components`, down to the first 10 (`COMPONENTS_MIN`) | `truncated_components` | capabilities (they follow the features), then features, each from the end of the name order |
+| 6 | `components`, below the first 10 | `truncated_components` | as in stage 5 |
+| 7 | `drivers`, below the first 10 | `truncated_drivers` | as in stage 4 |
+| 8 | `driver_packages`, below the first 10 | `truncated_driver_packages` | as in stage 3 |
+| 9 | `additions`, down to the first 10 (`ADDITIONS_MIN`) | `truncated_additions` | the items without a change block, from the end of their group, then the items with one (see "Additions") |
+| 10 | `vendor_folders`, below the first 10 | `truncated_vendor_folders` | as in stage 2 |
+| 11 | `additions`, below the first 10 | `truncated_additions` | as in stage 9 |
+| 12 | `programs`, below the 20 newest | `truncated` | as in stage 1 |
+| 13 | `autostart`, down to the first 20 (`AUTOSTART_MIN`) | `truncated_autostart` | the end of the autostart order |
+| 14 | `changes`, down to the first 20 (`CHANGES_MIN`) | `truncated_changes` | the end of the change order, so the collapsed entries at its front go last (a collapsed entry is cut whole) |
+| 15 | `autostart`, below the first 20 | `truncated_autostart` | as in stage 13 |
+| 16 | `changes`, below the first 20 | `truncated_changes` | as in stage 14 |
+| 17 | `components`, `drivers`, `driver_packages`, `vendor_folders`, `additions`, then `programs`, each to nothing | as in stages 6, 7, 8, 10, 11 and 12 | as in stages 6, 7, 8, 10, 11 and 12 |
 
-Stages 1 to 4 and 8 keep a short list of each: a list with fewer items than its
+Stages 1 to 5 and 9 keep a short list of each: a list with fewer items than its
 minimum keeps them all. Components go to nothing, then drivers and then driver
 packages below their short lists, before additions are cut at all, so listed
 drivers outlast components and additions outlast everything but `programs`. A
-`null` `driver_packages` stays `null` (with `truncated_driver_packages` `0`).
-Stages 11 to 14 run only when stage 10 did not make the
+long `vendor_folders` list (each not judged folder repeats the same
+`not_judged` cause) is cut to its short list early and keeps it until the
+additions are at theirs (stage 9); only then do the folders go below their
+short list (stage 10), before the additions go below theirs (stage 11). So the
+folders never push `additions` below their short list, and the additions never
+push the folders below theirs. A `null` `driver_packages` or `vendor_folders`
+stays `null` (with its count key `0`).
+Stages 13 to 16 run only when stage 12 did not make the
 summary fit, so `autostart` and `changes` are over the budget on their own:
-the five lists of stages 1 to 4 and 8 then go back to their short lists, and are
-emptied again only in stage 15, after `autostart` and `changes`. A cut
+the six lists of stages 1 to 5 and 9 then go back to their short lists, and are
+emptied again only in stage 17, after `autostart` and `changes`. A cut
 `autostart` gets `autostart_counts` (`{kind: number}`) and a cut `changes`
 gets `change_counts`
 (`{source: {added, removed, changed}}`), the counts of the whole list before
@@ -85,13 +93,13 @@ the cut items as `{id, list, name}` (the ids in the detail file's `listed`
 that the summary of `summary_file` does not hold) without starting any
 machine job, and `--detail <id>` fetches one. The detail file's `listed` is
 `{list: [id, ...]}`, the ids of the listable items of `programs`,
-`autostart`, `components`, `drivers`, `driver_packages`, `additions` and
-`changes` before the cut (so a change collapsed into an entry is listed by `--cut`
+`autostart`, `components`, `drivers`, `driver_packages`, `additions`,
+`vendor_folders` and `changes` before the cut (so a change collapsed into an entry is listed by `--cut`
 too) (own
 items are never in it), and `summary_file` is the summary of the same run.
 A detail file without `listed` or `summary_file`, or a summary that cannot be
 read, makes `--cut` exit 1 with the missing field or file on stderr. When the summary does not
-fit even with all seven lists empty, nothing is cut (every count is `0`),
+fit even with all eight lists empty, nothing is cut (every count is `0`),
 the summary goes out over the limit and `not_checked` gets the item
 `summary budget`.
 
@@ -119,6 +127,7 @@ the summary goes out over the limit and `not_checked` gets the item
 | `hosts` | the `hosts` file in the folder of `HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\DataBasePath` (a missing value fails the job; a missing file is read and holds no entries) | additions (`hosts_entry`), `hosts_file` |
 | `administrators` | the members of Administrators (`S-1-5-32-544`) by `Get-LocalGroupMember`, with `Enabled` from `Get-LocalUser` for local and Microsoft accounts; when `Get-LocalGroupMember` fails, ADSI. The source entry has `method`: `local_group_member` or `adsi` (`null` when the job gave nothing) | additions (`administrator`) |
 | `defender_exclusions` | only with administrator rights (same reason as `capabilities` otherwise): `Get-MpPreference`, or, when it fails (e.g. another antivirus is active), the value names of `HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\*`; in both cases the value names of the policy keys `HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Exclusions\*`. The source entry has `method`: `preference`, `registry` or `null` (not run or nothing given). A value Defender hides (`N/A: ...`) makes the source `unreadable` | additions (`defender_exclusion`) |
+| `vendor_folders` | the direct child folders of the roots of `data/vendor-folders.json` (see "Vendor folders"); `read` when at least one root was listed (each root that could not be listed is a `not_checked` item `vendor_folders <root>`); `unreadable` when the job failed, no root could be listed or the data file could not be used. Not a baseline source: it is not in `comparison` and has no changes | vendor folders |
 
 A missing key (no `StartupApproved` key, no `RunOnce` key, no `Uninstall` key
 in `HKCU`) is "nothing there", not an error. A denied key fails the job, and
@@ -162,6 +171,7 @@ Every item has a stable `key`, the same in every run:
 | `hosts` | `hosts:<host name, lower case>:<address>` |
 | `administrators` | `admin:<SID>` |
 | `defender_exclusions` | `defender:<path / extension / process / ip>:<value, lower case>` |
+| `vendor_folders` | `vendor_folder:<path>`, case-folded |
 
 The hive part of a `run:` key names the registry key: `hkcu` is
 `HKCU\Software\Microsoft\Windows\CurrentVersion`, `hklm64` is
@@ -175,33 +185,34 @@ Besides the shared fields (`schema_version`, `skill` = `"ush-inventory"`,
 `generated_at`, `sources`, `not_checked`, `summary_file`, `detail_file`,
 `truncated`), a summary has (each key is always present; the profile's
 `required_keys` make the report checker fail a summary without
-`components`, `component_counts`, `drivers`, `driver_packages`, `additions` or `hosts_file`):
+`components`, `component_counts`, `drivers`, `driver_packages`, `additions`, `hosts_file` or `vendor_folders`):
 
 | Field | Type | Meaning |
 |---|---|---|
 | `elevated` | bool | the run had administrator rights; it then reads and writes the elevated baseline |
 | `baseline` | object | shared contract, "Baseline": `status` (`none`, `compared`, `unreadable`), `created_at`, `age_days`, `saved`, `reason`, `reference` (`latest` or the `--compare-to` value, e.g. `7d`) and `reference_file` (the history copy compared with, or `null`). `created_at` and `age_days` are those of the state compared with |
 | `comparison` | object | per item source (`win32_programs`, `msix_programs`, `run_keys`, `startup_folders`, `scheduled_tasks`, `services`, `optional_features`, `capabilities`, `drivers`, `driver_packages`, `firewall_rules`, `root_certificates`, `hosts`, `administrators`, `defender_exclusions`): `compared`, `no_baseline` or `not_read` (shared contract). A source added to the skill after the baseline was made is `no_baseline` on the first run |
-| `truncated_driver_packages`, `truncated_drivers`, `truncated_components`, `truncated_additions`, `truncated_autostart`, `truncated_changes` | int | the items cut from `driver_packages`, `drivers`, `components`, `additions`, `autostart` and `changes` (see "Files and output"), `0` when none (also when the list is `null`) |
+| `truncated_vendor_folders`, `truncated_driver_packages`, `truncated_drivers`, `truncated_components`, `truncated_additions`, `truncated_autostart`, `truncated_changes` | int | the items cut from `vendor_folders`, `driver_packages`, `drivers`, `components`, `additions`, `autostart` and `changes` (see "Files and output"), `0` when none (also when the list is `null`) |
 | `autostart_counts` | object or `null` | `{kind: number}` of the whole `autostart` list when it was cut, else `null` |
 | `change_counts` | object or `null` | `{source: {added, removed, changed}}` of the whole `changes` list (a collapsed entry by its `count`) when it was cut, else `null` |
 | `collapsed_changes` | int | the changes inside the collapsed entries of `changes` before the budget cut, `0` when none; above 0 the report checker takes the `c..` ids from the detail file, so a report may name a collapsed change by its id |
 | `programs` | list | the programs with `own: false`, newest `install_date` first, no date last, then by name; ids `a..`. Each item is without `install_location`, `source` and `own` (in the detail file). A program that has `per_user_pair` is installed more than once by the same publisher: see "Install pairs". Cut to the budget (`truncated`) |
 | `autostart` | list | the autostart entries with `own: false`, by source and key; ids `s..`. Cut to the budget (`truncated_autostart`, `autostart_counts`). `approved_raw` and `display_name` are left out, and each fact is without `company`, and without `expanded_path` when it equals `path` (all in the detail file) |
 | `components` | list or `null` | the listed components: features with `state` `enabled` and capabilities with `state` `Installed`, features first, each by name; ids `f..`. Each item has only `id`, `key`, `kind` (`feature`, `capability`), `name` and `state`. `null` when neither `optional_features` nor `capabilities` was read. Cut to the budget (`truncated_components`) |
-| `component_counts` | object | `feature`: `{enabled, disabled, absent, <any other state>, unread}` counts of all features (`enabled`, `disabled` and `absent` always present; `unread` counts `state` `null`), or `null` when `optional_features` was not read; `capability`: `{<state>: number, ..., unread}` of all capabilities, or `null` when `capabilities` was not read; `drivers_without_inf`: the number of `Win32_PnPSignedDriver` rows without an INF file (for example software devices, or a device without a driver), not device state; device state is measured by `ush-health`; `null` when `drivers` was not read. The rows themselves are `drivers_without_inf_items` of the detail file; `driver_packages`: the number of third-party driver packages, `null` when `driver_packages` was not read; `driver_packages_without_device`: the number of them with `present_device` `false`, counted before the budget cut (the summary list `driver_packages` holds fewer when `truncated_driver_packages` > 0), `null` when that list is `null` |
+| `component_counts` | object | `feature`: `{enabled, disabled, absent, <any other state>, unread}` counts of all features (`enabled`, `disabled` and `absent` always present; `unread` counts `state` `null`), or `null` when `optional_features` was not read; `capability`: `{<state>: number, ..., unread}` of all capabilities, or `null` when `capabilities` was not read; `drivers_without_inf`: the number of `Win32_PnPSignedDriver` rows without an INF file (for example software devices, or a device without a driver), not device state; device state is measured by `ush-health`; `null` when `drivers` was not read. The rows themselves are `drivers_without_inf_items` of the detail file; `driver_packages`: the number of third-party driver packages, `null` when `driver_packages` was not read; `driver_packages_without_device`: the number of them with `present_device` `false`, counted before the budget cut (the summary list `driver_packages` holds fewer when `truncated_driver_packages` > 0), `null` when that list is `null`; `vendor_folders_read`, `vendor_folders_matched`, `vendor_folders_unmatched`, `vendor_folders_unknown` (`matched` `null`, see "Vendor folders"), `reparse_points` and `installer_guid_folders`: the counts of the top-level folders, all `null` when the data file could not be used or no root could be listed; `vendor_folders_matched`, `vendor_folders_unmatched` and `vendor_folders_unknown` are `null` also when the list `vendor_folders` is `null` because a program source was not read |
 | `drivers` | list or `null` | the drivers whose `own` is not `true` (a third-party `.inf`, or unknown), the classes of `DRIVER_CLASSES_FIRST` (`Display`, case-insensitive) first, then by `provider`, then `device_name`, `null` last; ids `d..`. Each item has only `id`, `key`, `device_name`, `class`, `provider`, `version`, `date` and `signer`. `null` when `drivers` was not read. Cut to the budget (`truncated_drivers`) |
 | `driver_packages` | list or `null` | the third-party driver packages with `present_device` `false` (no present device uses them), by `provider`, then `original_name`, then `version`; ids `o..`. Each item has `id`, `key`, `published_name`, `original_name`, `provider`, `class`, `version`, `date`, `signer` and `present_device` (see "Driver packages"). `null` when `driver_packages` was not read, or when it holds packages and `drivers` was not read; `[]` when every package has a present device (or `null`) or the store holds no third-party package. Cut to the budget (`truncated_driver_packages`); a `null` list stays `null` |
 | `additions` | list or `null` | the items of the five added-to-the-system sources whose `own` is not `true`: first those with a change block, then those without, each group by kind in this order: `administrator`, `defender_exclusion`, `root_certificate`, `firewall_rule`, `hosts_entry`; ids `x..` (see "Additions"). `null` when none of the five sources was read. Cut to the budget (`truncated_additions`) |
 | `leftovers` | list | what removed programs left, never cut (see "Leftovers"); ids `l..`; `[]` when nothing is left |
+| `vendor_folders` | list or `null` | the top-level folders of the vendor roots that no rule matches, cut to the budget like `driver_packages` (`truncated_vendor_folders`, see "Files and output" and "Vendor folders"): `matched` `false` (no installed program matches) or `matched` `null` with `not_judged` (not judged, because something was not read); ids `v..`; `[]` with `truncated_vendor_folders` `0` when every folder read is matched or a Windows name (with `truncated_vendor_folders` above `0` the folders were cut: give the count, never call the list clean) |
 | `hosts_file` | object | `{exists, path_is_default}` and, when any is `null`, `unread_fields` naming it (see "hosts_file") |
 | `own_counts` | object | `programs`: the number of programs with `own: true`; `autostart`: `{kind: number}` of the entries with `own: true`, per `kind`; `unknown`: the number of entries with `own: null`; `drivers`: the drivers with `own: true` (`null` when not read); `firewall_rules`: `{local, app_iso, policy}` numbers of rules with `own: true` per store (`null` when not read); `root_certificates`: the certificates with `own: true` (`null` when not read) |
 | `changes` | list | the changes since the baseline whose item is not own on at least one side; ids `c..`. The changes named by a rule of `data/collapsed_names.json` (a list of `{source, collapsed, prefix}`; today the firewall rules whose `name` starts with `ms-resource:`, an unresolved resource string, case-insensitive) are collapsed: one entry `{collapsed, source, change, count}` (e.g. `{collapsed: "ms-resource", source: "firewall_rules", change, count}`) per rule and change type, without an id, ahead of the other changes, so the budget cuts the other changes first; the detail file keeps each with its id. Cut to the budget (`truncated_changes`, `change_counts`) |
 | `own_changes` | object | `{added, removed, changed, by_source}`: the counts of the changes of items that are own on every side they have; those changes are only in the detail file. `by_source` is `{<source>: {added, removed, changed}}` for every item source of `comparison`, zeros included, so the model can say which source they came from (e.g. firewall rules after an update) |
 
 Ids: `a..` programs, `s..` autostart entries, `f..` components, `d..`
-drivers, `o..` driver packages, `x..` additions, `l..` leftovers, `c..` changes. The numbers of
-`a`, `s`, `f`, `d`, `o`, `x` and `l` are stable between runs (shared contract, "Ids and --detail"):
+drivers, `o..` driver packages, `x..` additions, `l..` leftovers, `v..` vendor folders, `c..` changes. The numbers of
+`a`, `s`, `f`, `d`, `o`, `x`, `l` and `v` are stable between runs (shared contract, "Ids and --detail"):
 the number is not the item's position in its list, so the summary may have
 gaps (`a1`, `a5`, ...) and the id of an item that is only in the detail file
 does not follow from the list. The map from an item's `key` to its number
@@ -598,6 +609,81 @@ targets are not grouped and the `not_checked` item `leftovers of missing
 targets` says how many). A similar name is never a fact. Order: the
 programs by `name`, then the groups by folder.
 
+### Vendor folders (`v..`)
+
+The job `vendor_folders` (read-only) lists the direct child folders of each
+root of `data/vendor-folders.json` (`{roots, windows_names, vendors}`):
+`roots` are paths with environment variables (`%ProgramFiles%`,
+`%ProgramFiles(x86)%`, `%ProgramData%`, `%WINDIR%\Installer`), expanded by the
+job with `[Environment]::ExpandEnvironmentVariables` in the context of the
+running account (a variable left unexpanded or a path that is not rooted makes
+the root `unreadable`); `windows_names` are folder names that ship with
+Windows (compared case-folded); `vendors` maps a folder name to the exact
+publisher names of its vendor. Per child folder the job gives `name`, `path`,
+`reparse_point`, `has_entries` (whether the folder holds any file or folder;
+`null` with a `reason` when it cannot be listed, never `false`) and
+`last_write` (the folder's last write time, UTC, `YYYY-MM-DDTHH:MM:SSZ`).
+
+Left out before matching, never listed: a reparse point (a junction such as
+`ProgramData\Application Data`; counted in `reparse_points`), a folder of the
+`Installer` root whose name is a GUID in braces (MSI caches by product or
+patch code; counted in `installer_guid_folders`), and a name of
+`windows_names` (not counted). A row that is not a direct child of its root,
+or does not say whether it is a reparse point, is not judged (the `not_checked`
+item `vendor_folders rows`).
+
+A folder is matched (`matched` `true`, `matched_by` naming each rule that
+holds) when:
+
+- `install_location`: the `install_location` of a program of this run (or,
+  for a program source not read in this run, of its baseline items) is the
+  folder or lies under it; a location under the Windows folder, a shared root
+  such as `C:\ProgramData` or a known profile folder matches nothing;
+- `target`: a target path of an autostart entry (run key, startup file,
+  scheduled task or service) lies under it;
+- `vendor`: `vendors` lists, for the folder's name, a publisher a program has
+  (case-folded, exact).
+
+A similar name is never a match. Every other folder is unmatched (`matched`
+`false`): no installed program matches it. That is a fact, not a judgement:
+the folder may hold data, settings or a shared component. When a source the
+`target` rule uses, a program source (`win32_programs` or `msix_programs`, whose
+baseline programs then stand in), the target path of an autostart entry, or a
+program registry key that is in no baseline was not read, a folder that no rule matches
+has `matched` `null` (not judged): it is listed with that `null` and the
+cause, never as unmatched (the `not_checked` item `vendor_folders` says why and
+how many; counted in `vendor_folders_unknown`): no folder is unmatched because
+something was not read.
+
+The summary list `vendor_folders` holds every folder no rule matches: the
+unmatched ones (`matched` `false`) and the not judged ones (`matched` `null`),
+numbered together, by the order of `roots`, then by name; each item has `id`,
+`key`, `path`, `root`, `matched`, `has_entries` and `last_write`; a not judged
+item also has `not_judged`, the text of the causes shared by every such folder
+(the same text the `not_checked` item `vendor_folders` gives, e.g. `the target
+path of 1 autostart entry`); and, when `has_entries` is `null`,
+`unread_fields: ["has_entries"]` and `has_entries_reason`. It is `null` when
+the data file could not be used, when no root could be listed, or when
+`win32_programs` or `msix_programs` was not read and the baseline holds none
+of its programs (the `not_checked` item `vendor_folders` names the source).
+The list is cut to the budget from its end (stages 2 and 10 of "Files and
+output"): `truncated_vendor_folders` counts the cut folders, `--cut` lists
+them (`name` the folder name) and the detail file keeps them; a cut folder is
+given as a count, its id is never named unless it was fetched with `--detail`.
+
+The detail file's list `vendor_folders` holds every folder read after the
+skips, matched ones included, with `id` (`null` unless listed), `key`, `name`,
+`path`, `root`, `has_entries`, `reason`, `last_write`, `matched` and
+`matched_by`; a report may name a `v..` id from it in an `ush:detail` line.
+It is `null` whenever the summary list `vendor_folders` is `null`, never `[]`.
+Beside it, `vendor_folder_roots` gives each root of the data file, in its
+order, as `{root, expanded, status, reason}` (`status` `read` or
+`unreadable`); when the job failed every root is `unreadable` with the job's
+reason and `expanded` `null`. `vendor_folder_roots` is `null` only when the
+data file could not be used (the roots are then unknown).
+
+This skill has no block for a folder (`--block v<n>` says so).
+
 ### Changes (`c..`)
 
 | Field | Meaning |
@@ -836,5 +922,8 @@ Besides one item per `unreadable` source (`what` = the source name):
 | `state/inventory-removed.json` | the state file of removed programs could not be read or saved (see "Leftovers") |
 | `leftovers <name>` | a removed program with no leftover found is kept in the state file because this run did not read everything that could hold one; the reason says what |
 | `leftovers of missing targets` | `%SystemRoot%` is not known in this run, so entries with missing targets were not grouped |
-| `summary budget` | the summary is over the budget even with all seven cut lists empty |
+| `summary budget` | the summary is over the budget even with all eight cut lists empty |
+| `vendor_folders` | the data file `vendor-folders.json` could not be used (the reason names it; the source `vendor_folders` is `unreadable`); or `win32_programs` or `msix_programs` was not read and the baseline holds none of its programs; or folders that no rule matches are listed with `matched` `null` (not judged) because an autostart source, a target path or a program registry key was not read (the reason names what and how many). The list `vendor_folders` is `null` in the first two cases |
+| `vendor_folders <root>` | that root could not be listed; its folders are in no list, those of the other roots are |
+| `vendor_folders rows` | child folder rows of the job that are not a direct child of their root or lack `reparse_point`; the reason gives their number |
 | `collapsed_names.json` | the collapse rule file could not be used; no change is collapsed in the summary `changes` |
