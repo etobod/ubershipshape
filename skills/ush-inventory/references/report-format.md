@@ -197,7 +197,27 @@ is of an older shape and fails with
      (its id comes from `--cut`).
    - Autostart: every entry (`s..`) with `kind`, `name`, `location`,
      `command` (inline code), `enabled` and `approved`, and what `facts`
-     say (exists, signature, signer, program). A `location` or `command`
+     say (exists, signature, signer, program), and its age from
+     `first_seen` and `passes_seen`, written in the report language as
+     "first seen <first_seen>, in <passes_seen> passes" ("in 1 pass" for 1;
+     Polish: "pierwszy raz widziany <first_seen>, w <passes_seen>
+     przebiegach", "w 1 przebiegu" for 1). Both are
+     per privilege level, and `first_seen` is a UTC date. When
+     `first_seen_lower_bound` is `true`, the date is the earliest the tool
+     can show (a baseline saved before these fields), not the day the entry
+     appeared: say "seen since at least <first_seen>, in at least
+     <passes_seen> passes" (Polish: "widziany co najmniej od <first_seen>,
+     w co najmniej <passes_seen> przebiegach"): `passes_seen` is a lower
+     bound too.
+     When both are `null` (the previous baseline could not be read, see
+     `not_checked`, or an entry not read in this run whose baseline copy has
+     no age), write "age unknown", never a date. The script sets no
+     threshold: the model judges. `passes_seen` counts runs of the tool,
+     not logons, so several passes alone never show that a RunOnce value
+     (`kind` `run_once`) did not finish: two runs can fall in one logon
+     session. Give the date and the count as facts, and call the value
+     one that never finished or one waiting for the next logon (the run
+     cannot tell which, see Leftovers). A `location` or `command`
      under the user's profile folder (`C:\Users\` and the account name)
      is written with `%USERPROFILE%` in place of that folder, in the text
      and in code blocks alike (see "Account names"). Then the Windows-own counts,
@@ -419,8 +439,8 @@ is of an older shape and fails with
    and every RunOnce value (`kind` `run_once`), are named in the autostart
    section with the fact that makes them one (`signature_status`, or "a
    RunOnce value": a step that never finished or one waiting for the next
-   logon, and the run cannot tell which, since the JSON holds no write or
-   logon time); orphan
+   logon; the JSON holds no write or logon time, only `first_seen` and
+   `passes_seen`, judged as in the Autostart section); orphan
    driver packages and unmatched vendor folders in their own sections above.
    A driver package and a vendor folder with `matched` `false` whose names
    match in the JSON are one entry (a folder with `matched` `null` is never
@@ -498,7 +518,7 @@ exclusion `value` under the profile folder is written with
 with the profile folder, `C:\Users\` followed by the account name. Write
 that folder as `%USERPROFILE%` (`%USERPROFILE%\AppData\Roaming\...`). In a
 paste-ready block build the path from the environment instead, so the
-pasted command writes the same value back:
+command the user runs writes the same value back:
 `(Join-Path $env:USERPROFILE 'AppData\Roaming\Invented\tray.exe')`, or a
 double-quoted string that starts with `$env:USERPROFILE` when the rest has
 no `$` or backtick.

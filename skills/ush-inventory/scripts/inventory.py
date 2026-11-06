@@ -3077,6 +3077,59 @@ def pair_installs(programs: list, suffixes: list) -> None:
                 for p in sorted(partners.values(), key=lambda p: int(p["id"][1:]))]
 
 
+def stamp_autostart_age(col: Collector, current: dict, statuses: dict, loaded: dict,
+                        now: datetime) -> None:
+    """Give each autostart item of a read or ``empty`` source ``first_seen`` (UTC date)
+    and ``passes_seen``, carried by key from the previous baseline (``loaded``) of this
+    privilege level.
+
+    An item in that baseline keeps its ``first_seen`` (or gets the baseline's
+    ``created_at`` date when the field is missing or null, the earliest date the tool
+    can show, marked ``first_seen_lower_bound`` true and carried so in later runs)
+    and gets ``passes_seen`` + 1 (or 2, a lower bound). A new item gets today and 1.
+    An item with ``from_baseline`` was not seen in this pass and keeps its values
+    (null when its baseline copy has none). When the baseline exists but cannot be read, the age is unknown:
+    both fields are null and not_checked says so. The fields are not compared
+    (not in ``AUTOSTART_FIELDS``).
+    """
+    unreadable = loaded["status"] == "unreadable"
+    previous = loaded["sources"] if loaded["status"] == "read" else {}
+    baseline_day = (baseline.parse_utc(loaded["created_at"]).date().isoformat()
+                    if loaded["status"] == "read" else None)
+    today = now.astimezone(timezone.utc).date().isoformat()
+    for source in AUTOSTART_SOURCES:
+        if statuses.get(source) not in READ_STATUSES:
+            continue
+        before = previous.get(source) or {}
+        for key, item in current.get(source, {}).items():
+            if item.get("from_baseline"):
+                for field in ("first_seen", "passes_seen", "first_seen_lower_bound"):
+                    item.setdefault(field, None)
+                continue
+            if unreadable:
+                item["first_seen"], item["passes_seen"] = None, None
+                item["first_seen_lower_bound"] = None
+                continue
+            old = before.get(key)
+            if old is None:
+                item["first_seen"], item["passes_seen"] = today, 1
+                item["first_seen_lower_bound"] = False
+                continue
+            first_seen, passes = old.get("first_seen"), old.get("passes_seen")
+            if isinstance(first_seen, str):
+                item["first_seen"] = first_seen
+                item["first_seen_lower_bound"] = old.get("first_seen_lower_bound") is True
+            else:
+                item["first_seen"], item["first_seen_lower_bound"] = baseline_day, True
+            item["passes_seen"] = (passes + 1 if isinstance(passes, int)
+                                   and not isinstance(passes, bool) else 2)
+    if unreadable:
+        col.skip("autostart first_seen and passes_seen",
+                 f"the age of the autostart entries is unknown because the previous "
+                 f"baseline could not be read ({loaded['reason']}); first_seen and "
+                 f"passes_seen are null in this run")
+
+
 def build_autostart(current: dict, numbering=None) -> tuple[list, dict, int]:
     """Every autostart entry with an id, listed ones (``own: false``) first; the id is
     the stable number of the entry's ``key`` (``numbering``).
@@ -5733,6 +5786,7 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
                  "decided_at": now.isoformat(timespec="seconds")}
     statuses, current, col = collect(run_ps, work, stamp, previous, config, admin,
                                      first_run, reference_sources)
+    stamp_autostart_age(col, current, statuses, loaded, now)
     if own_reason is not None:
         col.skip("windows-own.json", f"nothing is classified as part of Windows: "
                                      f"{own_reason}")
