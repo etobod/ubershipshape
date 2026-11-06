@@ -94,7 +94,7 @@ and how to undo it.
 | **ush-processes** | What uses the memory right now, grouped by program, why each one runs and who started it, and what listens on TCP and UDP ports. |
 | **ush-files** | How full each drive is, the largest folders and files, what grew since last time, and how much the known cleanup places hold. |
 | **ush-advice** | Latest security update installed? Known exploited vulnerabilities patched? Newer BIOS? Known issues of your Windows version? The only skill that goes online. |
-| **ush-runall** | Runs all of the above and writes one report with one prioritised list of recommendations, links between findings and contradictions side by side. |
+| **ush-runall** | Runs the other six checks above and writes one report with one prioritised list of recommendations, links between findings and contradictions side by side. Of ush-advice it takes only the machine facts: its four online checks need a separate ush-advice run. It never exports or clears a log or copies dumps. |
 
 ## How it works
 
@@ -122,8 +122,11 @@ documents its rollback. Anything irreversible is copied and verified first.
 
 ### Nothing leaves the machine
 
-No telemetry, nothing uploaded. The one skill that reaches the network (`ush-advice`) asks general
-questions, never about your data.
+No telemetry, nothing uploaded. The one skill that reaches the network (`ush-advice`) searches with
+facts shared by every machine of the same kind (Windows version, architecture, and for firmware the
+manufacturer and model) and, when it looks up a fault, the public fault text: the problem code and
+the name of the failing program or component. Never with names, accounts, addresses or files of
+yours.
 
 ### No dependencies to install
 
@@ -151,6 +154,8 @@ folder:
 ├── reports/   Markdown reports
 ├── state/     baselines for comparisons
 ├── plans/     repair plans (open, then done/)
+├── exports/   verified event log exports (made before a log is cleared)
+├── dumps/     archived crash dumps
 └── work/      raw captures and detail files
 ```
 
@@ -158,7 +163,9 @@ The folder is kept across plugin updates. To use another folder, set `USH_DATA_D
 path) or pass `--data-dir`.
 
 > [!WARNING]
-> Uninstalling the plugin **deletes this folder**, including your baselines and repair plans.
+> Uninstalling the plugin **deletes this folder**, including your baselines, repair plans, exported
+> event logs and archived crash dumps, which may be the only copy left after a log was cleared or
+> dumps were moved.
 > To keep it: `claude plugin uninstall ubershipshape@ubershipshape --keep-data`
 
 ## Requirements
