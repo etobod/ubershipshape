@@ -30,7 +30,8 @@ SOURCES = ("win32_programs", "msix_programs", "run_keys", "startup_folders",
 ITEM_SOURCES = ("win32_programs", "msix_programs", "run_keys", "startup_folders",
                 "scheduled_tasks", "services")
 TRAY = "C:\\Program Files\\Invented Editor\\tray.exe"
-DETAIL_SECTIONS = ("programs", "autostart", "changes", "components", "drivers", "additions")
+DETAIL_SECTIONS = ("programs", "autostart", "changes", "components", "drivers", "additions",
+                   "driver_packages")
 # Plan 052 M3: summary keys the real profile requires, and the new id letters.
 REQUIRED_KEYS_052 = ("components", "component_counts", "drivers", "additions", "hosts_file")
 SOURCES_052 = ("optional_features", "capabilities", "drivers", "firewall_rules",
@@ -126,6 +127,8 @@ def _summary_data(summary_file, detail_file, *, programs, changes, truncated, ba
         "drivers": [],
         "additions": [],
         "hosts_file": {"exists": True, "path_is_default": True},
+        # Plan 024 M2: driver_packages joins the profile's required_keys, empty here.
+        "driver_packages": [],
     }
 
 
@@ -665,6 +668,82 @@ class TestProfile(unittest.TestCase):
                 code, output = self._run_guarded(self._write_report(lines, f"paths-{number}.md"))
                 self.assertEqual(code, 1, f"output:\n{output}")
                 self.assertIn(number, output)
+
+
+# Plan 024 M2 (K6): orphan driver packages (o..) are a required list of the profile.
+PACKAGE_ITEM = {
+    "id": "o1",
+    "key": "driver_package:inventedpad.inf|invented peripherals corp|1.2.3.4",
+    "published_name": "oem12.inf",
+    "original_name": "inventedpad.inf",
+    "provider": "Invented Peripherals Corp",
+    "class": "Mouse",
+    "version": "1.2.3.4",
+    "date": "2024-03-14",
+    "signer": "Invented Driver Signer",
+    "present_device": False,
+}
+
+
+def _summary_packages(summary_file, detail_file):
+    """The 052 summary plus one driver package with no present device, of 3 in the store."""
+    summary = _summary_052(summary_file, detail_file)
+    summary["sources"].append({"name": "driver_packages", "status": "read", "reason": None})
+    summary["comparison"]["driver_packages"] = "compared"
+    summary["component_counts"].update({"driver_packages": 3,
+                                        "driver_packages_without_device": 1})
+    summary["driver_packages"] = [dict(PACKAGE_ITEM)]
+    return summary
+
+
+def _report_packages_lines(summary_file):
+    """The 052 report plus a Driver packages section; numbers from _summary_packages."""
+    lines = _report_052_lines(summary_file)
+    at = lines.index("## Not checked")
+    lines[at:at] = [
+        "## Driver packages",
+        ("- o1: inventedpad.inf from Invented Peripherals Corp (Mouse), version 1.2.3.4 "
+         "of 2024-03-14, signed by Invented Driver Signer; no present device uses it."),
+        "- Third-party driver packages: 3, with no present device: 1.",
+        "",
+    ]
+    return lines
+
+
+class TestDriverPackagesProfile(unittest.TestCase):
+    # The helpers of TestProfile, without running its tests a second time.
+    setUp = TestProfile.setUp
+    _assert_real_profile = TestProfile._assert_real_profile
+    _write_summary = TestProfile._write_summary
+    _write_report = TestProfile._write_report
+    _run = TestProfile._run
+    _run_guarded = TestProfile._run_guarded
+
+    def test_orphan_package_must_be_named(self):
+        self._assert_real_profile()
+        path = Path(self.check.SKILLS_DIR) / SKILL / "data" / "report-profile.json"
+        profile = json.loads(path.read_text(encoding="utf-8"))
+        self.assertIn("o", profile.get("id_letters") or "", profile.get("id_letters"))
+        self.assertIn("driver_packages", profile.get("required_lists") or [],
+                      profile.get("required_lists"))
+        self.assertIn("driver_packages", profile.get("required_keys") or [],
+                      profile.get("required_keys"))
+
+        summary_file, _ = self._write_summary("inventory-packages", _summary_packages)
+        named = _report_packages_lines(summary_file)
+        code, output = self._run_guarded(
+            self._write_report(named, "inventory-2026-11-05-1420.md"))
+        self.assertEqual(code, 0, f"the report naming o1 should pass; output:\n{output}")
+        self.assertIn("OK", output)
+
+        left_out = [line for line in named if not line.startswith("- o1:")]
+        self.assertFalse(any(re.search(r"\bo1\b", line) for line in left_out[1:]))
+        code, output = self._run_guarded(self._write_report(left_out, "no-package.md"))
+        self.assertEqual(code, 1, f"output:\n{output}")
+        self.assertTrue(
+            any("not named in the report" in line and re.search(r"\bo1\b", line)
+                for line in output.splitlines()),
+            f"expected 'not named in the report' naming o1; output:\n{output}")
 
 
 if __name__ == "__main__":

@@ -54,9 +54,9 @@ shared by all skills (see `<plugin root>/skills/ush-health/references/report-for
   `install_location`, a service's `display_name`, a fact's `company`, and a
   fact's `expanded_path` when it equals `path`. When the report needs one,
   fetch the item with `--detail <id>` and name it in an `ush:detail` line.
-- Item ids (`a1`, `s2`, `f3`, `d4`, `x5`, `c6`) are not numbers when they
+- Item ids (`a1`, `s2`, `f3`, `d4`, `o5`, `x6`, `c7`) are not numbers when they
   name an item of the summary, an item named in `ush:detail` or an item cut
-  from the summary (`truncated`, `truncated_drivers`,
+  from the summary (`truncated`, `truncated_driver_packages`, `truncated_drivers`,
   `truncated_components`, `truncated_additions`, `truncated_autostart`,
   `truncated_changes`). A word of that shape that
   is no such id is checked as a number.
@@ -82,7 +82,7 @@ shared by all skills (see `<plugin root>/skills/ush-health/references/report-for
 ## Items the report must name
 
 Every `id` of the summary lists `programs`, `autostart`, `components`,
-`drivers`, `additions`, `leftovers` and `changes` appears in a visible line of the
+`drivers`, `driver_packages`, `additions`, `leftovers` and `changes` appears in a visible line of the
 report, as a word of its own (`s12` does not name `s1`). Several ids on one
 line are fine (`a4, a5, a6: ...`). A mention inside a fenced code block or
 on a marker line does not count. The check lists each missing id as
@@ -90,7 +90,7 @@ on a marker line does not count. The check lists each missing id as
 summary (the `truncated*` counts) and items fetched with `--detail` are not
 required. A list that is `null` (its sources were not read) requires
 nothing, but the keys `components`, `component_counts`, `drivers`,
-`additions` and `hosts_file` must be in the summary: a summary without them
+`driver_packages`, `additions` and `hosts_file` must be in the summary: a summary without them
 is of an older shape and fails with
 `required key missing from the summary: <key>`.
 
@@ -118,8 +118,9 @@ is of an older shape and fails with
    | 3 | Autostart | s4 points to a missing file | 🔧 see below |
    | 4 | Components | f1 to f6 enabled features | ✅ nothing to do |
    | 5 | Drivers | d1 to d4 outside Windows | ✅ nothing to do |
-   | 6 | Added to the system | x2 hosts entry | 🔍 see below |
-   | 7 | Leftovers of removed programs | l1 folder and task | 🔧 see below |
+   | 6 | Driver packages | o1, o2 with no present device | 🔍 see below |
+   | 7 | Added to the system | x2 hosts entry | 🔍 see below |
+   | 8 | Leftovers of removed programs | l1 folder and task | 🔧 see below |
 
    `#` is the section number of the area, `State` a few words with the ids
    and the numbers from the JSON, `Action` a legend symbol and a few words
@@ -234,6 +235,30 @@ is of an older shape and fails with
      When `truncated_drivers` > 0: how many were cut, and that the detail file has them (`--cut` lists the cut items, see SKILL.md). A
      `removed` driver change is a device not present now, not an
      uninstalled driver.
+   - Driver packages: the facts first, then your judgement. Every listed
+     package (`o..`, a third-party package of the driver store that no
+     present device uses) on its own line with its id, `original_name`,
+     `published_name`, `provider`, `class`, `version`, `date` and `signer`;
+     the report names every `o..` id the summary holds. When
+     `truncated_driver_packages` > 0 the list is cut to the budget: say how
+     many packages were cut (the number from the JSON) and that the detail
+     file has them (`--cut` lists the cut items, see SKILL.md); name a cut
+     package only after fetching it with `--detail`, in an `ush:detail` line.
+     A `null` list stays `null` (not read, see "Degradation cases"). Then, each
+     on its own line with its number: "Third-party driver packages:
+     <component_counts.driver_packages>" and "With no present device:
+     <component_counts.driver_packages_without_device>". Then your
+     judgement, marked as such, per package or per group: what the package
+     is likely for (a device that is gone, an older version kept next to a
+     newer one in use, a program's helper) and whether it looks worth a
+     look. "No present device" is a fact about this moment (a device
+     unplugged now counts as not present), not proof that the package is
+     unused or safe to remove; say so once. This skill has no block for a
+     driver package. An empty list (`[]`) says that every third-party
+     package has a present device, or that the store holds none (then
+     `component_counts.driver_packages` is 0). Extension packages and the
+     other packages with `present_device` `null` are never in the list; do
+     not call them unused.
    - Added to the system: first one sentence, translated: "This section
      lists what is outside the Windows lists of the skill's data file, not
      what is suspicious." Then every addition (`x..`) by `kind`:
@@ -513,12 +538,20 @@ Never report missing data as "no changes" or "clean":
 - `optional_features` and `capabilities` both unreadable: `components` is
   `null`; `drivers` unreadable: `drivers` and `own_counts.drivers` and
   `component_counts.drivers_without_inf` are `null`. Say "not read".
+- `driver_packages` unreadable (e.g. an older Windows without the XML
+  listing): `driver_packages` and both of its counts are `null`; say "not
+  read" with the `reason`, never "no orphan packages". `drivers` unreadable
+  while the store was read: the list `driver_packages` and
+  `component_counts.driver_packages_without_device` are `null` and "Not
+  checked" holds `driver_packages present_device`; say that the packages
+  were read but the present devices were not, so no package can be called
+  unused, and give `component_counts.driver_packages`.
 - A `not_checked` item `<source> without <field>` (e.g. `drivers without
   DeviceID`): that many rows had no key and are in no list; give the
   number from its `reason`.
 - `defender_exclusions origin` in "Not checked": the policy lists could not
   be read, so every exclusion has `origin` `null` and gets no block.
-- Truncated lists: `truncated`, `truncated_drivers`,
+- Truncated lists: `truncated`, `truncated_driver_packages`, `truncated_drivers`,
   `truncated_components`, `truncated_additions`, `truncated_autostart` or
   `truncated_changes` > 0 means the summary
   holds only part of that list; the cut items are in the detail file.
@@ -526,11 +559,14 @@ Never report missing data as "no changes" or "clean":
   not follow from the list: say how many were cut from each list and that
   the detail file has them. `--cut` lists the cut items (`id`, `list`,
   `name`); name one in the report only after fetching it with `--detail`,
-  and then in the `ush:detail` line. Each cut list keeps a short list before any list is emptied: the
-  20 newest programs and the first 10 drivers (a `Display` driver leads
-  them), components and additions, and the first 20 autostart entries and
-  changes (see "Files and output" of `summary-contract.md`); report the
-  short list as it is, never as the whole list. A `summary budget` item in
+  and then in the `ush:detail` line. A list whose count key is above 0
+  (`truncated` for programs, `truncated_<list>` for the other six) is cut:
+  it holds any number of items, none included, and the order in which the
+  lists are cut is the stage table under "Files and output" of
+  `summary-contract.md`. Report such a list as cut, with the number of items
+  it holds and the number cut, both from the JSON; never as the whole list,
+  never as empty, and never by a size it is assumed to keep. Among the
+  drivers a `Display` driver comes first. A `summary budget` item in
   "Not checked" means the summary is over the budget and nothing was cut.
 - `per_user_suffixes.json` in "Not checked": install pairs were not checked,
   so no program has `per_user_pair`; describe every program on its own and

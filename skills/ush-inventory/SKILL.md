@@ -6,7 +6,8 @@ description: List what is installed on this Windows machine (Win32 programs and 
 # ush-inventory
 
 Reads the installed programs, the autostart entries, the Windows
-components, the drivers and the things added to the system (firewall rules,
+components, the drivers, the third-party packages of the driver store and
+the things added to the system (firewall rules,
 root certificates, hosts entries, members of Administrators, Defender
 exclusions) through read-only PowerShell jobs, checks the target file of
 every autostart entry, and compares everything with the baseline of the
@@ -138,6 +139,15 @@ driver, fixing anything automatically. Say so if the user asks for these.
 - **No blocks for drivers.** A driver is reported and judged, never
   removed by this skill; the vendor's uninstaller or Device Manager is the
   way, and the user decides.
+- **Driver packages with no present device are facts.** `driver_packages`
+  (`o..`) lists the third-party packages of the driver store that no
+  present device uses (`present_device` `false`); the detail file has every
+  package. Give the facts, then your judgement (a device that is gone, an
+  older version kept next to a newer one, a program's helper). A device
+  unplugged now is not present, so "no present device" is not "safe to
+  remove". A package with `present_device` `null` (an `Extension` package,
+  or every package when the drivers were not read) is never called unused.
+  There is no block for a driver package.
 - **Defender exclusions.** Under the source's `method: registry` no Defender
   exclusion gets a block: Defender is not running (usually another antivirus
   is active), so `Remove-MpPreference` fails as `Get-MpPreference` did. Say
@@ -182,7 +192,7 @@ driver, fixing anything automatically. Say so if the user asks for these.
    comes from the same run that the report checker checks against.
 
    Ids are stable between runs, not places in the list, so the id of an
-   item cut from the summary (`truncated`, `truncated_drivers`,
+   item cut from the summary (`truncated`, `truncated_driver_packages`, `truncated_drivers`,
    `truncated_components`, `truncated_additions`, `truncated_autostart`,
    `truncated_changes`, or a change collapsed into a counted entry)
    cannot be guessed. Find the cut items with:
@@ -195,7 +205,8 @@ driver, fixing anything automatically. Say so if the user asks for these.
    Fetch a cut item with `--detail` before you name it in the report.
 
    Ids: `a..` programs, `s..` autostart entries, `f..` components
-   (features and capabilities), `d..` drivers, `x..` additions, `l..`
+   (features and capabilities), `d..` drivers, `o..` driver packages with
+   no present device, `x..` additions, `l..`
    leftovers of removed programs (never cut; their parts name the `s..`
    and `x..` ids of the same items), `c..` changes. Remember every id you
    fetched and used. For a leftover the report proposes a plan in words
@@ -247,7 +258,7 @@ driver, fixing anything automatically. Say so if the user asks for these.
    dropped. A certificate export or a hosts backup goes into
    `<data dir>\work\`, so give `--data-dir` when the data directory is not
    the default one. An entry for which "Change blocks" allows no block
-   (a driver, ever) prints `# <id>: no block: <reason>`: say the reason
+   (a driver, ever, and a driver package) prints `# <id>: no block: <reason>`: say the reason
    instead. The printer prints each entry as its `# <id>: ...` comment
    lines, the change, a line `# Rollback, same shell: ...` and then the
    rollback; a blank line separates the entries. Split each entry at its
@@ -275,8 +286,8 @@ driver, fixing anything automatically. Say so if the user asks for these.
    skills; it reads the ush-inventory rules from `data/report-profile.json`.
 
    It prints `OK` when every number is backed by the JSON, every program,
-   autostart entry, component, driver, addition and change of the summary is
-   named, the summary has every key this skill requires, and the markers
+   autostart entry, component, driver, driver package, addition and change of the
+   summary is named, the summary has every key this skill requires, and the markers
    are in place. `OK` means each number occurs somewhere in the JSON, not that it
    is used for the right thing, so the rule above still binds you. Otherwise
    it names each unbacked number with its line, each item left out as

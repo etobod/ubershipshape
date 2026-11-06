@@ -39,6 +39,13 @@ see ``skills/ush-common/scripts/psrun.py``):
   ``component_counts.drivers_without_inf`` and listed by device name and class
   in ``drivers_without_inf_items`` of the detail file. A ``removed`` driver is a
   device that is not present now (e.g. unplugged), not an uninstalled driver.
+- ``driver_packages``: the driver store listing as XML (``/enum-drivers /format
+  xml``), only the third-party packages (published name ``oem<N>.inf``), each
+  with ``present_device``: whether a ``drivers`` row (one without ``DeviceID``
+  included) names it as ``InfName``; null for an ``Extension`` package and for
+  every package when ``drivers`` was not read. A failed job, an exit code other
+  than 0 or a text that is no XML listing makes the source unreadable. The summary
+  lists the packages with ``present_device`` false (``o..``, never cut).
 - ``firewall_rules``: the rule values of the ``FirewallRules`` keys of the local
   store (``local``), of Store apps (``app_iso``) and of the policy (``policy``);
   a missing key is no rules, a key that cannot be read fails the source. The
@@ -75,7 +82,9 @@ until a run that read everything finds no leftover (see ``find_leftovers``).
 Every item has a stable key (``win32:<hive>:<subkey>``, ``msix:<family>``,
 ``run:<hive>\\<Run|RunOnce>:<name>``, ``startup:<user|common>:<file>``,
 ``task:<path><name>``, ``service:<name or template>``, ``feature:<Name>``,
-``capability:<Name>``, ``driver:<DeviceID>``, ``firewall:<store>:<value name>``,
+``capability:<Name>``, ``driver:<DeviceID>``,
+``driver_package:<original name>|<provider>|<version>`` (case-folded),
+``firewall:<store>:<value name>``,
 ``cert:<store>:<THUMBPRINT>``, ``hosts:<host name, lower case>:<address>``,
 ``admin:<SID>``, ``defender:<path|extension|process|ip>:<value, lower case>``).
 The items are compared
@@ -111,22 +120,25 @@ The script counts; it never judges.
 
 The summary goes to stdout and to ``work/inventory-<UTC stamp>.summary.json``;
 the detail file ``work/inventory-<UTC stamp>.detail.json`` holds every program,
-every autostart entry, every component, every driver, every addition and every
-change with the same ids. ``--detail <id>`` prints one item of the newest detail
-file. To keep the summary within ``SUMMARY_MAX_CHARS`` six lists are cut from
+every autostart entry, every component, every driver, every driver package, every
+addition and every change with the same ids. ``--detail <id>`` prints one item of the newest detail
+file. To keep the summary within ``SUMMARY_MAX_CHARS`` seven lists are cut from
 their end, first each down to its minimum: ``programs`` (``truncated``; programs
 without an install date, then the oldest installs) down to ``PROGRAMS_MIN``,
+``driver_packages`` (``truncated_driver_packages``; the first packages in id
+order stay) down to ``DRIVER_PACKAGES_MIN``,
 ``drivers`` (``truncated_drivers``; the ``DRIVER_CLASSES_FIRST`` classes lead the
 list) down to ``DRIVERS_MIN``, ``components`` (``truncated_components``) down to
 ``COMPONENTS_MIN`` and ``additions`` (``truncated_additions``; the items without a
 change block in SKILL.md first, then the ones with a block) down to
-``ADDITIONS_MIN``; then ``drivers``, ``components`` and ``additions`` below their
-minimum, each only after the one before is empty, and only then ``programs``
-below ``PROGRAMS_MIN``. When ``autostart`` and ``changes`` are over the budget on
-their own, the four lists keep their minimums and ``autostart``
+``ADDITIONS_MIN``; then ``components``, ``drivers``, ``driver_packages`` and
+``additions`` below their minimum, each only after the one before is empty, and
+only then ``programs`` below ``PROGRAMS_MIN``. A ``null`` list stays ``null``.
+When ``autostart`` and ``changes`` are over the budget on
+their own, the five lists keep their minimums and ``autostart``
 (``truncated_autostart``, with ``autostart_counts``) and ``changes``
 (``truncated_changes``, with ``change_counts``) are cut, down to ``AUTOSTART_MIN``
-and ``CHANGES_MIN``, then to nothing, and then the four lists to nothing. The
+and ``CHANGES_MIN``, then to nothing, and then the five lists to nothing. The
 changes named by a rule of ``data/collapsed_names.json`` (the firewall rules named
 by an unresolved ``ms-resource:`` string) are collapsed in the summary into one
 counted entry per change type. A program whose name, without a suffix of
@@ -146,6 +158,7 @@ import ntpath
 import os
 import re
 import sys
+import xml.etree.ElementTree as ET
 from collections import Counter
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -164,8 +177,8 @@ FIRST_RUN_FILE = "ush-inventory.first-run.json"
 FIRST_RUN_SCHEMA = 1
 SCHEMA_VERSION = 1
 SUMMARY_MAX_CHARS = 35000
-DETAIL_SECTIONS = ("programs", "autostart", "components", "drivers", "additions", "changes",
-                   "leftovers")
+DETAIL_SECTIONS = ("programs", "autostart", "components", "drivers", "driver_packages",
+                   "additions", "changes", "leftovers")
 DEFAULT_OWN_FILE = Path(__file__).absolute().parents[1] / "data" / "windows-own.json"
 # The name suffixes of a per-user install (" (User)"); read at run time.
 PER_USER_SUFFIXES_FILE = (Path(__file__).absolute().parents[1] / "data"
@@ -189,8 +202,8 @@ ADDITION_KINDS = {
 ADDITION_SOURCES = ("firewall_rules", "root_certificates", "hosts", "administrators",
                     "defender_exclusions")
 # The sources with items, compared with the baseline.
-SOURCES = (PROGRAM_SOURCES + AUTOSTART_SOURCES + COMPONENT_SOURCES + ("drivers",)
-           + ADDITION_SOURCES)
+SOURCES = (PROGRAM_SOURCES + AUTOSTART_SOURCES + COMPONENT_SOURCES
+           + ("drivers", "driver_packages") + ADDITION_SOURCES)
 READ_STATUSES = ("read", "empty")
 # The fields compared with the baseline, per source. inf_name is not compared:
 # Windows numbers oem<N>.inf anew when a driver is installed again.
@@ -202,6 +215,8 @@ COMPARED_FIELDS = {
     "optional_features": ("state",),
     "capabilities": ("state",),
     "drivers": ("provider", "version", "date", "signer", "third_party"),
+    # The published name (oem<N>.inf) is not compared, as inf_name of drivers.
+    "driver_packages": ("provider", "class", "version", "date", "signer"),
     "firewall_rules": ("action", "dir", "active", "protocol", "lport", "rport", "app",
                        "svc", "profile"),
     "root_certificates": ("subject", "issuer", "not_after"),
@@ -212,23 +227,39 @@ COMPARED_FIELDS = {
     "defender_exclusions": ("origin",),
 }
 # The field that names an item in a change, when it is not "name".
-NAME_FIELDS = {"drivers": "device_name", "root_certificates": "subject",
+NAME_FIELDS = {"drivers": "device_name", "driver_packages": "original_name",
+               "root_certificates": "subject",
                "hosts": "hostname", "defender_exclusions": "value"}
 # Components: the kind of each source (in list order) and the state that is listed.
 COMPONENT_KINDS = {"optional_features": "feature", "capabilities": "capability"}
 LISTED_STATES = {"feature": "enabled", "capability": "Installed"}
 FEATURE_STATES = {1: "enabled", 2: "disabled", 3: "absent"}
+# Driver packages: the published name of a third-party package in the driver store,
+# the class whose packages no device names as its INF, and why their
+# present_device is null.
+THIRD_PARTY_PACKAGE = re.compile(r"oem\d+\.inf", re.IGNORECASE)
+EXTENSION_CLASS = "extension"
+EXTENSION_REASON = "extension packages are not listed per device"
+DRIVERS_UNREAD_REASON = ("the present devices (source drivers) were not read, so no "
+                         "package is known to have no present device")
+# DriverVersion of the driver store listing: "MM/DD/YYYY <version>".
+PACKAGE_VERSION = re.compile(r"\s*(\d{1,2})/(\d{1,2})/(\d{4})\s+(\S+)\s*")
 ADMIN_REASON = ("requires administrator rights (not read in this run, which is not "
                 "elevated); this is not an empty list")
 # The lists cut to fit the budget, in this order, with the key that counts the cut items.
-CUT_LISTS = (("programs", "truncated"), ("drivers", "truncated_drivers"),
+# driver_packages (the orphan packages) is cut like the other short lists: down to
+# DRIVER_PACKAGES_MIN first, and to nothing only after drivers and before additions.
+CUT_LISTS = (("programs", "truncated"),
+             ("driver_packages", "truncated_driver_packages"),
+             ("drivers", "truncated_drivers"),
              ("components", "truncated_components"), ("additions", "truncated_additions"),
              ("autostart", "truncated_autostart"), ("changes", "truncated_changes"))
 # A cut autostart or changes list carries the per-type counts of the whole list here.
 COUNT_KEYS = {"autostart": "autostart_counts", "changes": "change_counts"}
 # The items each list keeps before any list is cut further: the newest programs and
-# the first drivers, components and additions.
+# the first driver packages, drivers, components and additions.
 PROGRAMS_MIN = 20
+DRIVER_PACKAGES_MIN = 10
 DRIVERS_MIN = 10
 COMPONENTS_MIN = 10
 ADDITIONS_MIN = 10
@@ -891,6 +922,14 @@ $rows = @(Get-CimInstance -ClassName Win32_PnPSignedDriver | ForEach-Object {
 $result = $rows
 """
 
+# Works without administrator rights. The driver store listing as XML (its tag names
+# are not translated); the whole stdout and the exit code go to Python, which parses
+# it. An older pnputil that refuses /format gives its usage text and a non-zero exit.
+DRIVER_PACKAGES_BODY = r"""$exe = Join-Path $env:SystemRoot 'System32\pnputil.exe'
+$text = (& $exe /enum-drivers /format xml | Out-String)
+$result = [pscustomobject]@{ exit_code = $LASTEXITCODE; text = $text }
+"""
+
 # One row per store with the raw rule text of every value. OpenSubKey gives null
 # for a missing key (no rules in that store) and throws when access is denied,
 # which fails the whole job.
@@ -1294,6 +1333,9 @@ class Collector:
         self.not_checked = []
         self.drivers_without_inf = None  # set by collect: rows without InfName
         self.drivers_without_inf_items = None  # set by collect: their name and class
+        # set by collect_drivers: the InfName of every driver row, case-folded (rows
+        # without DeviceID included), None when the drivers source was not read
+        self.driver_inf_names = None
         self.hosts_file = None  # set by collect_hosts: the folder and file of hosts
         self.current_sid = None  # set by collect_administrators
         # set by collect_facts: {(source, key): {target path}} of the facts taken from
@@ -2038,13 +2080,15 @@ def collect_drivers(col: Collector, patterns) -> tuple[str, dict, list | None]:
     the source was not read.
     """
     result = col.job("drivers", DRIVERS_BODY)
-    items, without_inf, without_id = {}, [], 0
+    items, without_inf, without_id, inf_names = {}, [], 0, set()
     for row in result["rows"]:
         inf_name = text(row.get("InfName"))
         if inf_name is None:  # no INF file: e.g. a software device, or no driver
             without_inf.append({"device_name": text(row.get("DeviceName")),
                                 "class": text(row.get("DeviceClass"))})
             continue
+        # A row without DeviceID is no item, but its INF is in use.
+        inf_names.add(inf_name.strip().casefold())
         device_id = text(row.get("DeviceID"))
         if device_id is None:
             without_id += 1
@@ -2068,7 +2112,123 @@ def collect_drivers(col: Collector, patterns) -> tuple[str, dict, list | None]:
     skip_keyless(col, "drivers", "DeviceID", without_id)
     status, reason = entry_status("drivers", result, items, without_id)
     col.record("drivers", status, reason)
+    col.driver_inf_names = inf_names if status in READ_STATUSES else None
     return status, items, (without_inf if status in READ_STATUSES else None)
+
+
+def package_version(value) -> tuple:
+    """``(date, version)`` of a ``DriverVersion`` ``MM/DD/YYYY <version>``; the date as
+    ``YYYY-MM-DD``. Any other shape (or a date that does not exist) gives ``(None,
+    None)``."""
+    match = PACKAGE_VERSION.fullmatch(value) if isinstance(value, str) else None
+    if match is None:
+        return None, None
+    month, day, year, version = match.groups()
+    try:
+        return date(int(year), int(month), int(day)).isoformat(), version
+    except ValueError:
+        return None, None
+
+
+def parse_driver_store(value) -> tuple:
+    """``(packages, reason)`` of the driver store listing XML: one dict per ``Driver``
+    element ``{published_name, original_name, provider, class, version, date, signer}``
+    (a missing value is None), or ``(None, reason)`` when the text is no listing."""
+    if not isinstance(value, str) or not value.strip():
+        return None, "the driver store listing gave no text"
+    try:
+        root = ET.fromstring(value.strip())
+    except ET.ParseError as exc:
+        return None, f"the driver store listing is not XML: {exc}"
+    if root.tag != "PnpUtil":
+        return None, f"the driver store listing has the root element {root.tag!r}, not PnpUtil"
+    packages = []
+    for element in root.iter("Driver"):
+        day, version = package_version(element.findtext("DriverVersion"))
+        packages.append({
+            "published_name": text(element.get("DriverName")),
+            "original_name": text(element.findtext("OriginalName")),
+            "provider": text(element.findtext("ProviderName")),
+            "class": text(element.findtext("ClassName")),
+            "version": version,
+            "date": day,
+            "signer": text(element.findtext("SignerName")),
+        })
+    return packages, None
+
+
+def collect_driver_packages(col: Collector) -> tuple[str, dict]:
+    """``(status, {key: item})`` of the third-party packages (``oem<N>.inf``) of the
+    driver store.
+
+    A failed job, an exit code other than 0 or a text that is no listing makes the
+    source unreadable with the reason. The key is ``driver_package:<original
+    name>|<provider>|<version>``, case-folded; a package without an original name has
+    no key. A second package with the same key (another published name) is no item
+    of its own: its published name goes to ``other_published_names`` of the first.
+    A missing published name, date or version is null and named in
+    ``unread_fields``; the published name is not part of the key.
+    """
+    result = col.job("driver_packages", DRIVER_PACKAGES_BODY)
+    rows = [row for row in result["rows"] if isinstance(row, dict)]
+    status, reason = result["status"], result["reason"]
+    if status == "read" and len(rows) != 1:
+        status, reason = ("unreadable",
+                          f"the driver_packages job gave {len(rows)} objects, not one")
+    elif status != "read":
+        reason = reason or "the driver_packages job gave no result"
+        status = "unreadable"
+    packages = None
+    if status == "read":
+        code = rows[0].get("exit_code")
+        if isinstance(code, bool) or not isinstance(code, int):
+            status, reason = "unreadable", "the driver_packages job gave no exit code"
+        elif code != 0:
+            output = (text(rows[0].get("text")) or "").strip()[:300]
+            status = "unreadable"
+            reason = (f"the driver store listing ended with exit code {code} (an older "
+                      f"Windows may not know /format xml): {output or 'no output'}")
+        else:
+            packages, reason = parse_driver_store(rows[0].get("text"))
+            if packages is None:
+                status = "unreadable"
+    items, without_name = {}, 0
+    if status != "read":
+        col.record("driver_packages", status, reason)
+        return status, items
+    for package in packages:
+        published = package["published_name"]
+        # The listing holds third-party packages only, so a package whose published
+        # name was not read is kept with that field unread (the key does not use it),
+        # never taken for one that ships with Windows.
+        if published is not None and not THIRD_PARTY_PACKAGE.fullmatch(published.strip()):
+            continue  # a package that ships with Windows
+        original = package["original_name"]
+        if original is None:
+            without_name += 1
+            continue
+        key = (f"driver_package:{original}|{package['provider'] or ''}|"
+               f"{package['version'] or ''}").casefold()
+        if key in items:
+            if published is None:
+                unread = items[key].setdefault("unread_fields", [])
+                if "published_name" not in unread:
+                    unread.append("published_name")
+            elif items[key]["published_name"] is None:
+                items[key]["published_name"] = published
+            else:
+                items[key].setdefault("other_published_names", []).append(published)
+            continue
+        item = dict(package)
+        unread = [field for field in ("published_name", "version", "date")
+                  if item[field] is None]
+        if unread:
+            item["unread_fields"] = unread
+        items[key] = item
+    skip_keyless(col, "driver_packages", "OriginalName", without_name)
+    status, reason = entry_status("driver_packages", result, items, without_name)
+    col.record("driver_packages", status, reason)
+    return status, items
 
 
 def parse_firewall_rule(value, builtin) -> dict:
@@ -2692,6 +2852,7 @@ def collect(run_ps, work: Path, stamp: str, previous: dict, config: dict, admin:
         col, config["driver_third_party_inf"])
     if col.drivers_without_inf_items is not None:
         col.drivers_without_inf = len(col.drivers_without_inf_items)
+    statuses["driver_packages"], current["driver_packages"] = collect_driver_packages(col)
 
     statuses["firewall_rules"], current["firewall_rules"] = collect_firewall(
         col, config["firewall_builtin"])
@@ -2885,6 +3046,50 @@ def build_drivers(current: dict, numbering=None) -> tuple[list, int]:
     drivers = [{"id": None, **e} for e in listed + rest]
     numbering_of(numbering).assign("d", drivers)
     return drivers, len(listed)
+
+
+PUBLISHED_UNREAD_REASON = ("the published name (oem<N>.inf) of a copy of this package "
+                           "was not read, so it cannot be matched to a device")
+
+
+def package_present(item: dict, inf_names) -> tuple:
+    """``(present_device, reason)`` of one driver package: whether a driver row names
+    one of its published names as ``InfName`` (``inf_names``, case-folded). Null with
+    the reason for an ``Extension`` package (no device names it), for every package
+    when the drivers were not read (``inf_names`` None), and for one with no matching
+    name when the published name of a copy was not read."""
+    if inf_names is None:
+        return None, DRIVERS_UNREAD_REASON
+    if (item.get("class") or "").strip().casefold() == EXTENSION_CLASS:
+        return None, EXTENSION_REASON
+    names = [item.get("published_name"), *(item.get("other_published_names") or [])]
+    if any(isinstance(name, str) and name.strip().casefold() in inf_names
+           for name in names):
+        return True, None
+    if "published_name" in (item.get("unread_fields") or []):
+        return None, PUBLISHED_UNREAD_REASON
+    return False, None
+
+
+def build_driver_packages(current: dict, inf_names, numbering=None) -> list:
+    """Every third-party driver package with an id and ``present_device`` (see
+    ``package_present``; a null one names its reason in ``present_device_reason``),
+    by provider, then original name, then version. The id is the stable number of
+    the package's ``key`` (``numbering``)."""
+    entries = [{"key": key, **item}
+               for key, item in (current.get("driver_packages") or {}).items()]
+    entries.sort(key=lambda e: (text_order(e.get("provider")),
+                                text_order(e.get("original_name")),
+                                text_order(e.get("version")), e["key"]))
+    packages = []
+    for entry in entries:
+        present, reason = package_present(entry, inf_names)
+        package = {"id": None, **entry, "present_device": present}
+        if reason is not None:
+            package["present_device_reason"] = reason
+        packages.append(package)
+    numbering_of(numbering).assign("o", packages)
+    return packages
 
 
 def addition_order(entry: dict) -> tuple:
@@ -3852,31 +4057,41 @@ def fit_budget(summary: dict) -> str:
     The lists of ``CUT_LISTS`` are cut from their end, in stages, each stage only
     when the one before could not make the summary fit. First the minimums:
     ``programs`` (programs without an install date, then the oldest installs) down
-    to ``PROGRAMS_MIN``, ``drivers`` down to ``DRIVERS_MIN``, ``components`` down to
+    to ``PROGRAMS_MIN``, ``driver_packages`` down to ``DRIVER_PACKAGES_MIN``,
+    ``drivers`` down to ``DRIVERS_MIN``, ``components`` down to
     ``COMPONENTS_MIN`` and ``additions`` (the items without a change block, from the
     end of their group, then the items with one) down to ``ADDITIONS_MIN`` (a list
-    with fewer items keeps them all). Then ``drivers``, ``components`` and
-    ``additions`` down to nothing, and ``programs`` below ``PROGRAMS_MIN``. Only
+    with fewer items keeps them all), except that ``components``, then ``drivers``
+    and then ``driver_packages`` go to nothing before ``additions`` are cut to their
+    minimum. Then ``additions`` down to nothing, and ``programs`` below
+    ``PROGRAMS_MIN``. A ``null`` list (its source not read) stays ``null`` and its
+    count key ``0``. Only
     when that is not enough, so ``autostart`` and ``changes`` are over the budget on
-    their own, do the four lists go back to their minimums and ``autostart`` and
+    their own, do the five lists go back to their minimums and ``autostart`` and
     ``changes`` get cut: down to ``AUTOSTART_MIN`` and ``CHANGES_MIN``, then to
-    nothing, and then the four lists to nothing again in the same order. Each count
+    nothing, and then ``components``, ``drivers``, ``driver_packages``,
+    ``additions`` and ``programs`` to nothing, in that order. Each count
     key of ``CUT_LISTS`` counts the cut items (``truncated_changes`` the cut changes,
     a collapsed entry by its ``count``); a cut
     ``autostart`` or ``changes`` also gets the per-type counts of the whole list in
     its ``COUNT_KEYS`` key (``null`` while it is not cut). A summary that is too long
-    even with all six lists empty is not cut at all and says so in not_checked.
+    even with all seven lists empty is not cut at all and says so in not_checked.
     """
     text_out = dump(summary)
     originals = {name: summary.get(name) for name, _ in CUT_LISTS}
     if len(text_out) > SUMMARY_MAX_CHARS:
         count_keys = dict(CUT_LISTS)
         kept = {name: len(items or []) for name, items in originals.items()}
-        minimums = {"programs": PROGRAMS_MIN, "drivers": DRIVERS_MIN,
+        minimums = {"programs": PROGRAMS_MIN, "driver_packages": DRIVER_PACKAGES_MIN,
+                    "drivers": DRIVERS_MIN,
                     "components": COMPONENTS_MIN, "additions": ADDITIONS_MIN,
                     "autostart": AUTOSTART_MIN, "changes": CHANGES_MIN}
         floors = {name: min(minimums[name], kept[name]) for name in minimums}
         short_lists = [name for name, _ in CUT_LISTS if name not in COUNT_KEYS]
+        # Components go before drivers go below their minimum, drivers before driver
+        # packages; additions go last.
+        last_stages = [("components", 0), ("drivers", 0), ("driver_packages", 0),
+                       ("additions", 0), ("programs", 0)]
 
         def fits(name: str, count: int) -> bool:
             items = originals[name]
@@ -3905,19 +4120,22 @@ def fit_budget(summary: dict) -> str:
                 kept[name] = floor
             return False
 
-        fitted = run_stages([(name, floors[name]) for name in short_lists]
-                            + [(name, 0) for name in short_lists[1:]] + [("programs", 0)])
+        # programs, driver_packages, drivers and components to their floors, then
+        # components, drivers and driver_packages to nothing, then additions.
+        fitted = run_stages([(name, floors[name]) for name in short_lists[:4]]
+                            + last_stages[:3]
+                            + [("additions", floors["additions"])]
+                            + last_stages[3:])
         if not fitted:
-            # autostart and changes are over the budget on their own: the four lists
-            # keep their short lists, and these two are cut.
+            # autostart and changes are over the budget on their own: the five short
+            # lists keep their floors, and these two are cut.
             for name in short_lists:
                 if originals[name] is not None:
                     fits(name, floors[name])
                     kept[name] = floors[name]
             fitted = run_stages([(name, floors[name]) for name in COUNT_KEYS]
                                 + [(name, 0) for name in COUNT_KEYS]
-                                + [(name, 0) for name in short_lists[1:]]
-                                + [("programs", 0)])
+                                + last_stages)
         if not fitted:
             # Something else is too long: cutting the lists would lose them for nothing.
             for name, count_key in CUT_LISTS:
@@ -4236,6 +4454,7 @@ AUTOSTART_BLOCKS = {
 NOT_AUTOSTART = {
     "programs": "this skill has no change block for a program",
     "drivers": "no block for a driver, ever",
+    "driver_packages": "this skill has no change block for a driver package",
     "changes": "a change has no block; give the id of the item it names",
 }
 
@@ -5038,6 +5257,7 @@ def cut_label_addition(item: dict):
 
 CUT_LABELS = {
     "drivers": lambda item: item.get("device_name"),
+    "driver_packages": lambda item: item.get("original_name"),
     "additions": cut_label_addition,
 }
 
@@ -5230,6 +5450,22 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
                      "signer")
     listed_drivers = [{k: d.get(k) for k in driver_fields}
                       for d in drivers[:listed_driver_count]] if drivers_read else None
+    # Driver packages: the summary lists the ones no present device uses, null when
+    # the store was not read, or when it holds packages and the devices were not read.
+    packages = build_driver_packages(current, col.driver_inf_names, numbering)
+    packages_status = statuses["driver_packages"]
+    if packages_status == "read" and col.driver_inf_names is None:
+        col.skip("driver_packages present_device", DRIVERS_UNREAD_REASON)
+    packages_judged = (packages_status == "empty"
+                       or (packages_status == "read" and col.driver_inf_names is not None))
+    package_fields = ("id", "key", "published_name", "original_name", "provider", "class",
+                      "version", "date", "signer", "present_device")
+    listed_packages = [{k: p.get(k) for k in package_fields} for p in packages
+                       if p["present_device"] is False] if packages_judged else None
+    component_counts["driver_packages"] = (len(packages) if packages_status in READ_STATUSES
+                                           else None)
+    component_counts["driver_packages_without_device"] = (
+        len(listed_packages) if listed_packages is not None else None)
 
     defender_method = next((e.get("method") for e in col.sources
                             if e["name"] == "defender_exclusions"), None)
@@ -5283,6 +5519,7 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
         "components": components,
         "drivers": drivers,
         "drivers_without_inf_items": col.drivers_without_inf_items,
+        "driver_packages": packages,
         "additions": additions,
         "leftovers": leftovers,
         "hosts_file": col.hosts_file,
@@ -5292,7 +5529,7 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
         "listed": {name: [item["id"] for item in items or []] for name, items in (
             ("programs", listed_programs), ("autostart", listed_autostart),
             ("components", listed_components), ("drivers", listed_drivers),
-            ("additions", listed_additions), ("changes", changes[:listed_changes]))},
+            ("driver_packages", listed_packages), ("additions", listed_additions), ("changes", changes[:listed_changes]))},
         "summary_file": str(summary_file),
     }
     detail_file.write_text(dump(detail) + "\n", encoding="utf-8")
@@ -5343,6 +5580,7 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
         "summary_file": str(summary_file),
         "detail_file": str(detail_file),
         "truncated": 0,
+        "truncated_driver_packages": 0,
         "truncated_drivers": 0,
         "truncated_components": 0,
         "truncated_additions": 0,
@@ -5357,6 +5595,7 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
         "components": listed_components,
         "component_counts": component_counts,
         "drivers": listed_drivers,
+        "driver_packages": listed_packages,
         "additions": listed_additions,
         "leftovers": leftovers,
         "hosts_file": hosts_file,

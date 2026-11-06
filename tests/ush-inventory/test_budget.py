@@ -1102,7 +1102,8 @@ class TestCollapsedChanges(InventoryTestCase):
 SIX_LISTS = ("programs", "drivers", "components", "additions", "autostart", "changes")
 COUNT_NAMES = {"programs": "truncated", "drivers": "truncated_drivers",
                "components": "truncated_components", "additions": "truncated_additions",
-               "autostart": "truncated_autostart", "changes": "truncated_changes"}
+               "autostart": "truncated_autostart", "changes": "truncated_changes",
+               "driver_packages": "truncated_driver_packages"}
 
 
 def budget_summary(sizes, pad=""):
@@ -1221,6 +1222,390 @@ class TestCollapseRules(InventoryTestCase):
         summary = self.parse(stdout)
         self.assertIn("collapsed_names.json",
                       [item.get("what") for item in summary["not_checked"]])
+
+
+# --- Drivers keep their short list before components are cut (plan 107) --------------
+#
+# Stage order of the first pass, each stage stopping as soon as the summary fits:
+# programs->20, drivers->10, components->10, components->0, drivers->0, additions->10,
+# additions->0, programs->0. Fallback (autostart/changes too long on their own): the four
+# short lists at their minimums, autostart and changes to their floors, then to 0, then
+# components->0, drivers->0, additions->0, programs->0.
+#
+# Each case is sized against the real SUMMARY_MAX_CHARS: the expected end state is built
+# by hand, a ``leftovers`` list (never cut) fills it up to FLOOR_GAP characters below the
+# budget, and every item of the list cut last is longer than FLOOR_GAP, so one more item
+# of it would not fit.
+
+FLOOR_GAP = 30
+FLOOR_DRIVER_PAD = 220
+FLOOR_COMPONENT_PAD = 80
+FLOOR_ADDITION_PAD = 80
+FLOOR_PROGRAM_PAD = 80
+FLOOR_AUTOSTART_PAD = 300
+LEFTOVER_CHUNK = 1000
+
+
+def floor_items(name, count, pad):
+    """``count`` invented items of one list, all of the same length."""
+    items = []
+    for i in range(count):
+        item = {"id": f"{name[0]}{i:03d}",
+                "name": f"Invented floor {name} item {i:03d} " + "n" * pad}
+        if name == "autostart":
+            item["kind"] = "run"
+        if name == "changes":
+            item.update(source="run_keys", change="added")
+        items.append(item)
+    return items
+
+
+def floor_summary(lists):
+    """An invented summary holding ``lists`` (name -> items), nothing cut yet."""
+    summary = {"leftovers": [], "not_checked": [],
+               "autostart_counts": None, "change_counts": None}
+    for name in SIX_LISTS:
+        summary[name] = list(lists.get(name, []))
+        summary[COUNT_NAMES[name]] = 0
+    return summary
+
+
+def cut_state(summary, kept):
+    """A copy of ``summary`` with each list in ``kept`` (name -> number) cut to a prefix."""
+    state = json.loads(json.dumps(summary))
+    for name, number in kept.items():
+        whole = len(summary[name])
+        state[name] = summary[name][:number]
+        state[COUNT_NAMES[name]] = whole - number
+    if "autostart" in kept and kept["autostart"] < len(summary["autostart"]):
+        state["autostart_counts"] = {"run": len(summary["autostart"])}
+    if "changes" in kept and kept["changes"] < len(summary["changes"]):
+        state["change_counts"] = {"run_keys": {"added": len(summary["changes"]),
+                                               "removed": 0, "changed": 0}}
+    return state
+
+
+class TestDriverFloor(InventoryTestCase):
+    listed = TestBudget.listed
+    count = TestBudget.count
+
+    def size(self, summary):
+        return len(self.inventory.dump(summary))
+
+    def budget(self):
+        return self.inventory.SUMMARY_MAX_CHARS
+
+    def fill(self, state, target):
+        """Set ``state["leftovers"]`` so that the dumped ``state`` is ``target`` long."""
+        state["leftovers"] = []
+        room = target - self.size(state)
+        self.assertGreater(room, 2 * LEFTOVER_CHUNK, "the end state leaves no room to fill")
+        state["leftovers"] = ["x" * LEFTOVER_CHUNK] * (room // (LEFTOVER_CHUNK + 100)) + [""]
+        rest = target - self.size(state)
+        self.assertGreaterEqual(rest, 0)
+        state["leftovers"][-1] = "x" * rest
+        self.assertEqual(self.size(state), target)
+        return state["leftovers"]
+
+    def sized_case(self, summary, end, one_more):
+        """Fill ``summary`` so that the ``end`` cut fits and the ``one_more`` cut does not."""
+        budget = self.budget()
+        leftovers = self.fill(cut_state(summary, end), budget - FLOOR_GAP)
+        summary["leftovers"] = leftovers
+        over = cut_state(summary, one_more)
+        self.assertGreater(self.size(over), budget, "fixture: one more item would still fit")
+        self.assertGreater(self.size(summary), budget, "fixture: the summary already fits")
+        return summary
+
+    def fit(self, summary):
+        text = self.inventory.fit_budget(summary)
+        self.assertLessEqual(len(text), self.budget())
+        return text
+
+    def test_drivers_keep_minimum_before_components(self):
+        drivers_min = self.inventory.DRIVERS_MIN
+        drivers = floor_items("drivers", 64, FLOOR_DRIVER_PAD)
+        components = floor_items("components", 40, FLOOR_COMPONENT_PAD)
+        additions = floor_items("additions", 40, FLOOR_ADDITION_PAD)
+        summary = self.sized_case(
+            floor_summary({"drivers": drivers, "components": components,
+                           "additions": additions}),
+            end={"drivers": drivers_min, "components": 0},
+            one_more={"drivers": drivers_min, "components": 1},
+        )
+
+        self.fit(summary)
+
+        self.assertEqual(self.listed(summary, "components"), [])
+        self.assertEqual(self.count(summary, "truncated_components"), 40)
+        self.assertEqual(len(self.listed(summary, "drivers")), drivers_min)
+        self.assertEqual(self.count(summary, "truncated_drivers"), 64 - drivers_min)
+        self.assertEqual(self.count(summary, "truncated_drivers"), 54)
+        self.assertEqual(self.listed(summary, "additions"), additions)
+        self.assertEqual(self.count(summary, "truncated_additions"), 0)
+
+    def test_fitting_summary_keeps_all_drivers(self):
+        drivers = floor_items("drivers", 64, FLOOR_DRIVER_PAD)
+        summary = floor_summary({
+            "drivers": drivers,
+            "components": floor_items("components", 40, FLOOR_COMPONENT_PAD),
+            "additions": floor_items("additions", 40, FLOOR_ADDITION_PAD),
+        })
+        self.assertLess(self.size(summary), self.budget(), "fixture: summary over budget")
+
+        self.fit(summary)
+
+        self.assertEqual(self.listed(summary, "drivers"), drivers)
+        self.assertEqual(self.count(summary, "truncated_drivers"), 0)
+
+    def test_additions_kept_while_drivers_cut(self):
+        drivers_min = self.inventory.DRIVERS_MIN
+        kept_drivers = 4
+        self.assertLess(kept_drivers, drivers_min)
+        drivers = floor_items("drivers", 30, FLOOR_DRIVER_PAD)
+        components = floor_items("components", 40, FLOOR_COMPONENT_PAD)
+        additions = floor_items("additions", 40, FLOOR_ADDITION_PAD)
+        summary = self.sized_case(
+            floor_summary({"drivers": drivers, "components": components,
+                           "additions": additions}),
+            end={"drivers": kept_drivers, "components": 0},
+            one_more={"drivers": kept_drivers + 1, "components": 0},
+        )
+
+        self.fit(summary)
+
+        kept = self.listed(summary, "drivers")
+        self.assertLess(len(kept), drivers_min)
+        self.assertEqual(len(kept) + self.count(summary, "truncated_drivers"), 30)
+        self.assertEqual(self.listed(summary, "components"), [])
+        self.assertEqual(self.count(summary, "truncated_components"), 40)
+        self.assertEqual(self.listed(summary, "additions"), additions)
+        self.assertEqual(self.count(summary, "truncated_additions"), 0)
+
+    def test_drivers_zero_only_after_autostart_and_changes(self):
+        inv = self.inventory
+        lists = {
+            "programs": floor_items("programs", 40, FLOOR_PROGRAM_PAD),
+            "drivers": floor_items("drivers", 30, FLOOR_DRIVER_PAD),
+            "components": floor_items("components", 30, FLOOR_COMPONENT_PAD),
+            "additions": floor_items("additions", 30, FLOOR_ADDITION_PAD),
+            "autostart": floor_items("autostart", 40, FLOOR_AUTOSTART_PAD),
+            "changes": floor_items("changes", 40, FLOOR_AUTOSTART_PAD),
+        }
+        end = {"programs": inv.PROGRAMS_MIN, "drivers": 0, "components": 0,
+               "additions": inv.ADDITIONS_MIN, "autostart": 0, "changes": 0}
+        summary = self.sized_case(floor_summary(lists), end=end,
+                                  one_more=dict(end, drivers=1))
+        # The first pass alone (all four short lists at 0) does not fit: autostart and
+        # changes are too long on their own, so the fallback decides.
+        first_pass_end = cut_state(summary, {"programs": 0, "drivers": 0, "components": 0,
+                                             "additions": 0})
+        self.assertGreater(self.size(first_pass_end), self.budget(),
+                           "fixture: the first pass would fit")
+
+        self.fit(summary)
+
+        self.assertEqual(self.listed(summary, "drivers"), [])
+        self.assertEqual(self.count(summary, "truncated_drivers"), len(lists["drivers"]))
+        self.assertEqual(self.listed(summary, "autostart"), [])
+        self.assertEqual(self.count(summary, "truncated_autostart"), len(lists["autostart"]))
+        self.assertEqual(self.listed(summary, "changes"), [])
+        self.assertEqual(self.count(summary, "truncated_changes"), len(lists["changes"]))
+
+
+# --- Driver packages are cut to the budget (plan 024 QA, architect 2026-11-06) ---------
+#
+# First pass: programs->20, driver_packages->10, drivers->10, components->10,
+# components->0, drivers->0, driver_packages->0, additions->10, additions->0, programs->0.
+# A long package list must not push the listed drivers below their minimum while
+# autostart, changes and additions fit. The sizes are invented.
+
+LONG_AUTOSTART_PAD = 120
+LONG_CHANGES_PAD = 120
+LONG_ADDITIONS = 12
+LONG_PACKAGES = 50
+
+
+def package_items(count):
+    """``count`` invented orphan driver packages with every summary field."""
+    return [{
+        "id": f"o{i}",
+        "key": f"package:inventedpkg{i:03d}.inf:1.{i}.0.0",
+        "published_name": f"oem{i + 100}.inf",
+        "original_name": f"inventedpkg{i:03d}.inf",
+        "provider": "Invented Hardware Vendor of Example Devices Ltd",
+        "class": "Extension",
+        "version": f"1.{i}.0.0",
+        "date": "2024-03-04",
+        "signer": "Invented Hardware Compatibility Publisher",
+        "present_device": False,
+    } for i in range(count)]
+
+
+def package_summary(lists, packages):
+    """``floor_summary`` with ``driver_packages`` (a list or None) and its count key."""
+    summary = floor_summary(lists)
+    summary["driver_packages"] = packages
+    summary["truncated_driver_packages"] = 0
+    return summary
+
+
+class TestDriverPackagesCut(InventoryTestCase):
+    listed = TestBudget.listed
+    count = TestBudget.count
+    size = TestDriverFloor.size
+    budget = TestDriverFloor.budget
+    fill = TestDriverFloor.fill
+    sized_case = TestDriverFloor.sized_case
+    fit = TestDriverFloor.fit
+
+    def long_package_lists(self):
+        return {
+            "programs": floor_items("programs", 30, FLOOR_PROGRAM_PAD),
+            "drivers": floor_items("drivers", 48, FLOOR_DRIVER_PAD),
+            "components": floor_items("components", 11, FLOOR_COMPONENT_PAD),
+            "additions": floor_items("additions", LONG_ADDITIONS, FLOOR_ADDITION_PAD),
+            "autostart": floor_items("autostart", 30, LONG_AUTOSTART_PAD),
+            "changes": floor_items("changes", 9, LONG_CHANGES_PAD),
+        }
+
+    def test_packages_cut_before_drivers_go_below_minimum(self):
+        inv = self.inventory
+        lists = self.long_package_lists()
+        packages = package_items(LONG_PACKAGES)
+        self.assertGreater(len(inv.dump(packages)), 15000, "fixture: packages too short")
+        # Sized so that the old order (packages never cut) ends with drivers [] and
+        # components []: one driver more would not fit.
+        end = {"programs": inv.PROGRAMS_MIN, "drivers": 0, "components": 0}
+        summary = self.sized_case(package_summary(lists, packages), end=end,
+                                  one_more=dict(end, drivers=1))
+
+        self.fit(summary)
+
+        held = self.listed(summary, "driver_packages")
+        self.assertGreater(len(held), 0)
+        self.assertLess(len(held), LONG_PACKAGES)
+        self.assertEqual(held, packages[:len(held)])
+        self.assertEqual(self.count(summary, "truncated_driver_packages"),
+                         LONG_PACKAGES - len(held))
+        # Packages reach their floor before drivers are cut at all: with the reverse
+        # order the drivers would stop at exactly DRIVERS_MIN and packages above theirs.
+        self.assertEqual(len(held), inv.DRIVER_PACKAGES_MIN)
+        drivers = self.listed(summary, "drivers")
+        self.assertGreater(len(drivers), inv.DRIVERS_MIN)
+        self.assertEqual(drivers, lists["drivers"][:len(drivers)])
+        self.assertEqual(self.count(summary, "truncated_drivers"),
+                         len(lists["drivers"]) - len(drivers))
+        self.assertEqual(self.listed(summary, "autostart"), lists["autostart"])
+        self.assertEqual(self.count(summary, "truncated_autostart"), 0)
+        self.assertEqual(self.listed(summary, "changes"), lists["changes"])
+        self.assertEqual(self.count(summary, "truncated_changes"), 0)
+        self.assertEqual(self.listed(summary, "additions"), lists["additions"])
+        self.assertEqual(self.count(summary, "truncated_additions"), 0)
+
+    def test_fitting_summary_keeps_every_package(self):
+        packages = package_items(LONG_PACKAGES)
+        summary = package_summary({"drivers": floor_items("drivers", 20, FLOOR_DRIVER_PAD)},
+                                  packages)
+        self.assertLess(self.size(summary), self.budget(), "fixture: summary over budget")
+
+        self.fit(summary)
+
+        self.assertEqual(self.listed(summary, "driver_packages"), packages)
+        self.assertEqual(self.count(summary, "truncated_driver_packages"), 0)
+
+    def test_null_packages_stay_null_when_cut(self):
+        sizes = dict(BUDGET_SIZES)
+        for case in ("first pass", "fallback", "nothing fits"):
+            with self.subTest(case):
+                summary = budget_summary(sizes, pad="x" * 2000)
+                summary["driver_packages"] = None
+                summary["truncated_driver_packages"] = 0
+                if case == "first pass":
+                    budget = len(self.inventory.dump(summary)) - 10
+                elif case == "fallback":
+                    empty = budget_summary({}, pad="x" * 2000)
+                    empty["driver_packages"] = None
+                    empty["truncated_driver_packages"] = 0
+                    empty["autostart_counts"] = {"run": sizes["autostart"]}
+                    empty["change_counts"] = {"run_keys": {"added": sizes["changes"],
+                                                           "removed": 0, "changed": 0}}
+                    for name in SIX_LISTS:
+                        empty[COUNT_NAMES[name]] = sizes[name]
+                    budget = len(self.inventory.dump(empty)) + 5
+                else:
+                    budget = 1000
+                with mock.patch.object(self.inventory, "SUMMARY_MAX_CHARS", budget):
+                    self.inventory.fit_budget(summary)
+                self.assertIn("driver_packages", summary)
+                self.assertIsNone(summary["driver_packages"])
+                self.assertEqual(summary["truncated_driver_packages"], 0)
+                if case == "fallback":
+                    self.assertEqual(summary["autostart"], [])
+                    self.assertEqual(summary["changes"], [])
+
+    def test_fallback_empties_packages_after_drivers_before_additions(self):
+        # autostart alone is over the budget, so the first pass fails. The budget lies
+        # between the fallback state with 5 packages and the one with 6: autostart and
+        # changes at 0, components and drivers at 0, additions and programs at their
+        # floors.
+        inv = self.inventory
+        lists = {
+            "programs": floor_items("programs", 25, FLOOR_PROGRAM_PAD),
+            "drivers": floor_items("drivers", 20, FLOOR_DRIVER_PAD),
+            "components": floor_items("components", 15, FLOOR_COMPONENT_PAD),
+            "additions": floor_items("additions", 15, FLOOR_ADDITION_PAD),
+            "autostart": floor_items("autostart", 140, FLOOR_AUTOSTART_PAD),
+            "changes": floor_items("changes", 30, FLOOR_AUTOSTART_PAD),
+        }
+        packages = package_items(20)
+        summary = package_summary(lists, packages)
+        end = {"programs": inv.PROGRAMS_MIN, "additions": inv.ADDITIONS_MIN,
+               "components": 0, "drivers": 0, "autostart": 0, "changes": 0,
+               "driver_packages": 5}
+        low = self.size(cut_state(summary, end))
+        high = self.size(cut_state(summary, dict(end, driver_packages=6)))
+        budget = (low + high) // 2
+        first_pass_end = {name: 0 for name in ("programs", "drivers", "components",
+                                               "additions", "driver_packages")}
+        self.assertGreater(self.size(cut_state(summary, first_pass_end)), budget,
+                           "fixture: the first pass would fit")
+
+        with mock.patch.object(inv, "SUMMARY_MAX_CHARS", budget):
+            text = inv.fit_budget(summary)
+
+        self.assertLessEqual(len(text), budget)
+        self.assertEqual(summary["autostart"], [])
+        self.assertEqual(summary["drivers"], [])
+        self.assertEqual(summary["truncated_drivers"], 20)
+        self.assertEqual(summary["driver_packages"], packages[:5])
+        self.assertEqual(summary["truncated_driver_packages"], 15)
+        self.assertEqual(summary["additions"], lists["additions"][:inv.ADDITIONS_MIN])
+
+    def test_packages_emptied_after_drivers_before_additions(self):
+        # Sized so that drivers and components at 0 with 5 packages fits and 6 do not:
+        # packages go below their minimum only after drivers are empty, and additions
+        # stay whole.
+        inv = self.inventory
+        lists = {
+            "drivers": floor_items("drivers", 30, FLOOR_DRIVER_PAD),
+            "components": floor_items("components", 20, FLOOR_COMPONENT_PAD),
+            "additions": floor_items("additions", 20, FLOOR_ADDITION_PAD),
+        }
+        packages = package_items(30)
+        end = {"drivers": 0, "components": 0, "driver_packages": 5}
+        summary = self.sized_case(package_summary(lists, packages), end=end,
+                                  one_more=dict(end, driver_packages=6))
+        self.assertLess(5, inv.DRIVER_PACKAGES_MIN)
+
+        self.fit(summary)
+
+        self.assertEqual(self.listed(summary, "drivers"), [])
+        self.assertEqual(self.count(summary, "truncated_drivers"), 30)
+        self.assertEqual(self.listed(summary, "driver_packages"), packages[:5])
+        self.assertEqual(self.count(summary, "truncated_driver_packages"), 25)
+        self.assertEqual(self.listed(summary, "additions"), lists["additions"])
+        self.assertEqual(self.count(summary, "truncated_additions"), 0)
 
 
 if __name__ == "__main__":

@@ -78,7 +78,7 @@ CUT_CERT_KEY = f"cert:enterprise:{CUT_CERT_THUMB}"
 
 SUMMARY_LISTS = ("programs", "autostart", "components", "drivers", "additions")
 CUT_COUNTS = {"a": "truncated", "d": "truncated_drivers", "f": "truncated_components",
-              "x": "truncated_additions"}
+              "x": "truncated_additions", "o": "truncated_driver_packages"}
 
 
 # --- invented machine data -------------------------------------------------------------

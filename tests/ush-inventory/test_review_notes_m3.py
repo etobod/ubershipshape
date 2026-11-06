@@ -218,31 +218,25 @@ class TestReviewNotesM3(InventoryTestCase):
         return stdout, self.parse(stdout)
 
     def test_short_lists_keep_minimum(self):
-        drivers_min = getattr(self.inventory, "DRIVERS_MIN", 10)
-        components_min = getattr(self.inventory, "COMPONENTS_MIN", 10)
-        display_key = f"driver:{DISPLAY_DEVICE_ID}"
-
         stdout, summary = self.run_lists(RULES_OVER_BUDGET)
         with self.subTest(point="the summary keeps the budget"):
             self.assertLessEqual(len(stdout.strip()), BUDGET)
 
-        with self.subTest(point="exactly DRIVERS_MIN drivers, the Display one first"):
-            drivers = self.listed(summary, "drivers")
-            self.assertEqual(len(drivers), drivers_min, [d.get("key") for d in drivers])
-            self.assertEqual(drivers[0].get("key"), display_key, drivers[0])
-            self.assertEqual(str(drivers[0].get("class")).lower(), "display", drivers[0])
+        # Plan 024 M1 changed the cut order on purpose: components and then drivers go
+        # to nothing before additions are cut to their minimum, so with this many
+        # firewall rules both lists are emptied and every item is counted as cut.
+        with self.subTest(point="components emptied, every one counted"):
+            self.assertEqual(self.listed(summary, "components"), [])
+            self.assertEqual(self.count(summary, "truncated_components"), COMPONENTS)
 
-        with self.subTest(point="exactly COMPONENTS_MIN components"):
-            components = self.listed(summary, "components")
-            self.assertEqual(len(components), components_min,
-                             [c.get("key") for c in components])
+        with self.subTest(point="drivers emptied after components, every one counted"):
+            self.assertEqual(self.listed(summary, "drivers"), [])
+            self.assertEqual(self.count(summary, "truncated_drivers"),
+                             len(third_party_drivers(DRIVERS)))
 
-        with self.subTest(point="truncated_drivers equals the drivers cut"):
-            self.assertEqual(self.count(summary, "truncated_drivers"), DRIVERS - drivers_min)
-
-        with self.subTest(point="truncated_components equals the components cut"):
-            self.assertEqual(self.count(summary, "truncated_components"),
-                             COMPONENTS - components_min)
+        with self.subTest(point="additions keep at least ADDITIONS_MIN"):
+            additions_min = getattr(self.inventory, "ADDITIONS_MIN", 10)
+            self.assertGreaterEqual(len(self.listed(summary, "additions")), additions_min)
 
         with self.subTest(point="a fixture that fits the budget loses nothing"):
             stdout, summary = self.run_lists(RULES_IN_BUDGET)
@@ -259,6 +253,11 @@ class TestReviewNotesM3(InventoryTestCase):
                 {f"feature:InventedM3Feature{i:02d}" for i in range(COMPONENTS)},
             )
             self.assertEqual(len(self.listed(summary, "additions")), RULES_IN_BUDGET)
+
+        with self.subTest(point="the Display driver comes first"):
+            drivers = self.listed(summary, "drivers")
+            self.assertEqual(drivers[0].get("key"), f"driver:{DISPLAY_DEVICE_ID}", drivers[0])
+            self.assertEqual(str(drivers[0].get("class")).lower(), "display", drivers[0])
 
 
 if __name__ == "__main__":

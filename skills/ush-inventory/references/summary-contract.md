@@ -18,7 +18,7 @@ contract):
 - `work/inventory-<YYYYmmdd-HHMMSS>.detail.json` - the detail file:
   `schema_version`, `skill`, `generated_at`, `elevated`, `sources`,
   `comparison` and the full lists `programs`, `autostart`, `components`,
-  `drivers`, `additions`, `leftovers` and `changes` (never truncated), with the same ids
+  `drivers`, `driver_packages`, `additions`, `leftovers` and `changes` (never truncated), with the same ids
   as the summary, plus `hosts_file` (with `raw_dir`, `expanded_dir` and
   `path`), `current_sid` and `drivers_without_inf_items` (see "Drivers"). It also holds what the summary leaves out: the
   programs, autostart entries, drivers, firewall rules and certificates
@@ -39,31 +39,37 @@ and the list of target files to `work/inventory-<stamp>.file_facts.input.json`
 (raw captures: never read them). The script changes nothing on the machine
 and exits 0; a `.lnk` shortcut is only read, never saved.
 
-To keep the summary within its budget of 35 000 characters six lists may
+To keep the summary within its budget of 35 000 characters seven lists may
 be cut from their end, in these stages, each only when the one before it
 did not make the summary fit:
 
 | Stage | List | Count key | Cut first |
 |---|---|---|---|
 | 1 | `programs`, down to the 20 newest (`PROGRAMS_MIN`) | `truncated` | programs without an install date, then the oldest installs |
-| 2 | `drivers`, down to the first 10 (`DRIVERS_MIN`) | `truncated_drivers` | the end of the driver order (`Display` drivers lead it) |
-| 3 | `components`, down to the first 10 (`COMPONENTS_MIN`) | `truncated_components` | capabilities (they follow the features), then features, each from the end of the name order |
-| 4 | `additions`, down to the first 10 (`ADDITIONS_MIN`) | `truncated_additions` | the items without a change block, from the end of their group, then the items with one (see "Additions") |
-| 5 | `drivers`, below the first 10 | `truncated_drivers` | as in stage 2 |
-| 6 | `components`, below the first 10 | `truncated_components` | as in stage 3 |
-| 7 | `additions`, below the first 10 | `truncated_additions` | as in stage 4 |
-| 8 | `programs`, below the 20 newest | `truncated` | as in stage 1 |
-| 9 | `autostart`, down to the first 20 (`AUTOSTART_MIN`) | `truncated_autostart` | the end of the autostart order |
-| 10 | `changes`, down to the first 20 (`CHANGES_MIN`) | `truncated_changes` | the end of the change order, so the collapsed entries at its front go last (a collapsed entry is cut whole) |
-| 11 | `autostart`, below the first 20 | `truncated_autostart` | as in stage 9 |
-| 12 | `changes`, below the first 20 | `truncated_changes` | as in stage 10 |
-| 13 | `drivers`, `components`, `additions`, then `programs`, each to nothing | as in stages 5 to 8 | as in stages 5 to 8 |
+| 2 | `driver_packages`, down to the first 10 (`DRIVER_PACKAGES_MIN`) | `truncated_driver_packages` | the end of the package order (`provider`, `original_name`, `version`) |
+| 3 | `drivers`, down to the first 10 (`DRIVERS_MIN`) | `truncated_drivers` | the end of the driver order (`Display` drivers lead it) |
+| 4 | `components`, down to the first 10 (`COMPONENTS_MIN`) | `truncated_components` | capabilities (they follow the features), then features, each from the end of the name order |
+| 5 | `components`, below the first 10 | `truncated_components` | as in stage 4 |
+| 6 | `drivers`, below the first 10 | `truncated_drivers` | as in stage 3 |
+| 7 | `driver_packages`, below the first 10 | `truncated_driver_packages` | as in stage 2 |
+| 8 | `additions`, down to the first 10 (`ADDITIONS_MIN`) | `truncated_additions` | the items without a change block, from the end of their group, then the items with one (see "Additions") |
+| 9 | `additions`, below the first 10 | `truncated_additions` | as in stage 8 |
+| 10 | `programs`, below the 20 newest | `truncated` | as in stage 1 |
+| 11 | `autostart`, down to the first 20 (`AUTOSTART_MIN`) | `truncated_autostart` | the end of the autostart order |
+| 12 | `changes`, down to the first 20 (`CHANGES_MIN`) | `truncated_changes` | the end of the change order, so the collapsed entries at its front go last (a collapsed entry is cut whole) |
+| 13 | `autostart`, below the first 20 | `truncated_autostart` | as in stage 11 |
+| 14 | `changes`, below the first 20 | `truncated_changes` | as in stage 12 |
+| 15 | `components`, `drivers`, `driver_packages`, `additions`, then `programs`, each to nothing | as in stages 5, 6, 7, 9 and 10 | as in stages 5, 6, 7, 9 and 10 |
 
-Stages 1 to 4 keep a short list of each: a list with fewer items than its
-minimum keeps them all. Stages 9 to 12 run only when stage 8 did not make the
+Stages 1 to 4 and 8 keep a short list of each: a list with fewer items than its
+minimum keeps them all. Components go to nothing, then drivers and then driver
+packages below their short lists, before additions are cut at all, so listed
+drivers outlast components and additions outlast everything but `programs`. A
+`null` `driver_packages` stays `null` (with `truncated_driver_packages` `0`).
+Stages 11 to 14 run only when stage 10 did not make the
 summary fit, so `autostart` and `changes` are over the budget on their own:
-the four lists of stages 1 to 4 then go back to their short lists, and are
-emptied again only in stage 13, after `autostart` and `changes`. A cut
+the five lists of stages 1 to 4 and 8 then go back to their short lists, and are
+emptied again only in stage 15, after `autostart` and `changes`. A cut
 `autostart` gets `autostart_counts` (`{kind: number}`) and a cut `changes`
 gets `change_counts`
 (`{source: {added, removed, changed}}`), the counts of the whole list before
@@ -79,13 +85,13 @@ the cut items as `{id, list, name}` (the ids in the detail file's `listed`
 that the summary of `summary_file` does not hold) without starting any
 machine job, and `--detail <id>` fetches one. The detail file's `listed` is
 `{list: [id, ...]}`, the ids of the listable items of `programs`,
-`autostart`, `components`, `drivers`, `additions` and `changes` before the
-cut (so a change collapsed into an entry is listed by `--cut`
+`autostart`, `components`, `drivers`, `driver_packages`, `additions` and
+`changes` before the cut (so a change collapsed into an entry is listed by `--cut`
 too) (own
 items are never in it), and `summary_file` is the summary of the same run.
 A detail file without `listed` or `summary_file`, or a summary that cannot be
 read, makes `--cut` exit 1 with the missing field or file on stderr. When the summary does not
-fit even with all six lists empty, nothing is cut (every count is `0`),
+fit even with all seven lists empty, nothing is cut (every count is `0`),
 the summary goes out over the limit and `not_checked` gets the item
 `summary budget`.
 
@@ -106,6 +112,7 @@ the summary goes out over the limit and `not_checked` gets the item
 | `optional_features` | `Win32_OptionalFeature` (no administrator rights needed) | components (`feature`) |
 | `capabilities` | `Get-WindowsCapability -Online`, only with administrator rights; without them the job is not run and the source is `unreadable` with the reason `requires administrator rights (not read in this run, which is not elevated); this is not an empty list` | components (`capability`) |
 | `drivers` | `Win32_PnPSignedDriver`, one row per device; a row without `InfName` is no item: `drivers_without_inf` counts the `Win32_PnPSignedDriver` rows without an INF file (for example software devices, or a device without a driver), not device state; device state is measured by `ush-health` | drivers |
+| `driver_packages` | the driver store listing as XML (`pnputil /enum-drivers /format xml`, no administrator rights needed; the XML tag names do not depend on the system language), only the third-party packages (published name `oem<N>.inf`, case-insensitive). The job gives `{exit_code, text}`; an exit code other than 0 (e.g. an older Windows that refuses `/format`), a failed job or a text that is no `PnpUtil` XML makes the source `unreadable` with the reason, never `empty`. A store with only Windows packages is `empty` | driver packages |
 | `firewall_rules` | the rule values of three `FirewallRules` keys under `HKLM`: `local` (`SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules`), `app_iso` (`...\FirewallPolicy\RestrictedServices\AppIso\FirewallRules`, rules of Store apps) and `policy` (`SOFTWARE\Policies\Microsoft\WindowsFirewall\FirewallRules`) | additions (`firewall_rule`) |
 | (job `firewall_apps`, not a source) | the `App` values (text only, not `System`, not empty) of all rules, own ones included, in `work/inventory-<stamp>.firewall_apps.input.json`; each is expanded with `[Environment]::ExpandEnvironmentVariables` and checked with `Get-Item -LiteralPath -Force` in the context of the running account. Not run when no rule has such a value. A failed job, or no rows for a non-empty input, is a `not_checked` item `firewall_apps` | the `app_exists` of the rules |
 | `root_certificates` | the thumbprint subkeys of five physical root stores in the registry: `machine_root` (`HKLM\SOFTWARE\Microsoft\SystemCertificates\ROOT`), `machine_policy` (`HKLM\SOFTWARE\Policies\Microsoft\SystemCertificates\Root`), `enterprise` (`HKLM\SOFTWARE\Microsoft\EnterpriseCertificates\Root`), `user_root` (`HKCU\Software\Microsoft\SystemCertificates\Root`), `authroot` (`HKLM\SOFTWARE\Microsoft\SystemCertificates\AuthRoot`); subject, issuer, dates and serial number from `Cert:` | additions (`root_certificate`) |
@@ -124,7 +131,7 @@ account cannot see, without any error.
 
 For the other sources the same holds: a missing `FirewallRules` key or root
 store key is no items, a denied key fails the whole job. For
-`optional_features`, `capabilities` and `drivers` a job that gave rows but
+`optional_features`, `capabilities`, `drivers` and `driver_packages` a job that gave rows but
 no item is `empty`, and one whose rows all lack their key field is
 `unreadable`. The jobs of `firewall_rules`, `root_certificates`, `hosts`,
 `administrators` and `defender_exclusions` give one row per store (or one
@@ -149,6 +156,7 @@ Every item has a stable `key`, the same in every run:
 | `optional_features` | `feature:<Name>` |
 | `capabilities` | `capability:<Name>` |
 | `drivers` | `driver:<DeviceID>`: one item per device, not per driver package (`oem<N>.inf` changes when a driver is installed again) |
+| `driver_packages` | `driver_package:<original name>\|<provider>\|<version>`, case-folded: the published `oem<N>.inf` changes when a package is installed again, and the store often keeps two versions of one package. A second package with the same key is no item of its own: its published name is in `other_published_names` of the first (detail file only) |
 | `firewall_rules` | `firewall:<local / app_iso / policy>:<registry value name>`; for `local` the value name is the rule's `-Name` in `Get-NetFirewallRule` |
 | `root_certificates` | `cert:<store>:<THUMBPRINT>` (upper case) |
 | `hosts` | `hosts:<host name, lower case>:<address>` |
@@ -167,22 +175,23 @@ Besides the shared fields (`schema_version`, `skill` = `"ush-inventory"`,
 `generated_at`, `sources`, `not_checked`, `summary_file`, `detail_file`,
 `truncated`), a summary has (each key is always present; the profile's
 `required_keys` make the report checker fail a summary without
-`components`, `component_counts`, `drivers`, `additions` or `hosts_file`):
+`components`, `component_counts`, `drivers`, `driver_packages`, `additions` or `hosts_file`):
 
 | Field | Type | Meaning |
 |---|---|---|
 | `elevated` | bool | the run had administrator rights; it then reads and writes the elevated baseline |
 | `baseline` | object | shared contract, "Baseline": `status` (`none`, `compared`, `unreadable`), `created_at`, `age_days`, `saved`, `reason`, `reference` (`latest` or the `--compare-to` value, e.g. `7d`) and `reference_file` (the history copy compared with, or `null`). `created_at` and `age_days` are those of the state compared with |
-| `comparison` | object | per item source (`win32_programs`, `msix_programs`, `run_keys`, `startup_folders`, `scheduled_tasks`, `services`, `optional_features`, `capabilities`, `drivers`, `firewall_rules`, `root_certificates`, `hosts`, `administrators`, `defender_exclusions`): `compared`, `no_baseline` or `not_read` (shared contract). A source added to the skill after the baseline was made is `no_baseline` on the first run |
-| `truncated_drivers`, `truncated_components`, `truncated_additions`, `truncated_autostart`, `truncated_changes` | int | the items cut from `drivers`, `components`, `additions`, `autostart` and `changes` (see "Files and output"), `0` when none |
+| `comparison` | object | per item source (`win32_programs`, `msix_programs`, `run_keys`, `startup_folders`, `scheduled_tasks`, `services`, `optional_features`, `capabilities`, `drivers`, `driver_packages`, `firewall_rules`, `root_certificates`, `hosts`, `administrators`, `defender_exclusions`): `compared`, `no_baseline` or `not_read` (shared contract). A source added to the skill after the baseline was made is `no_baseline` on the first run |
+| `truncated_driver_packages`, `truncated_drivers`, `truncated_components`, `truncated_additions`, `truncated_autostart`, `truncated_changes` | int | the items cut from `driver_packages`, `drivers`, `components`, `additions`, `autostart` and `changes` (see "Files and output"), `0` when none (also when the list is `null`) |
 | `autostart_counts` | object or `null` | `{kind: number}` of the whole `autostart` list when it was cut, else `null` |
 | `change_counts` | object or `null` | `{source: {added, removed, changed}}` of the whole `changes` list (a collapsed entry by its `count`) when it was cut, else `null` |
 | `collapsed_changes` | int | the changes inside the collapsed entries of `changes` before the budget cut, `0` when none; above 0 the report checker takes the `c..` ids from the detail file, so a report may name a collapsed change by its id |
 | `programs` | list | the programs with `own: false`, newest `install_date` first, no date last, then by name; ids `a..`. Each item is without `install_location`, `source` and `own` (in the detail file). A program that has `per_user_pair` is installed more than once by the same publisher: see "Install pairs". Cut to the budget (`truncated`) |
 | `autostart` | list | the autostart entries with `own: false`, by source and key; ids `s..`. Cut to the budget (`truncated_autostart`, `autostart_counts`). `approved_raw` and `display_name` are left out, and each fact is without `company`, and without `expanded_path` when it equals `path` (all in the detail file) |
 | `components` | list or `null` | the listed components: features with `state` `enabled` and capabilities with `state` `Installed`, features first, each by name; ids `f..`. Each item has only `id`, `key`, `kind` (`feature`, `capability`), `name` and `state`. `null` when neither `optional_features` nor `capabilities` was read. Cut to the budget (`truncated_components`) |
-| `component_counts` | object | `feature`: `{enabled, disabled, absent, <any other state>, unread}` counts of all features (`enabled`, `disabled` and `absent` always present; `unread` counts `state` `null`), or `null` when `optional_features` was not read; `capability`: `{<state>: number, ..., unread}` of all capabilities, or `null` when `capabilities` was not read; `drivers_without_inf`: the number of `Win32_PnPSignedDriver` rows without an INF file (for example software devices, or a device without a driver), not device state; device state is measured by `ush-health`; `null` when `drivers` was not read. The rows themselves are `drivers_without_inf_items` of the detail file |
+| `component_counts` | object | `feature`: `{enabled, disabled, absent, <any other state>, unread}` counts of all features (`enabled`, `disabled` and `absent` always present; `unread` counts `state` `null`), or `null` when `optional_features` was not read; `capability`: `{<state>: number, ..., unread}` of all capabilities, or `null` when `capabilities` was not read; `drivers_without_inf`: the number of `Win32_PnPSignedDriver` rows without an INF file (for example software devices, or a device without a driver), not device state; device state is measured by `ush-health`; `null` when `drivers` was not read. The rows themselves are `drivers_without_inf_items` of the detail file; `driver_packages`: the number of third-party driver packages, `null` when `driver_packages` was not read; `driver_packages_without_device`: the number of them with `present_device` `false`, counted before the budget cut (the summary list `driver_packages` holds fewer when `truncated_driver_packages` > 0), `null` when that list is `null` |
 | `drivers` | list or `null` | the drivers whose `own` is not `true` (a third-party `.inf`, or unknown), the classes of `DRIVER_CLASSES_FIRST` (`Display`, case-insensitive) first, then by `provider`, then `device_name`, `null` last; ids `d..`. Each item has only `id`, `key`, `device_name`, `class`, `provider`, `version`, `date` and `signer`. `null` when `drivers` was not read. Cut to the budget (`truncated_drivers`) |
+| `driver_packages` | list or `null` | the third-party driver packages with `present_device` `false` (no present device uses them), by `provider`, then `original_name`, then `version`; ids `o..`. Each item has `id`, `key`, `published_name`, `original_name`, `provider`, `class`, `version`, `date`, `signer` and `present_device` (see "Driver packages"). `null` when `driver_packages` was not read, or when it holds packages and `drivers` was not read; `[]` when every package has a present device (or `null`) or the store holds no third-party package. Cut to the budget (`truncated_driver_packages`); a `null` list stays `null` |
 | `additions` | list or `null` | the items of the five added-to-the-system sources whose `own` is not `true`: first those with a change block, then those without, each group by kind in this order: `administrator`, `defender_exclusion`, `root_certificate`, `firewall_rule`, `hosts_entry`; ids `x..` (see "Additions"). `null` when none of the five sources was read. Cut to the budget (`truncated_additions`) |
 | `leftovers` | list | what removed programs left, never cut (see "Leftovers"); ids `l..`; `[]` when nothing is left |
 | `hosts_file` | object | `{exists, path_is_default}` and, when any is `null`, `unread_fields` naming it (see "hosts_file") |
@@ -191,8 +200,8 @@ Besides the shared fields (`schema_version`, `skill` = `"ush-inventory"`,
 | `own_changes` | object | `{added, removed, changed, by_source}`: the counts of the changes of items that are own on every side they have; those changes are only in the detail file. `by_source` is `{<source>: {added, removed, changed}}` for every item source of `comparison`, zeros included, so the model can say which source they came from (e.g. firewall rules after an update) |
 
 Ids: `a..` programs, `s..` autostart entries, `f..` components, `d..`
-drivers, `x..` additions, `l..` leftovers, `c..` changes. The numbers of
-`a`, `s`, `f`, `d`, `x` and `l` are stable between runs (shared contract, "Ids and --detail"):
+drivers, `o..` driver packages, `x..` additions, `l..` leftovers, `c..` changes. The numbers of
+`a`, `s`, `f`, `d`, `o`, `x` and `l` are stable between runs (shared contract, "Ids and --detail"):
 the number is not the item's position in its list, so the summary may have
 gaps (`a1`, `a5`, ...) and the id of an item that is only in the detail file
 does not follow from the list. The map from an item's `key` to its number
@@ -332,6 +341,29 @@ which `ush-health` measures), one `{device_name, class}` per row
 so the report can explain why this number differs from the device problems
 of `ush-health`. `null` when `drivers` was not read, `[]` when it was read and
 every row has an INF file.
+
+### Driver packages (`o..`)
+
+The detail file lists every third-party package of the driver store (summary:
+only those with `present_device` `false`), by `provider`, then `original_name`,
+then `version`.
+
+| Field | Meaning |
+|---|---|
+| `key` | `driver_package:<original name>\|<provider>\|<version>`, case-folded |
+| `published_name` | `DriverName`: the `oem<N>.inf` name in the store |
+| `original_name` | `OriginalName`: the INF file name the vendor gave |
+| `provider`, `class`, `signer` | `ProviderName`, `ClassName`, `SignerName` |
+| `version`, `date` | the two parts of `DriverVersion` (`MM/DD/YYYY <version>`): the version, and the date as `YYYY-MM-DD`; both `null` and named in `unread_fields` when `DriverVersion` has another shape |
+| `present_device` | `true` when a `Win32_PnPSignedDriver` row (one without `DeviceID` included) has the package's published name (or one of `other_published_names`) as `InfName`, case-insensitive; `false` when none has. `null` for a package of class `Extension` (`InfName` holds only a device's primary INF, so extension packages are not listed per device) for every package when `drivers` was not read, and for one with no matching name when the published name of a copy was not read (`published_name` in `unread_fields`; the key does not use it, so the package is kept); `present_device_reason` (detail file only) then says why |
+| `other_published_names` | detail file only, only when the store holds the same key more than once: the other published names |
+
+A `null` `present_device` is never "no present device": such a package is not
+in the summary list. The signer is a fact; the script does not judge it.
+Driver packages are never own: every change of one is listed. A package
+installed again under a new `oem<N>.inf` keeps its key and its id; a new
+version is an `added` package and the old one `removed` (when the store no
+longer holds it).
 
 ### Additions (`x..`)
 
@@ -588,6 +620,7 @@ Compared fields:
 | `run_keys`, `startup_folders`, `scheduled_tasks`, `services` | `command`, `targets`, `enabled`, and, per target present on both sides, `facts[<path>].exists`, `.signature_status`, `.signer`, `.program` |
 | `optional_features`, `capabilities` | `state` |
 | `drivers` | `provider`, `version`, `date`, `signer`, `third_party` (not `inf_name`: Windows numbers `oem<N>.inf` anew) |
+| `driver_packages` | `provider`, `class`, `version`, `date`, `signer` (not `published_name`, for the same reason; not `present_device`) |
 | `firewall_rules` | `action`, `dir`, `active`, `protocol`, `lport`, `rport`, `app`, `svc`, `profile` |
 | `root_certificates` | `subject`, `issuer`, `not_after` |
 | `hosts` | none: the key holds the name and the address, and `line` is not compared, so a moved line is no change and any other change is `added` or `removed` |
@@ -794,7 +827,8 @@ Besides one item per `unreadable` source (`what` = the source name):
 | `stable ids` | `state/ush-inventory.ids.json` could not be read, so the numbering started again; the file is kept as `.unreadable-<stamp>.json` when the new map is saved |
 | `stable ids save` | the id map was not saved; this run's ids hold, the next run may give other ones (when the reason starts with "the id map was saved", only its previous copy was not replaced and the next run keeps these ids) |
 | `stable ids <letter>` | items whose `key` came twice in this run; the later ones got ids kept for this run only, named in the reason |
-| `<source> without <field>` | rows without their key field (`optional_features without Name`, `capabilities without Name`, `drivers without DeviceID`, `firewall_rules without value name`, `root_certificates without thumbprint`, `administrators without SID`); the reason gives their number |
+| `driver_packages present_device` | the store holds third-party packages but `drivers` was not read: "the present devices (source drivers) were not read, so no package is known to have no present device"; every package has `present_device` `null` and the summary list `driver_packages` is `null` |
+| `<source> without <field>` | rows without their key field (`optional_features without Name`, `capabilities without Name`, `drivers without DeviceID`, `driver_packages without OriginalName`, `firewall_rules without value name`, `root_certificates without thumbprint`, `administrators without SID`); the reason gives their number |
 | `defender_exclusions origin` | the policy exclusion keys could not be read, so every exclusion has `origin` `null` |
 | `firewall_apps` | the job failed, returned no rows for N programs, or returned no row for some of them; those rules have `app_exists` `null` |
 | `firewall_rules app_exists` | rules whose `app_exists` is `null` (their `unread_fields` name `app_exists`), one item per reason: the App value repeated, no answer of `firewall_apps`, a variable this account does not know, or a file that could not be checked; the reason names up to 20 rule keys |
@@ -802,5 +836,5 @@ Besides one item per `unreadable` source (`what` = the source name):
 | `state/inventory-removed.json` | the state file of removed programs could not be read or saved (see "Leftovers") |
 | `leftovers <name>` | a removed program with no leftover found is kept in the state file because this run did not read everything that could hold one; the reason says what |
 | `leftovers of missing targets` | `%SystemRoot%` is not known in this run, so entries with missing targets were not grouped |
-| `summary budget` | the summary is over the budget even with all six cut lists empty |
+| `summary budget` | the summary is over the budget even with all seven cut lists empty |
 | `collapsed_names.json` | the collapse rule file could not be used; no change is collapsed in the summary `changes` |
