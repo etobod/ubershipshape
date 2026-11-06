@@ -440,7 +440,9 @@ is of an older shape and fails with
    section with the fact that makes them one (`signature_status`, or "a
    RunOnce value": a step that never finished or one waiting for the next
    logon; the JSON holds no write or logon time, only `first_seen` and
-   `passes_seen`, judged as in the Autostart section); orphan
+   `passes_seen`, judged as in the Autostart section), then your judgement,
+   marked as such, and whether it is worth a look (for a RunOnce value the
+   judgement keeps both readings and says the run cannot tell which); orphan
    driver packages and unmatched vendor folders in their own sections above.
    A driver package and a vendor folder with `matched` `false` whose names
    match in the JSON are one entry (a folder with `matched` `null` is never
