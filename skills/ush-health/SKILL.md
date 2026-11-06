@@ -37,7 +37,8 @@ another way (a shell command, another folder).
 
 - The user asks for a health check of this machine, or how it is doing.
 - The user asks about the disks (health, free space), the battery (wear,
-  cycles), a device that does not work, failed updates, a pending restart,
+  cycles), a device that does not work, failed updates, updates waiting to
+  be installed and when Windows last looked for updates, a pending restart,
   the Windows version, the antivirus, restore points, WinRE, Secure Boot,
   the TPM or BitLocker.
 - The user asks what changed in the disks, the free space, the failing
@@ -62,7 +63,9 @@ anything automatically. Say so if the user asks for these.
   only where no template exists for that change (rule 8 of
   `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/report-style.md`). Either goes into a repair
   plan per `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/repair-plan.md`, checked with `python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-common/scripts/check_repair_plan.py" <file>`;
-  tell the user which file to open and what to paste where. Nothing of it
+  tell the user which plan holds it, and deliver each block in `run-me.ps1`
+  (normal shell) or `run-me-admin.ps1` (elevated shell) per
+  `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/run-me.md`. Nothing of it
   goes into the chat or the report. This
   `SKILL.md` has no change template (its only block, step 8, is the
   read-only elevated re-run), so a change step is given in words. The user
@@ -186,7 +189,8 @@ anything automatically. Say so if the user asks for these.
 
 8. Only when `elevated` is `false` and some sources were not read because
    they need administrator rights (`needs administrator` in `not_checked`):
-   offer the user this block for an elevated PowerShell, with the absolute
+   deliver this block for an elevated PowerShell in `run-me-admin.ps1` per
+   `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/run-me.md`, with the absolute
    plugin root and the absolute data directory filled in. Do not run it
    yourself.
 
@@ -201,7 +205,9 @@ anything automatically. Say so if the user asks for these.
    ```
 
    After the user says it ran, read the new summary: the newest
-   `<data dir>/work/health-*.summary.json`, whose `elevated` must be `true`
+   `<data dir>/work/health-*.summary.json`,
+   newer than the moment `run-me-admin.ps1` was written (otherwise the block
+   did not run: say so), whose `elevated` must be `true`
    (otherwise the block did not run elevated: say so). Then write the whole
    report again from that one summary, as in steps 3-6: a new
    `ush:summary` line, a new report file name, and the checker run on it

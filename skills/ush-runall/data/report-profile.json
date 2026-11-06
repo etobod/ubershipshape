@@ -1,12 +1,13 @@
 {
-  "detail_sections": ["children", "firewall_ports"],
-  "id_letters": "hw",
+  "detail_sections": ["children", "firewall_ports", "driver_update_links"],
+  "id_letters": "hwy",
   "path_keys": ["summary_file", "detail_file", "program_path"],
   "id_keys": [],
-  "required_lists": ["children", "firewall_ports"],
+  "required_lists": ["children", "firewall_ports", "driver_update_links"],
   "truncated": [
     {"list": "firewall_ports", "prefix": "w", "count_key": "truncated"}
   ],
-  "required_keys": ["children", "firewall_ports", "firewall_ports_counts"],
+  "required_keys": ["children", "firewall_ports", "firewall_ports_counts",
+                    "driver_update_links", "link_counts"],
   "report_prefix": "runall-"
 }

@@ -57,7 +57,7 @@ list); in short:
   `report-style.md`) (in Polish `160,0`), counts without a thousands
   separator. Never add children's numbers up, never compute a difference
   or a percentage.
-- The ids `h1`…`h7` and `w1`… are not numbers when they name an item of the
+- The ids `h1`…`h7`, `w1`… and `y1`… are not numbers when they name an item of the
   summary or of an `ush:detail` line, or a `w` item cut from the summary
   (`truncated` > 0). A child's ids are not `runall` ids: write them with the
   skill (`ush-inventory s11`, `ush-events g3`); their digits are checked as
@@ -88,14 +88,14 @@ list); in short:
 
 ## Items the report must name
 
-Every `children[*].id` (`h1`…`h7`) and every `firewall_ports[*].id` (`w1`…)
-of the summary appears in a visible line of the report, as a word of its own
+Every `children[*].id` (`h1`…`h7`), every `firewall_ports[*].id` (`w1`…)
+and every `driver_update_links[*].id` (`y1`…) of the summary appears in a visible line of the report, as a word of its own
 (`h12` does not name `h1`), each with a short name after it (rule 6 of
 `report-style.md`): the skill for an `h` item, the rule's name or program
-for a `w` item. An id on an `ush:detail` line, on another marker line or in
+for a `w` item, the provider for a `y` item. An id on an `ush:detail` line, on another marker line or in
 a fenced code block does not count. The check lists each missing id as
 `not named in the report: <id> (<list>)` and fails. A `firewall_ports` that
-is `null` requires nothing.
+or `driver_update_links` that is `null` requires nothing.
 
 ## Blocks
 
@@ -113,9 +113,11 @@ file and with every guard of the template kept (stamped backup, verify,
 abort, rollback); in words only where the child has no template for that
 change. The model checks the plan with
 `python -B "<plugin root>/skills/ush-common/scripts/check_repair_plan.py" <file>` and tells
-the user which file to open. Every block is one the user pastes into their own
-shell (an elevated PowerShell where the child's rules say so) and runs
-themselves; you never run it. After the user ran a block, a new run reads the
+the user which plan holds the blocks. The plan still holds them; they reach
+the user in `run-me.ps1` / `run-me-admin.ps1` in the cwd per
+`<plugin root>/skills/ush-common/references/run-me.md` (`run-me-admin.ps1`
+where the child's rules say an elevated PowerShell), and the user runs them
+themselves; you never run a block. After the user ran a block, a new run reads the
 values back; the result goes under `Notatki` and the plan is moved to
 `plans/done/` only when every value the plan sets reads back as set (see the
 step before judging); otherwise it stays open; it is never deleted.
@@ -288,6 +290,15 @@ matching name. A vendor folder with `matched` `null` was not judged: it is
 no leftover, so name it once with its `not_judged` cause, never as a folder
 no installed program matches.
 
+Each `driver_update_links` item (`y..`) is one entry here with both sources:
+the pending driver update (`ush-health q<n>` in its `update`, with its
+`title`) and the orphan driver package (`ush-inventory o<n>` in its
+`package`, with its `original_name`), tied by the same `provider` and driver class. Such a
+package is not named a second time as a lone leftover. Then one line with
+`link_counts` (`updates_without_package`, `packages_without_update`).
+`driver_update_links` `null`: say that the updates were not linked and why
+(the `not_checked` item), never "no link".
+
 ### 8. Contradicting findings
 
 Findings of different children that say different things about the same
@@ -389,7 +400,7 @@ paste-ready PowerShell block (a child's change block) never write
 `%USERPROFILE%`: Windows PowerShell does not expand it. Build the path from
 the environment as the child's own report format says, for example
 `(Join-Path $env:USERPROFILE 'AppData\Roaming\Invented\tray.exe')`, so the
-pasted command writes the same value back.
+command the user runs writes the same value back.
 
 ## Identifiers
 
@@ -410,6 +421,8 @@ account, an administrator), and shorten a sample around such a value. The
 - `elevated` `null`: the child does not report it, not "no".
 - `firewall_ports` and `firewall_ports_counts` `null`: not compared, never
   "no open rules".
+- `driver_update_links` and `link_counts` `null`: not linked, never "no
+  pending driver update" or "no link".
 
 ## Degradation cases
 

@@ -10,7 +10,11 @@ each with only `--data-dir`, and summarises the pass: one item `h1`...`h7`
 per child (status, duration, its `not_checked` count, `truncated`,
 `elevated`), whose full summary is in the detail file. After the children it
 sets the active inbound Allow firewall rules of `ush-inventory` against the
-TCP listening ports of `ush-processes` (items `w1`...). A script runs and
+TCP listening ports of `ush-processes` (items `w1`...), and links each
+pending driver update of `ush-health` to a driver package of
+`ush-inventory` that no present device uses when the provider and the
+driver class are the same
+(items `y1`...). A script runs and
 counts; you read the children one at a time, judge and write one Markdown
 report; the user decides what to act on.
 
@@ -62,9 +66,10 @@ or running anything on a schedule. Say so if the user asks for these.
   runs `logs.py` or `dumps.py`. It writes only to `<data dir>/work/`; the
   children write their own files and baselines to `<data dir>` as in a run
   of their own. Any block (the elevated pass in the report, a change block
-  in a repair plan of step 5, never in the chat) is for the user to paste
-  into their own shell (an elevated one where the child's rules say so);
-  never run a block yourself.
+  in a repair plan of step 5, never in the chat) is for the user to run in
+  their own shell (an elevated one where the child's rules say so),
+  delivered in `run-me.ps1` or `run-me-admin.ps1` per
+  `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/run-me.md`; never run a block yourself.
 - **No identifiers from the h items.** The child summaries carry the
   computer name, account names, SIDs, serial numbers and device instance
   ids, MAC addresses and private network addresses (also inside quoted
@@ -142,7 +147,9 @@ or running anything on a schedule. Say so if the user asks for these.
   was not judged: name it with its `not_judged` cause, never as a
   leftover). A driver package and a vendor folder with `matched`
   `false` whose names match in the JSON go into one entry with both sources (the rule "Links
-  between skills").
+  between skills"). So does each `driver_update_links` item (`y..`): the
+  pending driver update `ush-health q<n>` and the orphan package
+  `ush-inventory o<n>` of the same provider and driver class.
 - **Firewall rules as facts.** Describe each `firewall_ports` item by facts:
   the program listens only on the loopback address (`loopback_only` `true`)
   or on other addresses too, and the rule's `profile` set against
@@ -197,7 +204,7 @@ or running anything on a schedule. Say so if the user asks for these.
 
 2. Read the summary: `children` (status of each child), `counts`,
    `firewall_ports`, `firewall_ports_counts`, `network_categories`,
-   `truncated` and `not_checked`.
+   `driver_update_links`, `link_counts`, `truncated` and `not_checked`.
 
 3. For each child with status `ok`, in order from `h1` to `h7`, fetch its
    item:
@@ -288,9 +295,12 @@ or running anything on a schedule. Say so if the user asks for these.
    ```
 
    Correct the plan until the check gives `ok` `true`. Then tell the user
-   which file to open and what to paste where (which block into which
-   shell, normal or elevated PowerShell); the blocks are never given in the
-   chat and never go into the report.
+   which plan holds the blocks, and deliver the run blocks per
+   `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/run-me.md`: all run blocks of a normal
+   PowerShell in one `run-me.ps1`, all of an elevated one in one
+   `run-me-admin.ps1`, in the plan's order; an undo block only when the user
+   asks to undo, as its own file. The blocks are never given in the chat and
+   never go into the report.
 
    When a printer exits with an error or prints no block for that id, put
    no block in the plan: write the child's manual step in words, or say that
@@ -319,7 +329,7 @@ or running anything on a schedule. Say so if the user asks for these.
    (`python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-common/scripts/check_report.py" --default-data-dir "${CLAUDE_PLUGIN_DATA}" --latest --skill ush-runall`
    checks the newest `runall-*.md` instead.)
    It fails on a number backed neither by the `runall` summary nor by an `h`
-   item named in `ush:detail`, and on an `h` or `w` item of the summary not
+   item named in `ush:detail`, and on an `h`, `w` or `y` item of the summary not
    named in the report. Correct the report and run the check again until it
    prints `OK`. `OK` means each number occurs somewhere in that JSON, not
    that it is used for the right thing (a child's id or path can back a
@@ -334,7 +344,9 @@ or running anything on a schedule. Say so if the user asks for these.
 
 9. Only when a child has `elevated` `false` and `not_checked` entries that
    need administrator rights: give one block for an elevated PowerShell that
-   runs the whole pass. It is not required; do not run it yourself.
+   runs the whole pass, delivered in `run-me-admin.ps1` per
+   `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/run-me.md` (not `run-me.ps1`, which is
+   for a normal shell). It is not required; do not run it yourself.
 
    ```
    # Runs the same read-only pass with administrator rights. It changes
@@ -346,7 +358,9 @@ or running anything on a schedule. Say so if the user asks for these.
 
    Children with an elevated baseline compare an elevated run only with
    it, so their first elevated run has no comparison. After the user says
-   it ran, read the newest `<data dir>/work/runall-*.summary.json`, check
+   it ran, read the newest `<data dir>/work/runall-*.summary.json`,
+   newer than the moment `run-me-admin.ps1` was written (otherwise the block
+   did not run: say so), check
    that the children that report `elevated` have it `true` (otherwise say
    that the block did not run elevated), and write a new report from that
    one pass, as in steps 2-7. Never merge two passes into one report.

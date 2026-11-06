@@ -81,7 +81,8 @@ shared by all skills; its rules in short:
 ## Items the report must name
 
 Every `disks[*].id`, `volumes[*].id`, `devices[*].id`,
-`updates.failures[*].id` and `changes[*].id` of the summary appears in a
+`updates.failures[*].id`, `pending_updates[*].id` and `changes[*].id` of the
+summary appears in a
 visible line of the report, as a word of its own (`p12` does not name `p1`).
 A change's `item` is the id of the disk, volume or device it is about (or
 `null`); like an `id` it backs no number. A mention inside a
@@ -142,7 +143,15 @@ that is `null` requires nothing. Failure groups cut from the summary
    - Updates and Windows version: `os_version`, `by_result` as written,
      every failure group (`u..`) with its `title`, `result`, `hresult`,
      `count`, `first` and `last`, and the three `pending_reboot` signals,
-     each on its own.
+     each on its own. Then a subsection `### Pending updates`: the date of
+     the last successful update scan (`last_scan`, rule 1 of
+     `report-style.md`; `null` is "unknown", never a date), then every
+     pending update (`q..`) with its `title`, `kb`, `categories`, `type`,
+     for a driver update its `driver_provider`, `driver_class` and
+     `driver_date`, and whether it is `downloaded`. Facts only: the list
+     comes from the local update cache as of `last_scan`; the report sets
+     no threshold of age or count and does not call an update missing or
+     late.
    - Antivirus: each product with `display_name` and `product_state` (raw),
      and Defender's `running_mode`, `real_time_protection_enabled`,
      `signature_age_days`, `quick_scan_age_days` and `signature_updated`.
@@ -246,6 +255,10 @@ Never report missing data as "clean":
   not read.
 - `update_history` `empty`: the history holds no entries at all; it may have
   been cleared. Say so (🔍), never "all updates succeeded".
+- `pending_updates` `[]` (source `empty`): the local update cache holds no
+  update waiting to be installed as of `last_scan`; say it with that date.
+  `pending_updates` `null` (source `unreadable`): not read, give the
+  reason, never "no pending updates".
 - `tpm.devices` `[]` with `tpm_wmi` in "Not checked": no TPM was found as a
   device and `Win32_Tpm` was not read; do not conclude that there is no TPM.
 - `antivirus` with `products` or `defender` `null`: that part was not read

@@ -170,9 +170,16 @@ class FakeChildren:
         stem = skill.replace("ush-", "")
         summary_file = self.files_dir / f"{stem}-2026-09-20-1200.summary.json"
         detail_file = self.files_dir / f"{stem}-2026-09-20-1200.detail.json"
-        if skill == "ush-inventory":
-            sources = [{"name": "firewall_rules", "status": "read"}]
-            detail = {"sources": sources, "additions": []}
+        if skill == "ush-health":
+            sources = [{"name": "invented_source", "status": "read"},
+                       {"name": "pending_updates", "status": "empty"}]
+            detail = {"sources": sources, "items": [], "pending_updates": []}
+        elif skill == "ush-inventory":
+            sources = [{"name": "firewall_rules", "status": "read"},
+                       {"name": "drivers", "status": "empty"},
+                       {"name": "driver_packages", "status": "empty"}]
+            detail = {"sources": sources, "additions": [], "drivers": [],
+                      "driver_packages": []}
         elif skill == "ush-processes":
             sources = [{"name": "tcp_listeners", "status": "read"}]
             detail = {"sources": sources, "groups": [], "ports": []}
@@ -559,10 +566,12 @@ class TestRunall(RunallTestCase):
                 self.assertEqual(self.source_for(summary, child).get("status"), "read", child)
 
         with self.subTest("exit 0 with another skill's summary is bad_output"):
-            fake = FakeChildren(self.temp(), {"ush-health": ok(skill_field="ush-events")})
+            # ush-settings: a child no cross-skill comparison reads (plan 028, M2 links
+            # ush-health), so its one note is the only one naming it.
+            fake = FakeChildren(self.temp(), {"ush-settings": ok(skill_field="ush-events")})
             summary = self.collect(self.data_dir(), fake)
-            self.assertEqual(self.child(summary, "ush-health").get("status"), "bad_output")
-            self.assertEqual(len(self.notes_about(summary, "ush-health")), 1,
+            self.assertEqual(self.child(summary, "ush-settings").get("status"), "bad_output")
+            self.assertEqual(len(self.notes_about(summary, "ush-settings")), 1,
                              summary.get("not_checked"))
 
     def test_summary_and_detail(self):

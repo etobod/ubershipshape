@@ -17,8 +17,8 @@ absolute at once; see the shared contract):
 - `work/runall-<YYYYmmdd-HHMMSS>.detail.json` - the detail file:
   `schema_version`, `skill`, `generated_at`, `summary_file` (the summary of
   the same run), `children` (one item per child with its full summary),
-  `firewall_ports` (every matched rule, no limit), `firewall_ports_counts`
-  and `network_categories`.
+  `firewall_ports` (every matched rule, no limit), `firewall_ports_counts`,
+  `network_categories`, `driver_update_links` and `link_counts`.
 
 Each child writes its own summary, detail file, baseline and id map to the
 same `<data dir>`, as in a run of its own; `runall` keeps no baseline.
@@ -80,6 +80,8 @@ Besides the shared fields (`schema_version`, `skill` `"ush-runall"`,
 | `firewall_ports` | list or `null` | the matched firewall rules, ids `w1`..., at most 50 (see "Firewall rules and listening ports"); `[]` when no rule matched; `null` when the comparison was not made |
 | `firewall_ports_counts` | object or `null` | the counters of the comparison; `null` when it was not made |
 | `network_categories` | object or `null` | a copy of `network_categories` of the `ush-processes` summary (network profiles counted per category, `{"Private": 1}`); `null` when that child is not `ok` or its summary has no such value |
+| `driver_update_links` | list or `null` | pending driver updates linked to driver packages no present device uses, ids `y1`... (see "Pending driver updates and orphan driver packages"); `[]` when nothing links; `null` when a side was not read |
+| `link_counts` | object or `null` | `{linked, updates_without_package, packages_without_update}`; `null` with `driver_update_links` `null` |
 | `truncated` | int | `firewall_ports` items cut from the summary by the limit of 50, from the end of the order; `0` when none. The detail file has them all |
 
 The summary holds no child summary and is cut nowhere else; `runall`
@@ -112,7 +114,7 @@ The detail file's `children` items have `id`, `skill`, `status` and
 status is not `ok`. Read it with that skill's own
 `references/summary-contract.md`. The ids inside it (`ush-inventory s11`,
 `ush-events g3`) are the child's ids; the report checker knows only the
-`h` and `w` ids of `runall`, so the digits of a child id are checked as
+`h`, `w` and `y` ids of `runall`, so the digits of a child id are checked as
 numbers and are backed when its `h` item is named in `ush:detail`.
 
 ## Firewall rules and listening ports (`firewall_ports`, ids `w..`)
@@ -173,6 +175,43 @@ list):
 The summary lists at most 50 items; `truncated` counts the rest, which are
 in the detail file under the same `w` ids. `--detail w51` prints one.
 
+## Pending driver updates and orphan driver packages (`driver_update_links`, ids `y..`)
+
+After the children, `runall` reads `pending_updates` of the `ush-health`
+detail file and `driver_packages` of the `ush-inventory` detail file (named
+by the children's `detail_file`); nothing on the machine is read. The links
+are made only when both children are `ok`, both detail files can be read,
+the `ush-health` source `pending_updates` and the `ush-inventory` sources
+`driver_packages` and `drivers` are `read` or `empty` (without `drivers`,
+`present_device` was not judged), and the detail files hold the lists
+`pending_updates` and `driver_packages`. Otherwise `driver_update_links` and
+`link_counts` are `null` and `not_checked` has one item naming each side
+that was not read. Nothing linked gives `[]`, never `null`.
+
+Only updates of `type` `driver` and packages whose `present_device` is
+`false` take part (`true` or `null` never links). An update and a package
+link when the update's `driver_provider` and the package's `provider` are
+equal after case-folding, and so are the update's `driver_class` and the
+package's `class` (an update or package without either links to nothing);
+a provider that only contains the other (`Contoso` and `Contoso Ltd`) does
+not link, nor does a package of the same provider and another class. Each pair is one item, in the
+order of the updates, then of the packages:
+
+| Field | Meaning |
+|---|---|
+| `id` | `y1`... |
+| `update` | the update as `ush-health q<n>` |
+| `package` | the package as `ush-inventory o<n>` |
+| `provider` | the update's `driver_provider` |
+| `title` | the update's `title` |
+| `original_name` | the package's `original_name` |
+
+`link_counts`: `linked` the number of `y` items, `updates_without_package`
+the pending driver updates that link to no package, and
+`packages_without_update` the packages with `present_device` `false` that
+link to no update. The detail file holds the same list; `--detail y1`
+prints one item.
+
 ## not_checked
 
 Besides the shared cases:
@@ -207,12 +246,19 @@ Besides the shared cases:
   `path_kind` `none`) count there but not here, so the two numbers
   differ.
 
+- The driver update links not made: `what` "driver update links
+  (pending_updates of ush-health, driver_packages and drivers of
+  ush-inventory)", `reason` every side not read joined with "; " (as for
+  the firewall comparison: a child not `ok`, a detail file, source or list
+  missing or not read, each naming its skill and source), followed by "the
+  updates were not linked".
+
 The `not_checked` entries of each child stay in its `h` item.
 
 ## --detail
 
-`runall.py --detail <id>` prints one item, a child (`h3`) or a firewall
-item (`w1`), from the newest `runall-*.detail.json` in `<data dir>/work/`
+`runall.py --detail <id>` prints one item, a child (`h3`), a firewall
+item (`w1`) or a driver update link (`y1`), from the newest `runall-*.detail.json` in `<data dir>/work/`
 (by name, so by time) and exits 0. `--detail-file <path>` (the summary's
 `detail_file`) reads that file instead and needs no data directory;
 `--detail-file` without `--detail` is a usage error. An unknown id, no

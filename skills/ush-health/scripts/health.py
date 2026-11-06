@@ -16,7 +16,10 @@ Disks ``k``, volumes ``v`` and devices ``p`` keep their numbers across runs thro
 the id map ``state/ush-health.ids.json`` (``ids.py``). The keys are ``json.dumps`` of
 ``["disk", UniqueId]``, ``["volume", drive letter]`` and ``["device", instance id]``; a
 disk without ``UniqueId`` and a device without an instance id (null, empty or only
-blanks) get a number for this run only. Update failures ``u`` are numbered by place.
+blanks) get a number for this run only. Pending updates ``q`` (an offline search of the
+local update cache, not compared with the baseline) keep theirs by the key
+``update:<KB numbers or title>|<driver provider>``. Update failures ``u`` are numbered
+by place.
 
 The baseline (``baseline.py``) is ``state/ush-health.json`` or
 ``state/ush-health.elevated.json``, with a day copy in ``state/history/``. Its sources
@@ -63,7 +66,8 @@ SKILL = "ush-health"
 SCHEMA_VERSION = 1
 SUMMARY_MAX_CHARS = 35000
 GIB = 1024 ** 3  # Explorer shows sizes in units of 1024**3 bytes
-DETAIL_SECTIONS = ("disks", "volumes", "devices", "update_failures", "changes")
+DETAIL_SECTIONS = ("disks", "volumes", "devices", "update_failures", "pending_updates",
+                   "changes")
 NEEDS_ADMIN = "needs administrator"
 VOLUMES_NOT_READ = "volumes not read"
 # The stderr of Get-PnpDevice when no device matches the filter.
@@ -262,6 +266,64 @@ if ($count -gt 0) {
 $result = $rows
 """
 
+# Read-only and offline: Online false makes the search read only the agent's local
+# cache, so nothing is sent and no scan is started. Type is 1 for software and 2 for
+# a driver (UpdateType); a driver update also has DriverProvider, DriverClass and
+# DriverVerDate. The agent gives its dates in UTC with Kind Unspecified: SpecifyKind
+# marks them as UTC without a shift. An empty COM date (zero, 1899-12-30) means never
+# and goes out as null. A failed read of the last scan date goes out as
+# last_search_error, so it is never mistaken for an unknown date.
+PENDING_UPDATES_BODY = r"""function UtcText($d) {
+  if ($d -isnot [DateTime]) { return $null }
+  if ($d.Year -lt 1900) { return $null }
+  return [DateTime]::SpecifyKind($d, 'Utc').ToString('yyyy-MM-ddTHH:mm:ss', [Globalization.CultureInfo]::InvariantCulture)
+}
+$session = New-Object -ComObject Microsoft.Update.Session
+$searcher = $session.CreateUpdateSearcher()
+$searcher.Online = $false
+$found = $searcher.Search('IsInstalled=0 and IsHidden=0')
+$rows = @(for ($i = 0; $i -lt $found.Updates.Count; $i++) {
+  $u = $found.Updates.Item($i)
+  $type = S $u.Type
+  if ($u.Type -eq 1) { $type = 'software' } elseif ($u.Type -eq 2) { $type = 'driver' }
+  $provider = $null
+  $class = $null
+  $date = $null
+  if ($type -eq 'driver') {
+    $provider = S $u.DriverProvider
+    $class = S $u.DriverClass
+    $date = UtcText $u.DriverVerDate
+  }
+  $kbs = $u.KBArticleIDs
+  $cats = $u.Categories
+  [pscustomobject]@{
+    title = S $u.Title
+    kb = [string[]]@(for ($k = 0; $k -lt $kbs.Count; $k++) { 'KB' + [string]$kbs.Item($k) })
+    categories = [string[]]@(for ($c = 0; $c -lt $cats.Count; $c++) { [string]$cats.Item($c).Name })
+    type = $type
+    driver_provider = $provider
+    driver_class = $class
+    driver_date = $date
+    downloaded = $u.IsDownloaded
+  }
+})
+$lastSearch = $null
+$lastSearchError = $null
+try {
+  $auto = New-Object -ComObject Microsoft.Update.AutoUpdate
+  $lastSearch = UtcText $auto.Results.LastSearchSuccessDate
+} catch {
+  $lastSearchError = S $_.Exception.Message
+}
+$result = [pscustomobject]@{
+  updates = $rows
+  last_search_success = $lastSearch
+  last_search_error = $lastSearchError
+}
+"""
+PENDING_UPDATES_DEPTH = 5  # result -> updates -> update -> kb/categories
+NOT_A_SEARCH_RESULT = "the output is not one search result object with an updates list"
+
 # OpenSubKey returns null for a missing key and throws when access is denied,
 # so a denial is unreadable, never "not pending" (Test-Path would say false).
 PENDING_REBOOT_BODY = r"""$hklm = [Microsoft.Win32.Registry]::LocalMachine
@@ -441,9 +503,9 @@ class Collector:
     def out_path(self, job: str) -> Path:
         return self.work / f"health-{self.stamp}.{job}.json"
 
-    def job(self, job: str, body: str, empty_markers=()) -> dict:
+    def job(self, job: str, body: str, empty_markers=(), depth: int = 4) -> dict:
         out_path = self.out_path(job)
-        script = ps_script(PS_HELPERS + body, out_path)
+        script = ps_script(PS_HELPERS + body, out_path, depth=depth)
         return run_job(self.run_ps, job, script, out_path, empty_markers=empty_markers)
 
     def record(self, name: str, status: str, reason=None) -> None:
@@ -707,6 +769,71 @@ def collect_updates(col: Collector) -> dict | None:
     }
 
 
+def text_list(value):
+    """A list of texts (a lone text is a list of one); anything else is None."""
+    if isinstance(value, str):
+        return [value]
+    if not isinstance(value, list):
+        return None
+    return [str(entry) for entry in value if entry is not None]
+
+
+def collect_pending_updates(col: Collector) -> tuple[list | None, str | None]:
+    """Updates found and not installed, from the local cache, and the last scan date.
+
+    ``(items, last_scan)``; items is None when the search could not be read. Ids are
+    given later by ``number_stable``. Not compared with the baseline: a current state.
+    """
+    result = col.job("pending_updates", PENDING_UPDATES_BODY, depth=PENDING_UPDATES_DEPTH)
+    if result["status"] == "unreadable":
+        col.record("pending_updates", "unreadable", result["reason"])
+        return None, None
+    rows = result["rows"]
+    row = rows[0] if len(rows) == 1 else {}
+    updates = row.get("updates")
+    if not isinstance(updates, list) or not all(isinstance(u, dict) for u in updates):
+        col.record("pending_updates", "unreadable", NOT_A_SEARCH_RESULT)
+        return None, None
+    items = []
+    for update in updates:
+        item = {
+            "id": None,
+            "title": text(update.get("title")),
+            "kb": text_list(update.get("kb")),
+            "categories": text_list(update.get("categories")),
+            "type": text(update.get("type")),
+            "driver_provider": text(update.get("driver_provider")),
+            "driver_class": text(update.get("driver_class")),
+            "driver_date": utc_text(update.get("driver_date")),
+            "downloaded": flag(update.get("downloaded")),
+        }
+        name = item["title"] or "an update without a title"
+        for field in ("kb", "categories"):
+            if item[field] is None:
+                col.skip(f"pending_updates: {field}", f"{name}: not a list of texts")
+        if update.get("driver_date") is not None and item["driver_date"] is None:
+            col.skip("pending_updates: driver_date", f"{name}: the driver date is not a time")
+        items.append(item)
+    col.record("pending_updates", "read" if items else "empty")
+
+    raw_scan = row.get("last_search_success")
+    last_scan = utc_text(raw_scan)
+    error = text(row.get("last_search_error"))
+    if error:
+        col.skip("pending_updates: last scan", error)
+    elif raw_scan is not None and last_scan is None:
+        col.skip("pending_updates: last scan", "the last scan date is not a time")
+    return items, last_scan
+
+
+def pending_update_key(item: dict):
+    """``update:<KB numbers or title>|<driver provider>``, or None without KB and title."""
+    name = ",".join(item.get("kb") or []) or key_text(item.get("title"))
+    if not key_text(name):
+        return None
+    return f"update:{name}|{item.get('driver_provider') or ''}"
+
+
 def collect_pending_reboot(col: Collector) -> dict | None:
     """Each pending-reboot signal on its own; there is no combined flag."""
     result = col.job("pending_reboot", PENDING_REBOOT_BODY)
@@ -849,6 +976,7 @@ def collect(run_ps, admin: bool, work: Path, stamp: str) -> tuple[dict, Collecto
     data["secure_boot"] = collect_secure_boot(col)
     data["tpm"] = collect_tpm(col)
     data["updates"] = collect_updates(col)
+    data["pending_updates"], data["last_scan"] = collect_pending_updates(col)
     data["pending_reboot"] = collect_pending_reboot(col)
     data["os_version"] = collect_os_version(col)
     data["antivirus"] = collect_antivirus(col)
@@ -886,12 +1014,13 @@ STABLE_LISTS = (
     ("disks", "k", lambda item: stable_key("disk", item.get("unique_id"))),
     ("volumes", "v", lambda item: stable_key("volume", item.get("drive_letter"))),
     ("devices", "p", lambda item: stable_key("device", item.get("instance_id"))),
+    ("pending_updates", "q", pending_update_key),
 )
 
 
 def number_stable(data: dict, numbering) -> None:
-    """Give disks, volumes and devices their stable ids from ``numbering`` (an
-    ``ids.Numbering``), in the order of their lists."""
+    """Give disks, volumes, devices and pending updates their stable ids from
+    ``numbering`` (an ``ids.Numbering``), in the order of their lists."""
     for name, prefix, key_of in STABLE_LISTS:
         if data.get(name) is not None:
             numbering.assign(prefix, data[name], key_of)

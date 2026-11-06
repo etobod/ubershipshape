@@ -36,6 +36,13 @@ most ``FIREWALL_PORTS_MAX`` items and counts the rest in ``truncated``; the deta
 holds them all. When a child is not ``ok``, its detail file cannot be read or the source
 ``firewall_rules`` / ``tcp_listeners`` was not read, the list and the counters are null
 and ``not_checked`` says why.
+
+``driver_update_links`` links a pending driver update of the ``ush-health`` detail file
+(``pending_updates``, type ``driver``) to a driver package of the ``ush-inventory`` detail
+file that no present device uses (``driver_packages``, ``present_device`` false) when their
+providers and driver classes are equal after case-folding: an item ``y...`` per pair,
+naming both ids, with ``link_counts``. When either list or the inventory source ``drivers`` was not read, both
+are null and ``not_checked`` names the side.
 """
 
 import argparse
@@ -66,7 +73,8 @@ FORBIDDEN_SCRIPTS = ("logs.py", "dumps.py")  # they change the disk or a log
 SCRIPT_NAME = re.compile(r"[a-z_]+\.py")
 # A child that reads the baseline of another must run after it: (earlier, later).
 ORDER_RULES = (("ush-inventory", "ush-processes"),)
-DETAIL_SECTIONS = ("children", "firewall_ports")
+DETAIL_SECTIONS = ("children", "firewall_ports", "driver_update_links")
+SKILL_HEALTH = "ush-health"
 SKILL_INVENTORY = "ush-inventory"
 SKILL_PROCESSES = "ush-processes"
 # (skill, source that must be read, detail sections the comparison needs)
@@ -521,13 +529,63 @@ def compare_firewall(outcomes: dict) -> tuple:
     return result, notes
 
 
+def link_driver_updates(outcomes: dict) -> tuple:
+    """``(result, notes)``: one item ``y...`` per pair of a pending driver update of
+    ``ush-health`` and a driver package of ``ush-inventory`` that no present device uses,
+    whose providers and driver classes are each equal after case-folding (an update or
+    package without either is linked to nothing), and ``link_counts``. When a side was not
+    read, both are null and one not_checked entry names why."""
+    inputs = ((SKILL_HEALTH, "pending_updates", ("pending_updates",)),
+              (SKILL_INVENTORY, "driver_packages", ("driver_packages",)),
+              (SKILL_INVENTORY, "drivers", ()))
+    details, reasons = [], []
+    for skill, source, sections in inputs:
+        detail, reason = read_child_detail(skill, outcomes.get(skill), source, sections)
+        details.append(detail)
+        if reason is not None:
+            reasons.append(reason)
+    if reasons:
+        note = {"what": f"driver update links (pending_updates of {SKILL_HEALTH}, "
+                        f"driver_packages and drivers of {SKILL_INVENTORY})",
+                "reason": "; ".join(reasons) + "; the updates were not linked"}
+        return {"driver_update_links": None, "link_counts": None}, [note]
+    updates = [item for item in details[0]["pending_updates"]
+               if isinstance(item, dict) and item.get("type") == "driver"]
+    packages = [item for item in details[1]["driver_packages"]
+                if isinstance(item, dict) and item.get("present_device") is False]
+    links, linked_updates, linked_packages = [], set(), set()
+    for u, update in enumerate(updates):
+        provider, cls = update.get("driver_provider"), update.get("driver_class")
+        if not isinstance(provider, str):
+            continue
+        for p, package in enumerate(packages):
+            other, other_cls = package.get("provider"), package.get("class")
+            if not isinstance(other, str) or other.casefold() != provider.casefold():
+                continue
+            if not (isinstance(cls, str) and isinstance(other_cls, str)
+                    and other_cls.casefold() == cls.casefold()):
+                continue
+            links.append({"id": f"y{len(links) + 1}",
+                          "update": f"{SKILL_HEALTH} {update.get('id')}",
+                          "package": f"{SKILL_INVENTORY} {package.get('id')}",
+                          "provider": provider, "title": update.get("title"),
+                          "original_name": package.get("original_name")})
+            linked_updates.add(u)
+            linked_packages.add(p)
+    counts = {"linked": len(links),
+              "updates_without_package": len(updates) - len(linked_updates),
+              "packages_without_update": len(packages) - len(linked_packages)}
+    return {"driver_update_links": links, "link_counts": counts}, []
+
+
 # --- command line -----------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     datadir.add_arguments(parser)
     parser.add_argument("--detail", metavar="ID",
-                        help="print one item (a child h1, h2, ... or a firewall item w1, "
-                             "w2, ...) of the newest detail file and exit; no child is run")
+                        help="print one item (a child h1, h2, ..., a firewall item w1, "
+                             "w2, ... or a driver update link y1, y2, ...) of the newest "
+                             "detail file and exit; no child is run")
     parser.add_argument("--detail-file", metavar="PATH",
                         help="with --detail: read this detail file (the summary's "
                              "detail_file) instead of the newest one")
@@ -613,6 +671,8 @@ def main(argv=None, run_child=None, now=None) -> int:
 
     firewall, firewall_notes = compare_firewall(outcomes)
     not_checked.extend(firewall_notes)
+    links, link_notes = link_driver_updates(outcomes)
+    not_checked.extend(link_notes)
     all_ports = firewall["firewall_ports"]
     listed_ports = all_ports[:FIREWALL_PORTS_MAX] if all_ports is not None else None
     cut_ports = len(all_ports) - len(listed_ports) if all_ports is not None else 0
@@ -630,6 +690,8 @@ def main(argv=None, run_child=None, now=None) -> int:
         "firewall_ports": all_ports,
         "firewall_ports_counts": firewall["firewall_ports_counts"],
         "network_categories": firewall["network_categories"],
+        "driver_update_links": links["driver_update_links"],
+        "link_counts": links["link_counts"],
     }
     detail_file.write_text(dump(detail) + "\n", encoding="utf-8")
 
@@ -648,6 +710,8 @@ def main(argv=None, run_child=None, now=None) -> int:
         "firewall_ports": listed_ports,
         "firewall_ports_counts": firewall["firewall_ports_counts"],
         "network_categories": firewall["network_categories"],
+        "driver_update_links": links["driver_update_links"],
+        "link_counts": links["link_counts"],
     }
     text_out = dump(summary)
     summary_file.write_text(text_out + "\n", encoding="utf-8")

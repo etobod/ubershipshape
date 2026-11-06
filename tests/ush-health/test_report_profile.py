@@ -63,6 +63,9 @@ def _summary_data(summary_file, detail_file, device_name=DEVICE_NAME, failures=N
                      "saved": True, "reason": None, "reference": "latest",
                      "reference_file": None},
         "changes": [],
+        # Plan 028, M1: pending updates are a required list of the profile.
+        "pending_updates": [],
+        "last_scan": None,
     }
 
 
@@ -72,6 +75,7 @@ def _detail_data(summary):
         "volumes": [dict(item) for item in summary["volumes"]],
         "devices": [dict(item) for item in summary["devices"]],
         "update_failures": [dict(item) for item in summary["updates"]["failures"]],
+        "pending_updates": [dict(item) for item in summary["pending_updates"] or []],
     }
 
 
@@ -426,6 +430,78 @@ class TestProfile(unittest.TestCase):
             self.assertNotIn("compares with nothing", report_format)
             skill = (HEALTH_DIR / "SKILL.md").read_text(encoding="utf-8")
             self.assertNotIn("no comparison with earlier runs", skill)
+
+
+# --- plan 028, M1, K6 -------------------------------------------------------------------
+
+PENDING_Q1 = {"id": "q1", "title": "Invented Security Update for Windows",
+              "kb": ["KB5099999"], "categories": ["Security Updates"], "type": "software",
+              "driver_provider": None, "driver_class": None, "driver_date": None,
+              "downloaded": True}
+PENDING_Q2 = {"id": "q2", "title": "Contoso Display Driver Update",
+              "kb": [], "categories": ["Drivers"], "type": "driver",
+              "driver_provider": "Contoso", "driver_class": "Display",
+              "driver_date": "2026-08-15T00:00:00Z", "downloaded": False}
+
+PENDING_LINE_Q1 = "Pending update q1 (Invented Security Update for Windows) is downloaded."
+PENDING_LINE_Q2 = "Pending update q2 (Contoso Display Driver Update) is not downloaded."
+
+
+class TestPendingUpdatesProfile(unittest.TestCase):
+    def setUp(self):
+        self.check = load_script("ush-common", "check_report")
+        tmp = _digit_free_tempdir()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name).resolve()
+        self.work_dir = self.root / "work"
+        self.work_dir.mkdir()
+        self.reports_dir = self.root / "reports"
+        self.reports_dir.mkdir()
+        self.summary_file = self.work_dir / "health-summary.json"
+        self.detail_file = self.work_dir / "health-detail.json"
+
+    def _write_data(self):
+        summary = _summary_data(self.summary_file, self.detail_file,
+                                device_name=PLAIN_DEVICE_NAME)
+        summary["pending_updates"] = [dict(PENDING_Q1), dict(PENDING_Q2)]
+        summary["last_scan"] = "2026-09-27T06:45:00Z"
+        detail = _detail_data(summary)
+        self.summary_file.write_text(json.dumps(summary), encoding="utf-8")
+        self.detail_file.write_text(json.dumps(detail), encoding="utf-8")
+
+    def _write_report(self, pending_lines, name):
+        body = _body_lines(update_lines=(*UPDATE_LINES, "", "## Pending updates",
+                                         *pending_lines))
+        path = self.reports_dir / name
+        first = f"<!-- ush:summary {self.summary_file} -->"
+        path.write_text("\n".join([first, *body]) + "\n", encoding="utf-8")
+        return path
+
+    def _run(self, report_path):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                code = self.check.main([str(report_path)])
+            except SystemExit as exc:
+                code = exc.code
+        return code, out.getvalue() + err.getvalue()
+
+    def test_pending_update_must_be_named(self):
+        self._write_data()
+
+        with self.subTest("control: q1 and q2 named"):
+            code, output = self._run(self._write_report(
+                (PENDING_LINE_Q1, PENDING_LINE_Q2), "health-2026-09-28-1400.md"))
+            self.assertEqual(code, 0, f"output:\n{output}")
+            self.assertIn("OK", output)
+
+        with self.subTest("q2 not named"):
+            code, output = self._run(self._write_report(
+                (PENDING_LINE_Q1,), "health-2026-09-28-1401.md"))
+            self.assertEqual(code, 1, f"output:\n{output}")
+            self.assertNotIn("OK", output)
+            self.assertIn("not named in the report", output)
+            self.assertIn("q2", output)
 
 
 if __name__ == "__main__":

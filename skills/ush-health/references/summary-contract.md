@@ -17,8 +17,8 @@ contract):
   printed on stdout. The time in the name is UTC, so names sort by time.
 - `health-<YYYYmmdd-HHMMSS>.detail.json` - the detail file: `schema_version`,
   `skill`, `generated_at`, `elevated`, `sources`, `comparison` and the full
-  lists `disks`, `volumes`, `devices`, `update_failures` (never truncated)
-  and `changes`, with the same ids as the summary. Disks also keep
+  lists `disks`, `volumes`, `devices`, `update_failures` (never truncated),
+  `pending_updates` and `changes`, with the same ids as the summary. Disks also keep
   `device_id` and `unique_id` (the disk's `UniqueId`) and devices
   `instance_id` there; the summary leaves them out.
 
@@ -74,6 +74,8 @@ Besides the shared fields (`schema_version`, `skill` = `"ush-health"`,
 | `secure_boot` | object or null | `enabled`, `firmware_type`, see below. `null` when unreadable |
 | `tpm` | object | `devices`, `spec_version`, `is_enabled`, `is_activated`, see below. Always present |
 | `updates` | object or null | Windows Update history, see below. `null` when `update_history` is unreadable |
+| `pending_updates` | list or null | updates found and not installed, from the local update cache, see below; ids `q..`, stable between runs. `[]` when none is pending; `null` when `pending_updates` is unreadable |
+| `last_scan` | string or null | the last successful update scan (`LastSearchSuccessDate`), ISO 8601 UTC with `Z`; `null` when unknown or not read. Always present |
 | `pending_reboot` | object or null | three separate signals, see below. `null` when unreadable |
 | `os_version` | object or null | `display_version`, `build`, `ubr`, `edition_id`. `null` when unreadable |
 | `antivirus` | object or null | `products` and `defender`, see below. `null` when both parts are unreadable |
@@ -187,6 +189,30 @@ time in UTC without a zone; the script marks it as UTC without shifting it.
 | other number | its decimal text, e.g. `"7"` |
 | missing | `"unknown"` (counted in `by_result`, never a failure) |
 
+### Pending updates
+
+From the Windows Update Agent (`Microsoft.Update.Session`,
+`CreateUpdateSearcher` with `Online` `false`, search `IsInstalled=0 and
+IsHidden=0`, no rights needed). The search reads only the local cache: it
+sends nothing and starts no scan, so the list is as of `last_scan`. An
+item: `id` (`q..`), `title`, `kb` (a list of `KB<digits>`, `[]` when the
+update has none), `categories` (the category names), `type` (`software` or
+`driver`; another `UpdateType` is its number as text), `driver_provider`,
+`driver_class` and `driver_date` (ISO 8601 UTC with `Z`; all three `null`
+for a software update or when not given) and `downloaded` (`true`/`false`,
+`null` when unknown). A `kb` or `categories` of `null` was not read (the
+job gave no list of texts), and a `driver_date` the job gave that is not a
+time is `null` too: each such case has a `not_checked` entry
+(`pending_updates: kb`, `pending_updates: categories` or
+`pending_updates: driver_date`) naming the update. The list is in the order of the search and is not
+compared with the baseline: it is a current state, like the battery.
+
+`last_scan` comes from `Microsoft.Update.AutoUpdate`
+`Results.LastSearchSuccessDate`, which the agent gives in UTC without a
+zone; the script marks it as UTC without shifting it. An empty date is
+`null`, never a default date. When it cannot be read, `last_scan` is `null`
+and `not_checked` has `pending_updates: last scan` with the error.
+
 ### Pending reboot
 
 `windows_update` (the key `...\WindowsUpdate\Auto Update\RebootRequired`
@@ -270,6 +296,7 @@ One entry per source, in this order, each with `name`, `status` and `reason`
 | `secure_boot` | the `SecureBoot\State` registry value | no |
 | `tpm` | TPM device, and `Win32_Tpm` when elevated | partly |
 | `update_history` | Windows Update Agent history | no |
+| `pending_updates` | Windows Update Agent search of the local cache | no |
 | `pending_reboot` | the three reboot signals | no |
 | `os_version` | the `CurrentVersion` registry values | no |
 | `antivirus` | `SecurityCenter2` and `Get-MpComputerStatus` | no |
@@ -292,6 +319,11 @@ Special statuses:
   the source is `unreadable` even if `Win32_Tpm` was read (its fields are
   still given).
 - `update_history` is `empty` when the history holds no entries.
+- `pending_updates` is `empty` when the search ran and found nothing
+  (`pending_updates` `[]`), and `unreadable` on a COM error, a time-out, or
+  output that is not one object with an `updates` list (reason `the output
+  is not one search result object with an updates list`); then
+  `pending_updates` is `null`, never `[]`.
 - `antivirus`: see Antivirus.
 
 ## Baseline and changes
@@ -362,6 +394,8 @@ Items have the shared shape. They are added for:
   is summarised;
 - `battery_report`: the report file could not be deleted from the work
   directory;
+- `pending_updates: last scan`: the last scan date could not be read (the
+  error), or is not a time;
 - `restore_points: creation time`: some creation times are not DMTF times
   (the reason gives how many of how many);
 - `summary budget`: the summary exceeds 35000 characters and was not cut;
@@ -401,25 +435,26 @@ Items have the shared shape. They are added for:
 ## Ids and --detail
 
 Ids: `k..` disks, `v..` volumes, `p..` devices, `u..` update failure groups,
-`c..` changes.
+`q..` pending updates, `c..` changes.
 
-The numbers of `k`, `v` and `p` are stable between runs (shared contract,
+The numbers of `k`, `v`, `p` and `q` are stable between runs (shared contract,
 "Ids and --detail"): the number belongs to the item, not to its position in
 the list, so the summary may have gaps (`k1`, `k3`). The key of a disk is
 its `UniqueId` (not `device_id`, which is only the enumeration number), of a
-volume its drive letter and of a device its `instance_id`. The map from key
+volume its drive letter, of a device its `instance_id` and of a pending
+update `update:<KB numbers, comma-separated, or the title>|<driver_provider>`. The map from key
 to number is kept in `<data dir>/state/ush-health.ids.json` (the same file
 for a run with and without administrator rights); a new item takes a number
 higher than any given before, and the number of an item that went away is
-not given again. A disk without `UniqueId` and a device without `instance_id`
-(a blank one, empty or only whitespace, counts as none) get a number for
-this run only. The update failure groups `u` and the changes `c` are
+not given again. A disk without `UniqueId`, a device without `instance_id`
+(a blank one, empty or only whitespace, counts as none) and a pending
+update without KB numbers and title get a number for this run only. The update failure groups `u` and the changes `c` are
 numbered by position in each run.
 
 `python -B "<plugin root>/skills/ush-health/scripts/health.py" --data-dir <dir> --detail <id>`
 prints the item with that id from the newest `health-*.detail.json` in
 `<dir>/work/` (sections `disks`, `volumes`, `devices`, `update_failures`,
-`changes`) and
+`pending_updates`, `changes`) and
 exits 0. `--detail-file`, errors and exit codes are as in the shared contract.
 A failure group cut from the summary (`truncated`) keeps its id: the summary
 holds `u1` to `u<n>` and the cut ones are `u<n+1>` onward.

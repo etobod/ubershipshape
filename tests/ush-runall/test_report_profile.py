@@ -3,7 +3,7 @@
 The checker loads the real ``skills/ush-runall/data/report-profile.json`` through its
 unpatched ``SKILLS_DIR``; no copy of the profile is used, and the checker is not changed.
 The plan gives the profile: ``report_prefix`` ``runall-``, ``detail_sections``
-children/firewall_ports, ``id_letters`` ``hw``, ``required_lists`` children/firewall_ports,
+children/firewall_ports, ``id_letters`` ``hw`` (``hwy`` since plan 028, M2), ``required_lists`` children/firewall_ports,
 ``required_keys`` children/firewall_ports/firewall_ports_counts, ``truncated`` for
 firewall_ports (w, count_key ``truncated``), ``id_keys`` ``[]`` and ``path_keys``
 summary_file, detail_file, program_path.
@@ -152,6 +152,10 @@ def _clean_summary(summary_file, detail_file):
                                   "not_compared": 4, "udp": 2, "other_protocol": 0,
                                   "ports_without_path": 1},
         "network_categories": {"Private": 1},
+        # Plan 028, M2: no pending driver update links to an orphan package.
+        "driver_update_links": [],
+        "link_counts": {"linked": 0, "updates_without_package": 0,
+                        "packages_without_update": 0},
         "truncated": 0,
         "not_checked": [],
     }
@@ -166,7 +170,8 @@ def _detail_data(summary):
             "schema_version": 1, "skill": child["skill"], "generated_at": GENERATED_AT,
             "sources": [], "not_checked": [], "truncated": 0,
             "summary_file": child["summary_file"]}})
-    return {"children": children, "firewall_ports": list(summary["firewall_ports"])}
+    return {"children": children, "firewall_ports": list(summary["firewall_ports"]),
+            "driver_update_links": list(summary.get("driver_update_links") or [])}
 
 
 # --- K6 and K7 ---------------------------------------------------------------------------
@@ -223,7 +228,7 @@ class TestReportProfile(RunallTestCase):
             self.assertEqual(len(path_keys), 3, path_keys)
 
         with self.subTest("id_letters"):
-            self.assertEqual(data.get("id_letters"), "hw")
+            self.assertEqual(data.get("id_letters"), "hwy")
 
         with self.subTest("id_keys"):
             self.assertIn("id_keys", data)
@@ -362,6 +367,115 @@ class TestReportProfile(RunallTestCase):
             code, output = self._run(self._write_report(lines, "runall-no-w1.md"))
             self.assertEqual(code, 1, f"output:\n{output}")
             self.assertIn("not named in the report: w1", output)
+
+
+# --- plan 028, M2, K5 ----------------------------------------------------------------------
+
+# A link of a pending driver update (ush-health q3) to an orphan driver package
+# (ush-inventory o7). Field names as assumed in test_driver_update_links.py.
+Y1_ITEM = {
+    "id": "y1",
+    "update": "ush-health q3",
+    "package": "ush-inventory o7",
+    "provider": "Contoso",
+    "title": "Contoso - Display - Invented Update",
+    "original_name": "contosodisplay.inf",
+}
+Y1_LINE = ("- y1: oczekująca aktualizacja sterownika ush-health q3 (Contoso) dotyczy pakietu "
+           "ush-inventory o7 (contosodisplay.inf), którego nie używa żadne urządzenie.")
+
+
+class TestDriverUpdateLinksProfile(unittest.TestCase):
+    """A report that leaves out a listed ``y`` id fails the checker (plan 028, M2, K5).
+
+    The summary and detail file are hand-written (``_clean_summary`` plus one link); the
+    real ``skills/ush-runall/data/report-profile.json`` is used, which the plan gives
+    ``y`` in ``id_letters`` and ``driver_update_links`` in ``required_lists``,
+    ``required_keys`` and ``detail_sections``."""
+
+    def setUp(self):
+        self.check = load_script("ush-common", "check_report")
+        tmp = _digit_free_tempdir()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name).resolve()
+        self.work_dir = self.root / "work"
+        self.work_dir.mkdir()
+        self.reports_dir = self.root / "reports"
+        self.reports_dir.mkdir()
+        self.summary_file = self.work_dir / "runall-summary.json"
+        self.detail_file = self.work_dir / "runall-detail.json"
+
+    def _write_data(self):
+        summary = _clean_summary(self.summary_file, self.detail_file)
+        summary["driver_update_links"] = [dict(Y1_ITEM)]
+        summary["link_counts"] = {"linked": 1, "updates_without_package": 0,
+                                  "packages_without_update": 0}
+        detail = _detail_data(summary)
+        detail["driver_update_links"] = [dict(Y1_ITEM)]
+        self.summary_file.write_text(json.dumps(summary), encoding="utf-8")
+        self.detail_file.write_text(json.dumps(detail), encoding="utf-8")
+
+    def _write_report(self, link_lines, name):
+        lines = [
+            f"<!-- ush:summary {self.summary_file} -->",
+            "# Raport zbiorczy, 2026-09-20",
+            "",
+            "## Stan przebiegu",
+            "- h1 ush-health: ok, 1.5 s.",
+            "- h2 ush-events: ok, 1.5 s.",
+            "- h3 ush-settings: ok, 1.5 s.",
+            "- h4 ush-inventory: ok, 1.5 s.",
+            "- h5 ush-processes: ok, 1.5 s.",
+            "- h6 ush-files: ok, 1.5 s.",
+            "- h7 ush-advice: ok, 1.5 s.",
+            "- Cały przebieg trwał 10.5 s.",
+            "",
+            "## Zalecenia",
+            "Brak zaleceń w tym przebiegu.",
+            "",
+            "## Powiązania między skillami",
+            *(link_lines or ["Brak powiązań między ustaleniami różnych skilli."]),
+            "",
+            "## Zapora wobec portów nasłuchu",
+            ("- w1: reguła ush-inventory x2 (Invented Server) dopuszcza port 8080; program "
+             "słucha tylko na pętli zwrotnej (127.0.0.1), profil Private; sieci Private: 1."),
+            ("- Pozostałe reguły przychodzące: bez nasłuchu 2, nieporównane 4, UDP 2, "
+             "inny protokół 0."),
+            "",
+            "## Sprzeczne ustalenia",
+            "Brak.",
+            "",
+            "## Nie sprawdzono",
+            "<!-- ush:not-checked -->",
+            "Nic.",
+        ]
+        path = self.reports_dir / name
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return path
+
+    def _run(self, report_path):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                code = self.check.main([str(report_path)])
+            except SystemExit as exc:
+                code = exc.code
+        return code, out.getvalue() + err.getvalue()
+
+    def test_link_must_be_named(self):
+        self._write_data()
+
+        with self.subTest("control: y1 named"):
+            code, output = self._run(self._write_report([Y1_LINE],
+                                                        "runall-2026-09-20-1200.md"))
+            self.assertEqual(code, 0, f"output:\n{output}")
+            self.assertIn("OK", output)
+
+        with self.subTest("y1 not named"):
+            code, output = self._run(self._write_report([], "runall-2026-09-20-1201.md"))
+            self.assertEqual(code, 1, f"output:\n{output}")
+            self.assertNotIn("OK", output)
+            self.assertIn("not named in the report: y1", output)
 
 
 if __name__ == "__main__":
