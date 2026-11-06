@@ -222,17 +222,21 @@ class TestReviewNotesM3(InventoryTestCase):
         with self.subTest(point="the summary keeps the budget"):
             self.assertLessEqual(len(stdout.strip()), BUDGET)
 
-        # Plan 024 M1 changed the cut order on purpose: components and then drivers go
-        # to nothing before additions are cut to their minimum, so with this many
-        # firewall rules both lists are emptied and every item is counted as cut.
-        with self.subTest(point="components emptied, every one counted"):
-            self.assertEqual(self.listed(summary, "components"), [])
-            self.assertEqual(self.count(summary, "truncated_components"), COMPONENTS)
+        # Plan 035 M1 changed the cut order on purpose: every short list keeps its
+        # minimum before any list goes below it, so with this many firewall rules the
+        # additions are cut while components and drivers keep their short lists, and
+        # every item cut from them is counted.
+        with self.subTest(point="components keep COMPONENTS_MIN, the rest counted"):
+            components_min = self.inventory.COMPONENTS_MIN
+            self.assertEqual(len(self.listed(summary, "components")), components_min)
+            self.assertEqual(self.count(summary, "truncated_components"),
+                             COMPONENTS - components_min)
 
-        with self.subTest(point="drivers emptied after components, every one counted"):
-            self.assertEqual(self.listed(summary, "drivers"), [])
+        with self.subTest(point="drivers keep DRIVERS_MIN, the rest counted"):
+            drivers_min = self.inventory.DRIVERS_MIN
+            self.assertEqual(len(self.listed(summary, "drivers")), drivers_min)
             self.assertEqual(self.count(summary, "truncated_drivers"),
-                             len(third_party_drivers(DRIVERS)))
+                             len(third_party_drivers(DRIVERS)) - drivers_min)
 
         with self.subTest(point="additions keep at least ADDITIONS_MIN"):
             additions_min = getattr(self.inventory, "ADDITIONS_MIN", 10)

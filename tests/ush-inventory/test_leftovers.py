@@ -1175,9 +1175,9 @@ class TestLeftoversFinalReview(LeftoversTestCase):
         data_dir = self.data_dir()
         _, summary = self.runs(data_dir, [read, failed])
 
-        def fact_of(section, label):
+        def fact_of(section, label, field="key", value=key):
             entries = [entry for entry in section or []
-                       if isinstance(entry, dict) and entry.get("key") == key]
+                       if isinstance(entry, dict) and entry.get(field) == value]
             self.assertEqual(len(entries), 1,
                              f"{label}: no single autostart entry {key}: {section!r}")
             found = [fact for fact in entries[0].get("facts") or []
@@ -1188,7 +1188,10 @@ class TestLeftoversFinalReview(LeftoversTestCase):
 
         detail_fact = fact_of(self.detail(summary).get("autostart"), "detail file")
         self.assertEqual(detail_fact.get("check_error"), error, detail_fact)
-        summary_fact = fact_of(summary.get("autostart"), "summary")
+        # Find the summary item by the detail id of the entry with this key.
+        detail_id = next(entry.get("id") for entry in self.detail(summary).get("autostart")
+                         if entry.get("key") == key)
+        summary_fact = fact_of(summary.get("autostart"), "summary", "id", detail_id)
         self.assertNotIn("check_error", summary_fact)
 
     def test_read_file_is_not_named_unknown(self):

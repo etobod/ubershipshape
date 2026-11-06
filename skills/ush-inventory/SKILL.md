@@ -408,7 +408,7 @@ Never write the account name: a path under the profile folder is written
 with `%USERPROFILE%`, and a block builds it from `$env:USERPROFILE`
 (`references/report-format.md`, "Account names").
 
-Which shell:
+Which shell (the `--block` printer names it in each block's `Shell:` line):
 
 - An `HKCU` entry (`run:hkcu\...`, `startup:user:...`) in a normal,
   **non-elevated** PowerShell of the user: an elevated shell may run as

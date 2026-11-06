@@ -50,34 +50,34 @@ did not make the summary fit:
 | 3 | `driver_packages`, down to the first 10 (`DRIVER_PACKAGES_MIN`) | `truncated_driver_packages` | the end of the package order (`provider`, `original_name`, `version`) |
 | 4 | `drivers`, down to the first 10 (`DRIVERS_MIN`) | `truncated_drivers` | the end of the driver order (`Display` drivers lead it) |
 | 5 | `components`, down to the first 10 (`COMPONENTS_MIN`) | `truncated_components` | capabilities (they follow the features), then features, each from the end of the name order |
-| 6 | `components`, below the first 10 | `truncated_components` | as in stage 5 |
-| 7 | `drivers`, below the first 10 | `truncated_drivers` | as in stage 4 |
-| 8 | `driver_packages`, below the first 10 | `truncated_driver_packages` | as in stage 3 |
-| 9 | `additions`, down to the first 10 (`ADDITIONS_MIN`) | `truncated_additions` | the items without a change block, from the end of their group, then the items with one (see "Additions") |
-| 10 | `vendor_folders`, below the first 10 | `truncated_vendor_folders` | as in stage 2 |
-| 11 | `additions`, below the first 10 | `truncated_additions` | as in stage 9 |
-| 12 | `programs`, below the 20 newest | `truncated` | as in stage 1 |
-| 13 | `autostart`, down to the first 20 (`AUTOSTART_MIN`) | `truncated_autostart` | the end of the autostart order |
+| 6 | `additions`, down to the first 10 (`ADDITIONS_MIN`) | `truncated_additions` | the items without a change block, from the end of their group, then the items with one (see "Additions") |
+| 7 | `autostart`, down to the first 20 (`AUTOSTART_MIN`) | `truncated_autostart` | the end of the autostart order |
+| 8 | `components`, below the first 10 | `truncated_components` | as in stage 5 |
+| 9 | `driver_packages`, below the first 10 | `truncated_driver_packages` | as in stage 3 |
+| 10 | `drivers`, below the first 10 | `truncated_drivers` | as in stage 4 |
+| 11 | `vendor_folders`, below the first 10 | `truncated_vendor_folders` | as in stage 2 |
+| 12 | `additions`, below the first 10 | `truncated_additions` | as in stage 6 |
+| 13 | `programs`, below the 20 newest | `truncated` | as in stage 1 |
 | 14 | `changes`, down to the first 20 (`CHANGES_MIN`) | `truncated_changes` | the end of the change order, so the collapsed entries at its front go last (a collapsed entry is cut whole) |
-| 15 | `autostart`, below the first 20 | `truncated_autostart` | as in stage 13 |
+| 15 | `autostart`, below the first 20 | `truncated_autostart` | as in stage 7 |
 | 16 | `changes`, below the first 20 | `truncated_changes` | as in stage 14 |
-| 17 | `components`, `drivers`, `driver_packages`, `vendor_folders`, `additions`, then `programs`, each to nothing | as in stages 6, 7, 8, 10, 11 and 12 | as in stages 6, 7, 8, 10, 11 and 12 |
+| 17 | `components`, `driver_packages`, `drivers`, `vendor_folders`, `additions`, then `programs`, each to nothing | as in stages 8 to 13 | as in stages 8 to 13 |
 
-Stages 1 to 5 and 9 keep a short list of each: a list with fewer items than its
-minimum keeps them all. Components go to nothing, then drivers and then driver
-packages below their short lists, before additions are cut at all, so listed
-drivers outlast components and additions outlast everything but `programs`. A
-long `vendor_folders` list (each not judged folder repeats the same
-`not_judged` cause) is cut to its short list early and keeps it until the
-additions are at theirs (stage 9); only then do the folders go below their
-short list (stage 10), before the additions go below theirs (stage 11). So the
-folders never push `additions` below their short list, and the additions never
-push the folders below theirs. A `null` `driver_packages` or `vendor_folders`
-stays `null` (with its count key `0`).
-Stages 13 to 16 run only when stage 12 did not make the
+Stages 1 to 6 keep a short list of each: a list with fewer items than its
+minimum keeps them all. Every short list keeps its minimum before any list
+goes below it, and `autostart` goes to its short list (stage 7) before any
+short list goes below its minimum. Then components go to nothing, then driver
+packages and only then drivers, so listed drivers outlast components and the
+orphan packages (every cut package stays in the detail file and is counted by
+`truncated_driver_packages`); then the vendor folders (each not judged folder
+repeats the same `not_judged` cause), the additions and last the programs. A
+`null` `driver_packages` or `vendor_folders` stays `null` (with its count key
+`0`).
+Stages 14 to 16 run only when stage 13 did not make the
 summary fit, so `autostart` and `changes` are over the budget on their own:
-the six lists of stages 1 to 5 and 9 then go back to their short lists, and are
-emptied again only in stage 17, after `autostart` and `changes`. A cut
+the six lists of stages 1 to 6 then go back to their short lists (`autostart`
+stays at its short list of stage 7), and are emptied again only in stage 17,
+after `autostart` and `changes`. A cut
 `autostart` gets `autostart_counts` (`{kind: number}`) and a cut `changes`
 gets `change_counts`
 (`{source: {added, removed, changed}}`), the counts of the whole list before
@@ -197,11 +197,11 @@ Besides the shared fields (`schema_version`, `skill` = `"ush-inventory"`,
 | `change_counts` | object or `null` | `{source: {added, removed, changed}}` of the whole `changes` list (a collapsed entry by its `count`) when it was cut, else `null` |
 | `collapsed_changes` | int | the changes inside the collapsed entries of `changes` before the budget cut, `0` when none; above 0 the report checker takes the `c..` ids from the detail file, so a report may name a collapsed change by its id |
 | `programs` | list | the programs with `own: false`, newest `install_date` first, no date last, then by name; ids `a..`. Each item is without `install_location`, `source` and `own` (in the detail file). A program that has `per_user_pair` is installed more than once by the same publisher: see "Install pairs". Cut to the budget (`truncated`) |
-| `autostart` | list | the autostart entries with `own: false`, by source and key; ids `s..`. Cut to the budget (`truncated_autostart`, `autostart_counts`). `approved_raw` and `display_name` are left out, and each fact is without `company`, and without `expanded_path` when it equals `path` (all in the detail file) |
+| `autostart` | list | the autostart entries with `own: false`, by source and key; ids `s..`. Cut to the budget (`truncated_autostart`, `autostart_counts`). `targets`, `approved_raw` and `display_name` are left out (each target is a fact's `path`), and each fact is without `company`, and without `expanded_path` when it equals `path` (all in the detail file) |
 | `components` | list or `null` | the listed components: features with `state` `enabled` and capabilities with `state` `Installed`, features first, each by name; ids `f..`. Each item has only `id`, `key`, `kind` (`feature`, `capability`), `name` and `state`. `null` when neither `optional_features` nor `capabilities` was read. Cut to the budget (`truncated_components`) |
 | `component_counts` | object | `feature`: `{enabled, disabled, absent, <any other state>, unread}` counts of all features (`enabled`, `disabled` and `absent` always present; `unread` counts `state` `null`), or `null` when `optional_features` was not read; `capability`: `{<state>: number, ..., unread}` of all capabilities, or `null` when `capabilities` was not read; `drivers_without_inf`: the number of `Win32_PnPSignedDriver` rows without an INF file (for example software devices, or a device without a driver), not device state; device state is measured by `ush-health`; `null` when `drivers` was not read. The rows themselves are `drivers_without_inf_items` of the detail file; `driver_packages`: the number of third-party driver packages, `null` when `driver_packages` was not read; `driver_packages_without_device`: the number of them with `present_device` `false`, counted before the budget cut (the summary list `driver_packages` holds fewer when `truncated_driver_packages` > 0), `null` when that list is `null`; `vendor_folders_read`, `vendor_folders_matched`, `vendor_folders_unmatched`, `vendor_folders_unknown` (`matched` `null`, see "Vendor folders"), `reparse_points` and `installer_guid_folders`: the counts of the top-level folders, all `null` when the data file could not be used or no root could be listed; `vendor_folders_matched`, `vendor_folders_unmatched` and `vendor_folders_unknown` are `null` also when the list `vendor_folders` is `null` because a program source was not read |
 | `drivers` | list or `null` | the drivers whose `own` is not `true` (a third-party `.inf`, or unknown), the classes of `DRIVER_CLASSES_FIRST` (`Display`, case-insensitive) first, then by `provider`, then `device_name`, `null` last; ids `d..`. Each item has only `id`, `key`, `device_name`, `class`, `provider`, `version`, `date` and `signer`. `null` when `drivers` was not read. Cut to the budget (`truncated_drivers`) |
-| `driver_packages` | list or `null` | the third-party driver packages with `present_device` `false` (no present device uses them), by `provider`, then `original_name`, then `version`; ids `o..`. Each item has `id`, `key`, `published_name`, `original_name`, `provider`, `class`, `version`, `date`, `signer` and `present_device` (see "Driver packages"). `null` when `driver_packages` was not read, or when it holds packages and `drivers` was not read; `[]` when every package has a present device (or `null`) or the store holds no third-party package. Cut to the budget (`truncated_driver_packages`); a `null` list stays `null` |
+| `driver_packages` | list or `null` | the third-party driver packages with `present_device` `false` (no present device uses them), by `provider`, then `original_name`, then `version`; ids `o..`. Each item has `id`, `key`, `published_name`, `original_name`, `provider`, `class`, `version`, `date`, `signer` and `present_device` (see "Driver packages"). `null` when `driver_packages` was not read, or when it holds packages and `drivers` was not read; `[]` with `truncated_driver_packages` `0` when every package has a present device (or `null`) or the store holds no third-party package. Cut to the budget (`truncated_driver_packages`); with `truncated_driver_packages` above `0` the packages were cut, not absent: give the count, never call the list clean or empty; a `null` list stays `null` |
 | `additions` | list or `null` | the items of the five added-to-the-system sources whose `own` is not `true`: first those with a change block, then those without, each group by kind in this order: `administrator`, `defender_exclusion`, `root_certificate`, `firewall_rule`, `hosts_entry`; ids `x..` (see "Additions"). `null` when none of the five sources was read. Cut to the budget (`truncated_additions`) |
 | `leftovers` | list | what removed programs left, never cut (see "Leftovers"); ids `l..`; `[]` when nothing is left |
 | `vendor_folders` | list or `null` | the top-level folders of the vendor roots that no rule matches, cut to the budget like `driver_packages` (`truncated_vendor_folders`, see "Files and output" and "Vendor folders"): `matched` `false` (no installed program matches) or `matched` `null` with `not_judged` (not judged, because something was not read); ids `v..`; `[]` with `truncated_vendor_folders` `0` when every folder read is matched or a Windows name (with `truncated_vendor_folders` above `0` the folders were cut: give the count, never call the list clean) |
@@ -273,7 +273,7 @@ checked", not "no pairs".
 | `approved`, `approved_byte`, `approved_raw` | `run`, `run_once`, `startup_folder` only; see "approved" |
 | `state` | `task` and `service`: as read (`Ready`, `Disabled`, `Running`, `Stopped`, ...). For a per-user service `Running` when any instance runs, else the state of the first instance by name. Not compared |
 | `display_name`, `delayed`, `user_service`, `template_start` | `service` only: the display name (only in the detail file); `delayed` `true` when `DelayedAutostart` = 1; `user_service` `true` for a per-user service; `template_start` the `Start` value of the template key (per-user services only; `null` when not read). A service whose registry values could not be read and that the previous baseline does not have names in `unread_fields` only the fields whose values were not read before the error: `delayed` (then `null`) when `DelayedAutostart` was not read, `user_service` when `Type` was not read; when it runs in `svchost.exe` (its target is a registry value) and its `ServiceDll` is unknown also `targets` and `facts`, and `own` `null`: then it is counted in `own_counts.unknown` and listed only in the detail file (see "Values not read") |
-| `targets` | the target files as text, in action order, as taken from `command` before variables are expanded; `null` for a target that cannot be named |
+| `targets` | the target files as text, in action order, as taken from `command` before variables are expanded; `null` for a target that cannot be named. Only in the detail file: in the summary each target is the `path` of its fact |
 | `facts` | one fact per target, in the same order: `{path, expanded_path, exists, signature_status, signer, company, program}`. A fact of a file that could not be checked also has `check_error`, the reason. In the summary a fact has no `company` and no `check_error`, and no `expanded_path` when it equals `path`; the detail file has every field |
 | `facts_from_baseline` | `true` when facts are the previous baseline's, because `file_facts` (or one file) could not be read |
 | `own` | see "own and windows-own.json"; always `false` in the summary list |
@@ -666,7 +666,7 @@ path of 1 autostart entry`); and, when `has_entries` is `null`,
 the data file could not be used, when no root could be listed, or when
 `win32_programs` or `msix_programs` was not read and the baseline holds none
 of its programs (the `not_checked` item `vendor_folders` names the source).
-The list is cut to the budget from its end (stages 2 and 10 of "Files and
+The list is cut to the budget from its end (stages 2 and 11 of "Files and
 output"): `truncated_vendor_folders` counts the cut folders, `--cut` lists
 them (`name` the folder name) and the detail file keeps them; a cut folder is
 given as a count, its id is never named unless it was fetched with `--detail`.
@@ -914,6 +914,7 @@ Besides one item per `unreadable` source (`what` = the source name):
 | `stable ids save` | the id map was not saved; this run's ids hold, the next run may give other ones (when the reason starts with "the id map was saved", only its previous copy was not replaced and the next run keeps these ids) |
 | `stable ids <letter>` | items whose `key` came twice in this run; the later ones got ids kept for this run only, named in the reason |
 | `driver_packages present_device` | the store holds third-party packages but `drivers` was not read: "the present devices (source drivers) were not read, so no package is known to have no present device"; every package has `present_device` `null` and the summary list `driver_packages` is `null` |
+| `driver_packages published_name` | the drivers were read, but packages whose published name (`oem<N>.inf`) was not read on a copy match no present device through another published name: their `present_device` is `null` with `present_device_reason` "the published name (oem<N>.inf) of a copy of this package was not read, so it cannot be matched to a device"; the reason starts with their number and names this reason; they are in the detail file only. Counted after matching, so a package matched through another published name is not in it, and the item is absent when `drivers` was not read (`driver_packages present_device` covers that) |
 | `<source> without <field>` | rows without their key field (`optional_features without Name`, `capabilities without Name`, `drivers without DeviceID`, `driver_packages without OriginalName`, `firewall_rules without value name`, `root_certificates without thumbprint`, `administrators without SID`); the reason gives their number |
 | `defender_exclusions origin` | the policy exclusion keys could not be read, so every exclusion has `origin` `null` |
 | `firewall_apps` | the job failed, returned no rows for N programs, or returned no row for some of them; those rules have `app_exists` `null` |

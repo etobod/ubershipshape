@@ -328,16 +328,19 @@ def slim_agent_expanded(i):
     return f"C:\\Program Files\\Invented Slim Agent {i:02d}\\agent.exe"
 
 
-def slim_autostart_responses(runs, services):
+def slim_autostart_responses(runs, services, pad=0):
     """``runs`` Run values and ``services`` services, all vendor-signed (never own).
 
     A Run value's target is written out in full (``expanded_path`` equals ``path``); a
-    service's target starts with ``%ProgramFiles%`` (``expanded_path`` differs).
+    service's target starts with ``%ProgramFiles%`` (``expanded_path`` differs). With
+    ``pad``, each command ends with one more argument of ``pad`` characters.
     """
-    run_rows = [run_value(f"InventedSlimTray{i:02d}", f"\"{slim_tray_target(i)}\" /background")
+    extra = " /" + "p" * pad if pad else ""
+    run_rows = [run_value(f"InventedSlimTray{i:02d}",
+                          f"\"{slim_tray_target(i)}\" /background{extra}")
                 for i in range(runs)]
     service_rows = [
-        service(f"InventedSlimAgent{i:02d}", f"\"{slim_agent_target(i)}\" -service",
+        service(f"InventedSlimAgent{i:02d}", f"\"{slim_agent_target(i)}\" -service{extra}",
                 display_name=f"Invented Slim Agent Service Number {i:02d}")
         for i in range(services)
     ]
@@ -423,9 +426,32 @@ class TestSlimSummary(InventoryTestCase):
             ),
         }))
 
-        listed = self.by_key(self.summary_items(summary, "autostart"))
-        self.assertIn(service_key, listed, sorted(listed))
-        self.assertIn(run_key, listed, sorted(listed))
+        # Plan 035 M1, K4: the summary items carry no ``targets`` but keep ``key`` (a
+        # report rule and ush-processes name an entry by it; the plan's "Slim fields"
+        # rule); they are matched to the detail file's items by ``id``.
+        full = self.detail_by_key(summary, "autostart")
+        self.assertIn(service_key, full, sorted(full))
+        self.assertIn(run_key, full, sorted(full))
+        for key in (service_key, run_key):
+            with self.subTest(item=key, place="detail"):
+                self.assertIn("id", full[key], full[key])
+                self.assertIn("key", full[key], full[key])
+                self.assertIn("targets", full[key], full[key])
+
+        slim_items = self.summary_items(summary, "autostart")
+        by_id = {item.get("id"): item for item in slim_items if isinstance(item, dict)}
+        listed = {}
+        for key in (service_key, run_key):
+            item_id = full[key].get("id")
+            self.assertIn(item_id, by_id, sorted(map(str, by_id)))
+            listed[key] = by_id[item_id]
+        for item in slim_items:
+            with self.subTest(item=item.get("id"), place="summary"):
+                self.assertNotIn("targets", item, item)
+        for key in (service_key, run_key):
+            with self.subTest(item=key, place="summary key"):
+                self.assertIn("key", listed[key], listed[key])
+                self.assertEqual(listed[key]["key"], full[key]["key"], listed[key])
 
         slim_service = listed[service_key]
         self.assertNotIn("display_name", slim_service, slim_service)
@@ -437,9 +463,17 @@ class TestSlimSummary(InventoryTestCase):
         self.assertNotIn("company", slim_tool_fact, slim_tool_fact)
         self.assertEqual(slim_tool_fact.get("expanded_path"), tool_expanded, slim_tool_fact)
 
-        full = self.detail_by_key(summary, "autostart")
-        self.assertIn(service_key, full, sorted(full))
-        self.assertIn(run_key, full, sorted(full))
+        for key, path, slim_fact in ((service_key, agent, slim_agent_fact),
+                                     (run_key, tool, slim_tool_fact)):
+            full_fact = self.fact_by_path(full[key], path)
+            for field in ("path", "exists", "signature_status", "signer", "program"):
+                with self.subTest(item=key, field=field):
+                    self.assertIn(field, slim_fact, slim_fact)
+                    self.assertEqual(slim_fact[field], full_fact.get(field), full_fact)
+            self.assertIs(slim_fact["exists"], True, slim_fact)
+            self.assertEqual(slim_fact["signature_status"], "Valid", slim_fact)
+            self.assertEqual(slim_fact["signer"], VENDOR, slim_fact)
+
         self.assertEqual(full[service_key].get("display_name"), display_name, full[service_key])
         full_agent_fact = self.fact_by_path(full[service_key], agent)
         self.assertEqual(full_agent_fact.get("company"), SLIM_COMPANY, full_agent_fact)
@@ -460,13 +494,15 @@ class TestSlimSummary(InventoryTestCase):
         summary = self.collect(FakePowerShell(responses), data_dir=data_dir,
                                now=NOW + timedelta(days=1))
 
-        # The slim summary lists are shorter than the same items taken whole.
+        # The slim summary lists are shorter than the same items taken whole. They are
+        # matched to the detail file by ``id``.
         for name, count in (("programs", 40), ("autostart", runs + services)):
             with self.subTest(list=name):
                 slim = self.summary_items(summary, name)
-                self.assertEqual(len(slim), count, [item.get("key") for item in slim])
-                full = self.detail_by_key(summary, name)
-                whole = [full.get(item.get("key")) for item in slim]
+                self.assertEqual(len(slim), count, [item.get("id") for item in slim])
+                full = {item.get("id"): item
+                        for item in self.summary_items(self.detail(summary), name)}
+                whole = [full.get(item.get("id")) for item in slim]
                 self.assertNotIn(None, whole, sorted(full))
                 self.assertLess(len(json.dumps(slim)), len(json.dumps(whole)))
 
@@ -635,14 +671,15 @@ BELOW_MINIMUM_DRIVERS = 50
 BELOW_MINIMUM_FEATURES = 50
 BELOW_MINIMUM_RULES = 50
 # K3: the autostart list is sized so that the summary without programs leaves room for
-# about this many slim programs (fewer than PROGRAMS_MINIMUM, more than zero). The size of
-# one slim autostart item and one slim program belongs to the code, so the number of
-# autostart items is found by measuring the script's own output at run time (a binary
-# search, see ``autostart_items_for_room``); with the slim items of plan 074 it lands at
-# roughly 31-33k characters of autostart.
+# about this many slim programs (fewer than PROGRAMS_MINIMUM, more than zero). The list
+# holds AUTOSTART_MIN items, so it is at its floor and never cut (plan 035, M1: autostart
+# goes to AUTOSTART_MIN before any short list goes below its minimum); their commands are
+# padded. The size of one slim autostart item and one slim program belongs to the code,
+# so the pad is found by measuring the script's own output at run time (a binary search,
+# see ``autostart_pad_for_room``); it lands at roughly 31-33k characters of autostart.
 BELOW_MINIMUM_ROOM = 8
-# K3: upper bound of the search; far more than the budget needs.
-AUTOSTART_SEARCH_LIMIT = 600
+# K3: upper bound of the pad search; far more than the budget needs.
+AUTOSTART_PAD_LIMIT = 4000
 
 # K6: an autostart list far over the budget on its own (500 items).
 OVERSIZED_RUNS = 250
@@ -739,8 +776,9 @@ class TestProgramsMinimum(InventoryTestCase):
         self.assertEqual(code, 0, stderr[:300])
         return len(stdout.strip())
 
-    def autostart_items_for_room(self, programs_room):
-        """The largest autostart size whose summary leaves ``programs_room`` slim programs.
+    def autostart_pad_for_room(self, items, programs_room):
+        """The largest command pad of ``items`` autostart entries whose summary leaves
+        ``programs_room`` slim programs.
 
         Measured on the script's own output: the summary with no program and no other
         list, and the growth of the summary per slim program (ten newest programs).
@@ -753,11 +791,17 @@ class TestProgramsMinimum(InventoryTestCase):
         self.assertGreater(per_program, 0)
         target = BUDGET - programs_room * per_program
 
-        def fits(items):
-            return self.printed_length(
-                dict(bare, **slim_autostart_responses(*autostart_split(items)))) <= target
+        def fits(pad):
+            # A pad so long that the autostart list alone is over the budget gets the
+            # list cut: that does not fit either.
+            responses = dict(bare, **slim_autostart_responses(*autostart_split(items),
+                                                              pad=pad))
+            code, stdout, stderr = self.run_main(self.data_dir(), FakePowerShell(responses))
+            self.assertEqual(code, 0, stderr[:300])
+            return (len(stdout.strip()) <= target
+                    and self.parse(stdout).get("truncated_autostart") == 0)
 
-        low, high = 0, AUTOSTART_SEARCH_LIMIT
+        low, high = 0, AUTOSTART_PAD_LIMIT
         self.assertTrue(fits(low), "the bare summary leaves no room")
         self.assertFalse(fits(high), "the autostart search limit is too small")
         while high - low > 1:
@@ -800,14 +844,15 @@ class TestProgramsMinimum(InventoryTestCase):
         self.assert_next_program_overflows(stdout, summary, detail)
 
     def test_below_minimum_only_after_other_lists(self):
-        items = self.autostart_items_for_room(BELOW_MINIMUM_ROOM)
+        items = self.inventory.AUTOSTART_MIN
+        pad = self.autostart_pad_for_room(items, BELOW_MINIMUM_ROOM)
         runs, services = autostart_split(items)
         responses = m2_responses(
             win32_programs=ok(program_rows()), msix_programs=ok([]),
             drivers=ok(third_party_driver_rows(BELOW_MINIMUM_DRIVERS)),
             optional_features=ok(feature_rows(BELOW_MINIMUM_FEATURES)),
             firewall_rules=ok(firewall_rows(BELOW_MINIMUM_RULES)),
-            **slim_autostart_responses(runs, services),
+            **slim_autostart_responses(runs, services, pad=pad),
         )
         code, stdout, stderr = self.run_main(self.data_dir(), FakePowerShell(responses))
         self.assertEqual(code, 0, stderr[:300])
@@ -816,6 +861,7 @@ class TestProgramsMinimum(InventoryTestCase):
         detail = self.detail(summary)
 
         self.assertEqual(len(self.listed(summary, "autostart")), items)
+        self.assertEqual(self.count(summary, "truncated_autostart"), 0)
         for name, whole, cut in (("drivers", BELOW_MINIMUM_DRIVERS, "truncated_drivers"),
                                  ("components", BELOW_MINIMUM_FEATURES,
                                   "truncated_components"),
@@ -1226,11 +1272,11 @@ class TestCollapseRules(InventoryTestCase):
 
 # --- Drivers keep their short list before components are cut (plan 107) --------------
 #
-# Stage order of the first pass, each stage stopping as soon as the summary fits:
-# programs->20, drivers->10, components->10, components->0, drivers->0, additions->10,
-# additions->0, programs->0. Fallback (autostart/changes too long on their own): the four
-# short lists at their minimums, autostart and changes to their floors, then to 0, then
-# components->0, drivers->0, additions->0, programs->0.
+# Stage order of the first pass, each stage stopping as soon as the summary fits (plan
+# 035, M1): programs->20, drivers->10, components->10, additions->10, autostart->20,
+# components->0, drivers->0, additions->0, programs->0. Fallback (autostart/changes too
+# long on their own): the short lists at their minimums, autostart and changes to their
+# floors, then to 0, then components->0, drivers->0, additions->0, programs->0.
 #
 # Each case is sized against the real SUMMARY_MAX_CHARS: the expected end state is built
 # by hand, a ``leftovers`` list (never cut) fills it up to FLOOR_GAP characters below the
@@ -1327,11 +1373,14 @@ class TestDriverFloor(InventoryTestCase):
         drivers = floor_items("drivers", 64, FLOOR_DRIVER_PAD)
         components = floor_items("components", 40, FLOOR_COMPONENT_PAD)
         additions = floor_items("additions", 40, FLOOR_ADDITION_PAD)
+        additions_min = self.inventory.ADDITIONS_MIN
+        # Plan 035, M1: every short list, additions included, keeps its minimum before
+        # any list goes below it, so the additions are at their minimum here.
         summary = self.sized_case(
             floor_summary({"drivers": drivers, "components": components,
                            "additions": additions}),
-            end={"drivers": drivers_min, "components": 0},
-            one_more={"drivers": drivers_min, "components": 1},
+            end={"drivers": drivers_min, "components": 0, "additions": additions_min},
+            one_more={"drivers": drivers_min, "components": 1, "additions": additions_min},
         )
 
         self.fit(summary)
@@ -1341,8 +1390,8 @@ class TestDriverFloor(InventoryTestCase):
         self.assertEqual(len(self.listed(summary, "drivers")), drivers_min)
         self.assertEqual(self.count(summary, "truncated_drivers"), 64 - drivers_min)
         self.assertEqual(self.count(summary, "truncated_drivers"), 54)
-        self.assertEqual(self.listed(summary, "additions"), additions)
-        self.assertEqual(self.count(summary, "truncated_additions"), 0)
+        self.assertEqual(self.listed(summary, "additions"), additions[:additions_min])
+        self.assertEqual(self.count(summary, "truncated_additions"), 40 - additions_min)
 
     def test_fitting_summary_keeps_all_drivers(self):
         drivers = floor_items("drivers", 64, FLOOR_DRIVER_PAD)
@@ -1358,8 +1407,11 @@ class TestDriverFloor(InventoryTestCase):
         self.assertEqual(self.listed(summary, "drivers"), drivers)
         self.assertEqual(self.count(summary, "truncated_drivers"), 0)
 
-    def test_additions_kept_while_drivers_cut(self):
+    def test_additions_at_minimum_while_drivers_cut(self):
+        # Plan 035, M1: the additions go to their minimum before the drivers go below
+        # theirs, and keep it while the drivers are cut.
         drivers_min = self.inventory.DRIVERS_MIN
+        additions_min = self.inventory.ADDITIONS_MIN
         kept_drivers = 4
         self.assertLess(kept_drivers, drivers_min)
         drivers = floor_items("drivers", 30, FLOOR_DRIVER_PAD)
@@ -1368,8 +1420,9 @@ class TestDriverFloor(InventoryTestCase):
         summary = self.sized_case(
             floor_summary({"drivers": drivers, "components": components,
                            "additions": additions}),
-            end={"drivers": kept_drivers, "components": 0},
-            one_more={"drivers": kept_drivers + 1, "components": 0},
+            end={"drivers": kept_drivers, "components": 0, "additions": additions_min},
+            one_more={"drivers": kept_drivers + 1, "components": 0,
+                      "additions": additions_min},
         )
 
         self.fit(summary)
@@ -1379,8 +1432,8 @@ class TestDriverFloor(InventoryTestCase):
         self.assertEqual(len(kept) + self.count(summary, "truncated_drivers"), 30)
         self.assertEqual(self.listed(summary, "components"), [])
         self.assertEqual(self.count(summary, "truncated_components"), 40)
-        self.assertEqual(self.listed(summary, "additions"), additions)
-        self.assertEqual(self.count(summary, "truncated_additions"), 0)
+        self.assertEqual(self.listed(summary, "additions"), additions[:additions_min])
+        self.assertEqual(self.count(summary, "truncated_additions"), 40 - additions_min)
 
     def test_drivers_zero_only_after_autostart_and_changes(self):
         inv = self.inventory
@@ -1396,10 +1449,12 @@ class TestDriverFloor(InventoryTestCase):
                "additions": inv.ADDITIONS_MIN, "autostart": 0, "changes": 0}
         summary = self.sized_case(floor_summary(lists), end=end,
                                   one_more=dict(end, drivers=1))
-        # The first pass alone (all four short lists at 0) does not fit: autostart and
-        # changes are too long on their own, so the fallback decides.
+        # The first pass alone (all four short lists at 0, autostart at AUTOSTART_MIN,
+        # plan 035) does not fit: autostart and changes are too long on their own, so
+        # the fallback decides.
         first_pass_end = cut_state(summary, {"programs": 0, "drivers": 0, "components": 0,
-                                             "additions": 0})
+                                             "additions": 0,
+                                             "autostart": inv.AUTOSTART_MIN})
         self.assertGreater(self.size(first_pass_end), self.budget(),
                            "fixture: the first pass would fit")
 
@@ -1415,8 +1470,9 @@ class TestDriverFloor(InventoryTestCase):
 
 # --- Driver packages are cut to the budget (plan 024 QA, architect 2026-11-06) ---------
 #
-# First pass: programs->20, driver_packages->10, drivers->10, components->10,
-# components->0, drivers->0, driver_packages->0, additions->10, additions->0, programs->0.
+# First pass (plan 035, M1): programs->20, driver_packages->10, drivers->10,
+# components->10, additions->10, autostart->20, components->0, driver_packages->0,
+# drivers->0, additions->0, programs->0.
 # A long package list must not push the listed drivers below their minimum while
 # autostart, changes and additions fit. The sizes are invented.
 
@@ -1544,11 +1600,11 @@ class TestDriverPackagesCut(InventoryTestCase):
                     self.assertEqual(summary["autostart"], [])
                     self.assertEqual(summary["changes"], [])
 
-    def test_fallback_empties_packages_after_drivers_before_additions(self):
+    def test_fallback_empties_packages_before_drivers(self):
         # autostart alone is over the budget, so the first pass fails. The budget lies
-        # between the fallback state with 5 packages and the one with 6: autostart and
-        # changes at 0, components and drivers at 0, additions and programs at their
-        # floors.
+        # between the fallback state with 5 drivers and the one with 6: autostart and
+        # changes at 0, components and driver_packages at 0, additions and programs at
+        # their floors (plan 035, M1: packages go to nothing before drivers).
         inv = self.inventory
         lists = {
             "programs": floor_items("programs", 25, FLOOR_PROGRAM_PAD),
@@ -1561,13 +1617,14 @@ class TestDriverPackagesCut(InventoryTestCase):
         packages = package_items(20)
         summary = package_summary(lists, packages)
         end = {"programs": inv.PROGRAMS_MIN, "additions": inv.ADDITIONS_MIN,
-               "components": 0, "drivers": 0, "autostart": 0, "changes": 0,
-               "driver_packages": 5}
+               "components": 0, "drivers": 5, "autostart": 0, "changes": 0,
+               "driver_packages": 0}
         low = self.size(cut_state(summary, end))
-        high = self.size(cut_state(summary, dict(end, driver_packages=6)))
+        high = self.size(cut_state(summary, dict(end, drivers=6)))
         budget = (low + high) // 2
         first_pass_end = {name: 0 for name in ("programs", "drivers", "components",
                                                "additions", "driver_packages")}
+        first_pass_end["autostart"] = inv.AUTOSTART_MIN
         self.assertGreater(self.size(cut_state(summary, first_pass_end)), budget,
                            "fixture: the first pass would fit")
 
@@ -1576,16 +1633,16 @@ class TestDriverPackagesCut(InventoryTestCase):
 
         self.assertLessEqual(len(text), budget)
         self.assertEqual(summary["autostart"], [])
-        self.assertEqual(summary["drivers"], [])
-        self.assertEqual(summary["truncated_drivers"], 20)
-        self.assertEqual(summary["driver_packages"], packages[:5])
-        self.assertEqual(summary["truncated_driver_packages"], 15)
+        self.assertEqual(summary["drivers"], lists["drivers"][:5])
+        self.assertEqual(summary["truncated_drivers"], 15)
+        self.assertEqual(summary["driver_packages"], [])
+        self.assertEqual(summary["truncated_driver_packages"], 20)
         self.assertEqual(summary["additions"], lists["additions"][:inv.ADDITIONS_MIN])
 
-    def test_packages_emptied_after_drivers_before_additions(self):
-        # Sized so that drivers and components at 0 with 5 packages fits and 6 do not:
-        # packages go below their minimum only after drivers are empty, and additions
-        # stay whole.
+    def test_packages_emptied_before_drivers_go_below_minimum(self):
+        # Sized so that components and packages at 0 with 5 drivers fits and 6 do not:
+        # drivers go below their minimum only after packages are empty, and additions
+        # keep their minimum (plan 035, M1).
         inv = self.inventory
         lists = {
             "drivers": floor_items("drivers", 30, FLOOR_DRIVER_PAD),
@@ -1593,19 +1650,240 @@ class TestDriverPackagesCut(InventoryTestCase):
             "additions": floor_items("additions", 20, FLOOR_ADDITION_PAD),
         }
         packages = package_items(30)
-        end = {"drivers": 0, "components": 0, "driver_packages": 5}
+        end = {"drivers": 5, "components": 0, "driver_packages": 0,
+               "additions": inv.ADDITIONS_MIN}
         summary = self.sized_case(package_summary(lists, packages), end=end,
-                                  one_more=dict(end, driver_packages=6))
-        self.assertLess(5, inv.DRIVER_PACKAGES_MIN)
+                                  one_more=dict(end, drivers=6))
+        self.assertLess(5, inv.DRIVERS_MIN)
 
         self.fit(summary)
 
-        self.assertEqual(self.listed(summary, "drivers"), [])
-        self.assertEqual(self.count(summary, "truncated_drivers"), 30)
-        self.assertEqual(self.listed(summary, "driver_packages"), packages[:5])
-        self.assertEqual(self.count(summary, "truncated_driver_packages"), 25)
-        self.assertEqual(self.listed(summary, "additions"), lists["additions"])
-        self.assertEqual(self.count(summary, "truncated_additions"), 0)
+        self.assertEqual(self.listed(summary, "drivers"), lists["drivers"][:5])
+        self.assertEqual(self.count(summary, "truncated_drivers"), 25)
+        self.assertEqual(self.listed(summary, "driver_packages"), [])
+        self.assertEqual(self.count(summary, "truncated_driver_packages"), 30)
+        self.assertEqual(self.listed(summary, "additions"),
+                         lists["additions"][:inv.ADDITIONS_MIN])
+        self.assertEqual(self.count(summary, "truncated_additions"),
+                         20 - inv.ADDITIONS_MIN)
+
+
+# --- Autostart is cut in the first pass, before drivers are emptied (plan 035, M1) ------
+#
+# Once the short lists (programs, vendor_folders, driver_packages, drivers, components and
+# additions) are at their floors, autostart is cut to no fewer than AUTOSTART_MIN items
+# before any short list goes below its floor. The sizes are invented.
+
+AUTOSTART_TOTAL = 25
+AUTOSTART_FIRST_PASS_PAD = 100
+LONG_ADDITIONS_TOTAL = 120
+FIRST_PASS_SLACK = 5
+FIRST_PASS_LISTS = ("programs", "vendor_folders", "driver_packages", "drivers",
+                    "components", "additions", "autostart", "changes")
+FIRST_PASS_COUNTS = dict(COUNT_NAMES, vendor_folders="truncated_vendor_folders")
+
+
+def first_pass_folder_items(count):
+    """``count`` invented listed vendor folders (no rule matches them)."""
+    return [{
+        "id": f"v{i}",
+        "key": f"vendor_folder:c:\\programdata\\invented first pass vendor {i:03d}",
+        "path": f"C:\\ProgramData\\Invented First Pass Vendor {i:03d}",
+        "root": "%ProgramData%",
+        "matched": False,
+        "has_entries": True,
+        "last_write": "2025-04-05T06:07:08Z",
+    } for i in range(count)]
+
+
+def first_pass_summary(lists):
+    """An invented summary holding ``lists`` (name -> items), nothing cut yet."""
+    summary = {"not_checked": [], "autostart_counts": None, "change_counts": None}
+    for name in FIRST_PASS_LISTS:
+        summary[name] = list(lists.get(name, []))
+        summary[FIRST_PASS_COUNTS[name]] = 0
+    return summary
+
+
+def first_pass_state(summary, kept):
+    """A copy of ``summary`` with each list in ``kept`` (name -> number) cut to a prefix."""
+    state = json.loads(json.dumps(summary))
+    for name, number in kept.items():
+        whole = len(summary[name])
+        state[name] = summary[name][:number]
+        state[FIRST_PASS_COUNTS[name]] = whole - number
+    if "autostart" in kept and kept["autostart"] < len(summary["autostart"]):
+        state["autostart_counts"] = {"run": len(summary["autostart"])}
+    return state
+
+
+class TestAutostartFirstPass(InventoryTestCase):
+    listed = TestBudget.listed
+    count = TestBudget.count
+    size = TestDriverFloor.size
+
+    def lists(self):
+        return {
+            "programs": floor_items("programs", 40, FLOOR_PROGRAM_PAD),
+            "vendor_folders": first_pass_folder_items(30),
+            "driver_packages": package_items(30),
+            "drivers": floor_items("drivers", 40, FLOOR_DRIVER_PAD),
+            "components": floor_items("components", 40, FLOOR_COMPONENT_PAD),
+            "additions": floor_items("additions", LONG_ADDITIONS_TOTAL, FLOOR_ADDITION_PAD),
+            "autostart": floor_items("autostart", AUTOSTART_TOTAL, AUTOSTART_FIRST_PASS_PAD),
+        }
+
+    def floors(self):
+        """Every short list at its floor (the first-pass minimums)."""
+        inv = self.inventory
+        return {
+            "programs": inv.PROGRAMS_MIN,
+            "vendor_folders": inv.VENDOR_FOLDERS_MIN,
+            "driver_packages": inv.DRIVER_PACKAGES_MIN,
+            "drivers": inv.DRIVERS_MIN,
+            "components": inv.COMPONENTS_MIN,
+            "additions": inv.ADDITIONS_MIN,
+        }
+
+    def check_fixture(self, lists):
+        inv = self.inventory
+        self.assertLess(inv.AUTOSTART_MIN, AUTOSTART_TOTAL)
+        self.assertGreater(LONG_ADDITIONS_TOTAL, 100)
+        for name, floor in self.floors().items():
+            self.assertGreater(len(lists[name]), floor, f"fixture: {name} at its floor")
+
+    def fit(self, summary, budget):
+        with mock.patch.object(self.inventory, "SUMMARY_MAX_CHARS", budget):
+            text = self.inventory.fit_budget(summary)
+        self.assertLessEqual(len(text), budget)
+        return text
+
+    def test_autostart_cut_before_drivers_empty(self):
+        inv = self.inventory
+        lists = self.lists()
+        self.check_fixture(lists)
+        summary = first_pass_summary(lists)
+        floors = self.floors()
+        end = dict(floors, autostart=inv.AUTOSTART_MIN)
+        budget = self.size(first_pass_state(summary, end)) + FIRST_PASS_SLACK
+        self.assertGreater(self.size(summary), budget, "fixture: the summary already fits")
+        # Only fits with additions at their minimum and autostart cut to about the minimum.
+        self.assertGreater(self.size(first_pass_state(summary, dict(floors))), budget,
+                           "fixture: the floors alone fit, autostart need not be cut")
+        self.assertGreater(
+            self.size(first_pass_state(summary, dict(end, additions=inv.ADDITIONS_MIN + 1))),
+            budget, "fixture: one more addition would still fit")
+        # Emptying the short lists instead would also fit with autostart whole: the order
+        # decides.
+        emptied = dict(floors, vendor_folders=0, driver_packages=0, drivers=0, components=0)
+        self.assertLessEqual(self.size(first_pass_state(summary, emptied)), budget,
+                             "fixture: emptying drivers would not fit either")
+
+        self.fit(summary, budget)
+
+        self.assertEqual(self.listed(summary, "additions"),
+                         lists["additions"][:inv.ADDITIONS_MIN])
+        self.assertEqual(self.count(summary, "truncated_additions"),
+                         LONG_ADDITIONS_TOTAL - inv.ADDITIONS_MIN)
+        drivers = self.listed(summary, "drivers")
+        self.assertGreaterEqual(len(drivers), inv.DRIVERS_MIN)
+        self.assertEqual(drivers, lists["drivers"][:len(drivers)])
+        self.assertEqual(len(drivers) + self.count(summary, "truncated_drivers"),
+                         len(lists["drivers"]))
+
+        autostart = self.listed(summary, "autostart")
+        self.assertGreaterEqual(len(autostart), inv.AUTOSTART_MIN)
+        self.assertLess(len(autostart), AUTOSTART_TOTAL)
+        self.assertEqual(autostart, lists["autostart"][:len(autostart)])
+        truncated = self.count(summary, "truncated_autostart")
+        self.assertGreater(truncated, 0)
+        self.assertEqual(len(autostart) + truncated, AUTOSTART_TOTAL)
+        counts = summary.get("autostart_counts")
+        self.assertIsNotNone(counts)
+        self.assertEqual(counts, {"run": AUTOSTART_TOTAL})
+
+    def test_whole_autostart_when_floors_fit(self):
+        inv = self.inventory
+        lists = self.lists()
+        self.check_fixture(lists)
+        summary = first_pass_summary(lists)
+        floors = self.floors()
+        budget = self.size(first_pass_state(summary, floors)) + FIRST_PASS_SLACK
+        self.assertGreater(self.size(summary), budget, "fixture: the summary already fits")
+        self.assertGreater(
+            self.size(first_pass_state(summary, dict(floors, additions=inv.ADDITIONS_MIN + 1))),
+            budget, "fixture: one more addition would still fit")
+
+        self.fit(summary, budget)
+
+        self.assertEqual(self.listed(summary, "autostart"), lists["autostart"])
+        self.assertEqual(self.count(summary, "truncated_autostart"), 0)
+        self.assertIn("autostart_counts", summary, sorted(summary))
+        self.assertIsNone(summary["autostart_counts"])
+        # It fits at the floors: no short list went below its floor.
+        for name, floor in floors.items():
+            with self.subTest(list=name):
+                self.assertEqual(self.listed(summary, name), lists[name][:floor])
+
+    def test_drivers_below_minimum_only_after_autostart_minimum(self):
+        # The budget lies between the end state with KEPT drivers and the one with one
+        # driver more: every short list at its floor, additions at ADDITIONS_MIN,
+        # autostart at AUTOSTART_MIN, components and driver_packages at nothing. Any
+        # order that cuts drivers below DRIVERS_MIN before one of the other three
+        # ends elsewhere: more additions or autostart items, or fewer drivers.
+        inv = self.inventory
+        kept_drivers = 4
+        self.assertGreater(kept_drivers, 0)
+        self.assertLess(kept_drivers, inv.DRIVERS_MIN)
+        lists = self.lists()
+        self.check_fixture(lists)
+        summary = first_pass_summary(lists)
+        floors = self.floors()
+        end = dict(floors, autostart=inv.AUTOSTART_MIN, components=0, driver_packages=0,
+                   drivers=kept_drivers)
+        low = self.size(first_pass_state(summary, end))
+        high = self.size(first_pass_state(summary, dict(end, drivers=kept_drivers + 1)))
+        self.assertGreater(high - low, 2, "fixture: one driver adds no length")
+        budget = (low + high) // 2
+        # Not fitting earlier: drivers at their minimum need more room than the budget.
+        self.assertGreater(
+            self.size(first_pass_state(summary, dict(end, drivers=inv.DRIVERS_MIN))),
+            budget, "fixture: drivers at their minimum would fit")
+        # Each other order has room to end elsewhere: one addition or autostart item
+        # more fits where KEPT drivers do, and emptied drivers leave room for packages.
+        self.assertLessEqual(
+            self.size(first_pass_state(summary, dict(end, drivers=0,
+                                                     additions=inv.ADDITIONS_MIN + 1))),
+            budget, "fixture: emptied drivers leave no room for one more addition")
+        self.assertLessEqual(
+            self.size(first_pass_state(summary, dict(end, drivers=0,
+                                                     autostart=inv.AUTOSTART_MIN + 1))),
+            budget, "fixture: emptied drivers leave no room for one more autostart item")
+        self.assertLessEqual(
+            self.size(first_pass_state(summary, dict(end, drivers=0, driver_packages=1))),
+            budget, "fixture: emptied drivers leave no room for one package")
+
+        self.fit(summary, budget)
+
+        self.assertEqual(self.listed(summary, "drivers"), lists["drivers"][:kept_drivers])
+        self.assertEqual(self.count(summary, "truncated_drivers"),
+                         len(lists["drivers"]) - kept_drivers)
+        self.assertEqual(self.listed(summary, "additions"),
+                         lists["additions"][:inv.ADDITIONS_MIN])
+        self.assertEqual(self.count(summary, "truncated_additions"),
+                         LONG_ADDITIONS_TOTAL - inv.ADDITIONS_MIN)
+        self.assertEqual(self.listed(summary, "autostart"),
+                         lists["autostart"][:inv.AUTOSTART_MIN])
+        self.assertEqual(self.count(summary, "truncated_autostart"),
+                         AUTOSTART_TOTAL - inv.AUTOSTART_MIN)
+        self.assertEqual(summary.get("autostart_counts"), {"run": AUTOSTART_TOTAL})
+        self.assertEqual(self.listed(summary, "driver_packages"), [])
+        self.assertEqual(self.count(summary, "truncated_driver_packages"),
+                         len(lists["driver_packages"]))
+        self.assertEqual(self.listed(summary, "components"), [])
+        for name in ("programs", "vendor_folders"):
+            with self.subTest(list=name):
+                self.assertEqual(self.listed(summary, name), lists[name][:floors[name]])
 
 
 if __name__ == "__main__":

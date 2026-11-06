@@ -329,5 +329,102 @@ class TestDriverPackagesBaseline(DriverPackagesTestCase):
             self.assertEqual(third_ids, first_ids)
 
 
+def store_without_published_names(packages, unread):
+    """The ``driver_packages`` job answer for ``packages`` where the ``DriverName``
+    attribute (the published name) is missing on the first copy of each name in
+    ``unread``."""
+    text = store_xml(packages)
+    for name in unread:
+        attribute = f' DriverName="{name}"'
+        stripped = text.replace(attribute, "", 1)
+        if stripped == text:
+            raise AssertionError(f"no {attribute!r} in the invented store")
+        text = stripped
+    return store_text(text, exit_code=0)
+
+
+class TestPublishedNameUnread(DriverPackagesTestCase):
+    """Plan 035, milestone M2 (criteria K5-K7): third-party packages whose published
+    name was not read, so they cannot be matched to a device, are named once in
+    ``not_checked`` with their count and ``PUBLISHED_UNREAD_REASON``."""
+
+    def unread_notes(self, summary):
+        """``not_checked`` entries naming ``PUBLISHED_UNREAD_REASON`` in ``what`` or
+        ``reason``."""
+        reason = self.inventory.PUBLISHED_UNREAD_REASON
+        return [item for item in self.not_checked(summary)
+                if reason in f"{item.get('what')} {item.get('reason')}"]
+
+    def test_unread_names_give_one_not_checked_entry(self):
+        packages = [MOUSE, PAD, MONITOR]
+        devices = ok([driver("DISPLAY\\INV0040\\0040", "oem40.inf",
+                             device_name="Invented Monitor", device_class="Monitor")])
+        clean = self.collect(FakePowerShell({"driver_packages": store(packages),
+                                             "drivers": devices}))
+        summary = self.collect(FakePowerShell({
+            "driver_packages": store_without_published_names(
+                packages, [MOUSE["published"], PAD["published"]]),
+            "drivers": devices,
+        }))
+
+        notes = self.unread_notes(summary)
+        self.assertEqual(len(notes), 1, summary.get("not_checked"))
+        note = notes[0]
+        text = f"{note.get('what')} {note.get('reason')}"
+        if "count" in note:
+            self.assertEqual(note["count"], 2, note)
+        else:
+            self.assertRegex(text, r"(?<![\w.])2(?![\w.])", note)
+        self.assertNotRegex(text, r"(?<![\w.])3(?![\w.])", note)
+
+        others = [item for item in self.not_checked(summary) if item is not note]
+        self.assertEqual(others, self.not_checked(clean),
+                         (summary.get("not_checked"), clean.get("not_checked")))
+
+    def test_clean_store_gives_no_entry(self):
+        summary = self.collect(FakePowerShell({
+            "driver_packages": store([MOUSE, PAD, MONITOR]),
+            "drivers": ok([driver("HID\\VID_1CCC&PID_0001\\0001", "oem12.inf",
+                                  device_name="Invented Touch Pad",
+                                  device_class="HIDClass")]),
+        }))
+        self.assertEqual(self.source(summary, "driver_packages").get("status"), "read")
+        self.assertEqual(self.unread_notes(summary), [], summary.get("not_checked"))
+
+    def test_matched_or_unjudged_gives_no_entry(self):
+        other_copy = dict(MOUSE, published="oem13.inf")
+        self.assertEqual(package_key(other_copy), package_key(MOUSE))
+        devices = ok([driver("HID\\VID_1CCC&PID_0013\\0013", "oem13.inf",
+                             device_name="Invented Mouse", device_class="Mouse")])
+        orders = {"unread copy first": [MOUSE, other_copy, PAD],
+                  "unread copy last": [other_copy, MOUSE, PAD]}
+        for case, packages in orders.items():
+            with self.subTest(case=f"matched through another published name, {case}"):
+                summary = self.collect(FakePowerShell({
+                    "driver_packages": store_without_published_names(
+                        packages, [MOUSE["published"]]),
+                    "drivers": devices,
+                }))
+                detail = self.detail_packages(summary)
+                self.assertIs(detail.get(package_key(MOUSE), {}).get("present_device"),
+                              True, detail)
+                self.assertEqual(self.unread_notes(summary), [],
+                                 summary.get("not_checked"))
+
+        with self.subTest(case="drivers not read"):
+            summary = self.collect(FakePowerShell({
+                "driver_packages": store_without_published_names(
+                    [MOUSE, PAD], [MOUSE["published"], PAD["published"]]),
+                "drivers": failure("Invented CIM failure"),
+            }))
+            self.assert_unreadable(summary, "drivers")
+            self.assertEqual(self.unread_notes(summary), [], summary.get("not_checked"))
+            notes = self.package_notes(summary)
+            self.assertTrue(
+                any(re.search(r"(?i)device|\bdrivers\b",
+                              f"{note.get('what')} {note.get('reason')}") for note in notes),
+                summary.get("not_checked"))
+
+
 if __name__ == "__main__":
     unittest.main()

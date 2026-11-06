@@ -92,8 +92,23 @@ def run_key(name, hive="hkcu", key="Run"):
 
 class AutostartTestCase(InventoryTestCase):
     def listed(self, summary):
-        """Autostart entries of the summary, by key."""
-        return self.by_key(summary.get("autostart"))
+        """Autostart entries of the summary, by the key of the detail entry with the same id.
+
+        A summary autostart item keeps ``key``, equal to the key of the detail entry
+        with the same id."""
+        items = summary.get("autostart")
+        self.assertIsInstance(items, list, summary)
+        keys = {entry.get("id"): entry.get("key")
+                for entry in self.detail(summary).get("autostart") or []}
+        result = {}
+        for item in items:
+            key = keys.get(item.get("id"))
+            self.assertIsNotNone(key, f"no detail entry with the id of {item}")
+            self.assertIn("key", item, item)
+            self.assertEqual(item["key"], key, item)
+            self.assertNotIn(key, result, f"duplicate key in {items}")
+            result[key] = item
+        return result
 
     def all_entries(self, summary):
         """Autostart entries of the detail file, by key."""

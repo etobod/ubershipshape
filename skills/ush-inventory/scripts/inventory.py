@@ -121,34 +121,37 @@ The script counts; it never judges.
 The summary goes to stdout and to ``work/inventory-<UTC stamp>.summary.json``;
 the detail file ``work/inventory-<UTC stamp>.detail.json`` holds every program,
 every autostart entry, every component, every driver, every driver package, every
-addition and every change with the same ids. ``--detail <id>`` prints one item of the newest detail
+addition, every leftover, every vendor folder and every change with the same ids.
+``--detail <id>`` prints one item of the newest detail
 file. To keep the summary within ``SUMMARY_MAX_CHARS`` eight lists are cut from
-their end, first each down to its minimum: ``programs`` (``truncated``; programs
-without an install date, then the oldest installs) down to ``PROGRAMS_MIN``,
-``vendor_folders`` (``truncated_vendor_folders``) down to ``VENDOR_FOLDERS_MIN``,
-``driver_packages`` (``truncated_driver_packages``; the first packages in id
-order stay) down to ``DRIVER_PACKAGES_MIN``,
+their end, first each of the six short lists down to its minimum: ``programs``
+(``truncated``; programs without an install date, then the oldest installs) down to
+``PROGRAMS_MIN``, ``vendor_folders`` (``truncated_vendor_folders``) down to
+``VENDOR_FOLDERS_MIN``, ``driver_packages`` (``truncated_driver_packages``; the
+first packages in id order stay) down to ``DRIVER_PACKAGES_MIN``,
 ``drivers`` (``truncated_drivers``; the ``DRIVER_CLASSES_FIRST`` classes lead the
 list) down to ``DRIVERS_MIN``, ``components`` (``truncated_components``) down to
-``COMPONENTS_MIN``; then ``components``, ``drivers`` and ``driver_packages``
-below their minimum, each only after the one before is empty; then ``additions``
-(``truncated_additions``; the items without a change block in SKILL.md first,
-then the ones with a block) down to ``ADDITIONS_MIN``; then ``vendor_folders``
-and ``additions`` below their minimum, each only after the one before is empty,
-and only then ``programs`` below ``PROGRAMS_MIN``. A ``null`` list stays ``null``.
-When ``autostart`` and ``changes`` are over the budget on
-their own, the six lists keep their minimums and ``autostart``
-(``truncated_autostart``, with ``autostart_counts``) and ``changes``
+``COMPONENTS_MIN`` and ``additions`` (``truncated_additions``; the items without a
+change block in SKILL.md first, then the ones with a block) down to
+``ADDITIONS_MIN``: every short list keeps its minimum before any list goes below
+it. Then ``autostart`` (``truncated_autostart``, with ``autostart_counts``) down
+to ``AUTOSTART_MIN``; then ``components``, ``driver_packages`` and ``drivers``
+below their minimum, each only after the one before is empty; then
+``vendor_folders``, ``additions`` and ``programs`` the same way. A ``null`` list
+stays ``null``. When ``autostart`` and ``changes`` are over the budget on
+their own, the six lists keep their minimums and ``autostart`` and ``changes``
 (``truncated_changes``, with ``change_counts``) are cut, down to ``AUTOSTART_MIN``
-and ``CHANGES_MIN``, then to nothing, and then the six lists to nothing. The
+and ``CHANGES_MIN``, then to nothing, and then the six lists to nothing in the
+same order. The
 changes named by a rule of ``data/collapsed_names.json`` (the firewall rules named
 by an unresolved ``ms-resource:`` string) are collapsed in the summary into one
 counted entry per change type. A program whose name, without a suffix of
 ``data/per_user_suffixes.json``, equals the name of another program with the
 same publisher gets ``per_user_pair``, and so does that other program. A listed
 program and autostart entry in the summary lack some fields the report does not
-use (``install_location``, ``display_name``, a fact's ``company``, ...); the
-detail file and the baseline keep the full items, and the comparison uses them.
+use (``install_location``, ``display_name``, an autostart entry's ``targets``,
+a fact's ``company``, ...); the detail file and the baseline keep the
+full items, and the comparison uses them.
 """
 
 import argparse
@@ -251,16 +254,14 @@ DRIVERS_UNREAD_REASON = ("the present devices (source drivers) were not read, so
 PACKAGE_VERSION = re.compile(r"\s*(\d{1,2})/(\d{1,2})/(\d{4})\s+(\S+)\s*")
 ADMIN_REASON = ("requires administrator rights (not read in this run, which is not "
                 "elevated); this is not an empty list")
-# The lists cut to fit the budget, in this order, with the key that counts the cut items.
-# driver_packages (the orphan packages) is cut like the other short lists: down to
-# DRIVER_PACKAGES_MIN first, and to nothing only after drivers and before additions.
-# vendor_folders (the folders no rule matches, each not judged one repeating the
-# shared not_judged cause) is cut down to VENDOR_FOLDERS_MIN first of the short lists,
-# since it can grow long and every folder is a lead the detail file and the not_checked
-# cause still cover; it keeps VENDOR_FOLDERS_MIN until the additions are at
-# ADDITIONS_MIN, and goes below it only then, before the additions go below theirs:
-# it never pushes the additions (what was added to the system) below their minimum,
-# and the additions never push it below its own while they are above theirs.
+# The lists cut to fit the budget, with the key that counts the cut items. Every short
+# list (programs, vendor_folders, driver_packages, drivers, components, additions) keeps
+# its minimum before any list goes below it; then autostart goes to AUTOSTART_MIN; then
+# components, driver_packages (the orphan packages) and drivers go to nothing, in that
+# order, so the listed drivers outlast the packages; then vendor_folders (the folders no
+# rule matches, each not judged one repeating the shared not_judged cause; every folder
+# is a lead the detail file and the not_checked cause still cover), additions and
+# programs. changes is cut only in the fallback (see fit_budget).
 CUT_LISTS = (("programs", "truncated"),
              ("vendor_folders", "truncated_vendor_folders"),
              ("driver_packages", "truncated_driver_packages"),
@@ -3352,9 +3353,12 @@ def summary_fact(fact):
 
 def summary_autostart(entry: dict) -> dict:
     """One listed autostart entry as it goes to the summary: without
-    ``approved_raw`` (only for a rollback block) and ``display_name``, each fact
-    slimmed by ``summary_fact``. The detail file keeps the full entry."""
-    slim = {k: v for k, v in entry.items() if k not in ("approved_raw", "display_name")}
+    ``approved_raw`` (only for a rollback block), ``display_name`` and ``targets``
+    (each resolved target is a fact's ``path``), each fact slimmed by
+    ``summary_fact``. ``key`` stays: the report rules and ush-processes name an
+    entry by it. The detail file keeps the full entry."""
+    slim = {k: v for k, v in entry.items()
+            if k not in ("approved_raw", "display_name", "targets")}
     if isinstance(slim.get("facts"), list):
         slim["facts"] = [summary_fact(fact) for fact in slim["facts"]]
     return slim
@@ -4405,15 +4409,15 @@ def fit_budget(summary: dict) -> str:
     ``drivers`` down to ``DRIVERS_MIN``, ``components`` down to
     ``COMPONENTS_MIN`` and ``additions`` (the items without a change block, from the
     end of their group, then the items with one) down to ``ADDITIONS_MIN`` (a list
-    with fewer items keeps them all), except that ``components``, then ``drivers``
-    and then ``driver_packages`` go to nothing before ``additions`` are cut to their
-    minimum. Then ``vendor_folders`` down to nothing, ``additions`` down to nothing,
-    and ``programs`` below ``PROGRAMS_MIN``. A ``null`` list (its source not read) stays ``null`` and its
-    count key ``0``. Only
+    with fewer items keeps them all): every short list keeps its minimum before any
+    list goes below it. Then ``autostart`` down to ``AUTOSTART_MIN``. Then
+    ``components``, ``driver_packages`` and ``drivers`` down to nothing, in that
+    order, and then ``vendor_folders``, ``additions`` and ``programs``. A ``null``
+    list (its source not read) stays ``null`` and its count key ``0``. Only
     when that is not enough, so ``autostart`` and ``changes`` are over the budget on
     their own, do the six lists go back to their minimums and ``autostart`` and
     ``changes`` get cut: down to ``AUTOSTART_MIN`` and ``CHANGES_MIN``, then to
-    nothing, and then ``components``, ``drivers``, ``driver_packages``,
+    nothing, and then ``components``, ``driver_packages``, ``drivers``,
     ``vendor_folders``, ``additions`` and ``programs`` to nothing, in that order. Each count
     key of ``CUT_LISTS`` counts the cut items (``truncated_changes`` the cut changes,
     a collapsed entry by its ``count``); a cut
@@ -4433,9 +4437,10 @@ def fit_budget(summary: dict) -> str:
                     "autostart": AUTOSTART_MIN, "changes": CHANGES_MIN}
         floors = {name: min(minimums[name], kept[name]) for name in minimums}
         short_lists = [name for name, _ in CUT_LISTS if name not in COUNT_KEYS]
-        # Components go before drivers go below their minimum, drivers before driver
-        # packages, driver packages before vendor folders; additions go last.
-        last_stages = [("components", 0), ("drivers", 0), ("driver_packages", 0),
+        # The lists that go to nothing, in this order, once every list is at its floor:
+        # components, driver packages and then drivers; then vendor folders, additions
+        # and programs.
+        last_stages = [("components", 0), ("driver_packages", 0), ("drivers", 0),
                        ("vendor_folders", 0), ("additions", 0), ("programs", 0)]
 
         def fits(name: str, count: int) -> bool:
@@ -4465,17 +4470,15 @@ def fit_budget(summary: dict) -> str:
                 kept[name] = floor
             return False
 
-        # programs, vendor_folders, driver_packages, drivers and components to their
-        # floors, then components, drivers and driver_packages to nothing, then
-        # additions to their floor, and only then vendor_folders to nothing.
-        fitted = run_stages([(name, floors[name]) for name in short_lists
-                             if name != "additions"]
-                            + last_stages[:3]
-                            + [("additions", floors["additions"])]
-                            + last_stages[3:])
+        # The six short lists to their floors, then autostart to its floor (with its
+        # counts), and only then the short lists to nothing.
+        fitted = run_stages([(name, floors[name]) for name in short_lists]
+                            + [("autostart", floors["autostart"])]
+                            + last_stages)
         if not fitted:
             # autostart and changes are over the budget on their own: the six short
-            # lists keep their floors, and these two are cut.
+            # lists keep their floors, and these two are cut (autostart is at its floor
+            # already).
             for name in short_lists:
                 if originals[name] is not None:
                     fits(name, floors[name])
@@ -5807,6 +5810,14 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
     packages_status = statuses["driver_packages"]
     if packages_status == "read" and col.driver_inf_names is None:
         col.skip("driver_packages present_device", DRIVERS_UNREAD_REASON)
+    # Counted after matching: a package matched through another published name is not
+    # unread, and with the drivers not read the entry above covers every package.
+    unread_names = sum(p.get("present_device_reason") == PUBLISHED_UNREAD_REASON
+                       for p in packages)
+    if unread_names:
+        col.skip("driver_packages published_name",
+                 f"{unread_names} package(s): {PUBLISHED_UNREAD_REASON}; present_device "
+                 f"is null and they are listed only in the detail file")
     packages_judged = (packages_status == "empty"
                        or (packages_status == "read" and col.driver_inf_names is not None))
     package_fields = ("id", "key", "published_name", "original_name", "provider", "class",

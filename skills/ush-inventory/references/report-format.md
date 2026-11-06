@@ -51,7 +51,8 @@ shared by all skills (see `<plugin root>/skills/ush-health/references/report-for
   profile's `path_keys`). Name an item by its id and `name`, not by its
   `key`; a value of these keys may appear only in a fenced code block.
 - The summary leaves out some fields of a listed item: a program's
-  `install_location`, a service's `display_name`, a fact's `company`, and a
+  `install_location`, an autostart entry's `targets` (each target is a
+  fact's `path`), a service's `display_name`, a fact's `company`, and a
   fact's `expanded_path` when it equals `path`. When the report needs one,
   fetch the item with `--detail <id>` and name it in an `ush:detail` line.
 - Item ids (`a1`, `s2`, `f3`, `d4`, `o5`, `x6`, `v7`, `c8`) are not numbers when they
@@ -256,9 +257,16 @@ is of an older shape and fails with
      look. "No present device" is a fact about this moment (a device
      unplugged now counts as not present), not proof that the package is
      unused or safe to remove; say so once. This skill has no block for a
-     driver package. An empty list (`[]`) says that every third-party
-     package has a present device, or that the store holds none (then
-     `component_counts.driver_packages` is 0). Extension packages and the
+     driver package. An empty list (`[]`) with `truncated_driver_packages`
+     `0` says that every third-party package has a present device (or
+     `present_device` `null`: such a package is not judged, and "Not
+     checked" names those whose published name was not read, as
+     `driver_packages published_name`), or that the store holds none (then
+     `component_counts.driver_packages` is 0); with that "Not checked" entry
+     never call the store clean.
+     With `truncated_driver_packages` above `0` the packages were cut to the
+     budget, not absent: give the count, never call the list clean or
+     empty. Extension packages and the
      other packages with `present_device` `null` are never in the list; do
      not call them unused.
    - Added to the system: first one sentence, translated: "This section
@@ -625,12 +633,16 @@ Never report missing data as "no changes" or "clean":
   the detail file has them. `--cut` lists the cut items (`id`, `list`,
   `name`); name one in the report only after fetching it with `--detail`,
   and then in the `ush:detail` line. A list whose count key is above 0
-  (`truncated` for programs, `truncated_<list>` for the other six) is cut:
+  (`truncated` for programs, `truncated_<list>` for the other seven) is cut:
   it holds any number of items, none included, and the order in which the
   lists are cut is the stage table under "Files and output" of
-  `summary-contract.md`. Report such a list as cut, with the number of items
-  it holds and the number cut, both from the JSON; never as the whole list,
-  never as empty, and never by a size it is assumed to keep. Among the
+  `summary-contract.md`. Report such a list as cut, with its count key only (for `autostart` and
+  `changes` also `autostart_counts` and `change_counts`, as their paragraphs
+  say):
+  the number cut, from the JSON; never a number of listed items or a sum,
+  never as the whole list, never as empty, and never by a size it is
+  assumed to keep. `truncated_changes` counts changes (a collapsed entry by
+  its count), not entries. Among the
   drivers a `Display` driver comes first. A `summary budget` item in
   "Not checked" means the summary is over the budget and nothing was cut.
 - `per_user_suffixes.json` in "Not checked": install pairs were not checked,

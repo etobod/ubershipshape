@@ -117,5 +117,45 @@ class TestFirstRunFileDocs(unittest.TestCase):
             self.assertNotIn("windows-own.json", sentence)
 
 
+class TestBudgetDocs(unittest.TestCase):
+    """Test K8 (plan 035 M2): a cut list is described by its count key only."""
+
+    def test_cut_lists_described_by_count_keys(self):
+        contract = _flat((REFERENCES / "summary-contract.md").read_text(encoding="utf-8"))
+        report = _flat((REFERENCES / "report-format.md").read_text(encoding="utf-8"))
+        clean = re.compile(r"`\[\]`\)? with `truncated_driver_packages` `0`")
+        cut = "`truncated_driver_packages` above `0`"
+        never = "never call the list clean or empty"
+
+        with self.subTest("contract: driver_packages row"):
+            row = re.search(r"\| `driver_packages` \| list or `null` \|([^|]*)\|", contract)
+            self.assertIsNotNone(row, "driver_packages row")
+            text = row.group(1) if row else ""
+            self.assertRegex(text, clean)
+            self.assertIn(cut, text)
+            self.assertIn(never, text)
+
+        with self.subTest("report format: driver packages paragraph"):
+            start = report.find("This skill has no block for a driver package.")
+            self.assertNotEqual(start, -1, "driver packages paragraph")
+            end = report.find(" - ", start)
+            paragraph = report[start:end if end != -1 else len(report)]
+            self.assertRegex(paragraph, clean)
+            self.assertIn(cut, paragraph)
+            self.assertIn(never, paragraph)
+            self.assertNotIn("An empty list (`[]`) says that every third-party", paragraph)
+
+        with self.subTest("report format: budget paragraph"):
+            start = report.find("- Truncated lists:")
+            self.assertNotEqual(start, -1, "budget paragraph")
+            end = report.find(" - ", start + 2)
+            paragraph = report[start:end if end != -1 else len(report)]
+            self.assertIn("the other seven", paragraph)
+            self.assertNotIn("the other six", paragraph)
+            self.assertNotRegex(paragraph, r"(?i)number of items (it|they) holds?\b")
+            self.assertNotRegex(paragraph, r"(?i)\b(held|holds) count\b")
+            self.assertIn("`truncated_changes` counts changes", paragraph)
+
+
 if __name__ == "__main__":
     unittest.main()
