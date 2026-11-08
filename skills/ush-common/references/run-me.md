@@ -23,13 +23,22 @@ to the plugin root stays inside the file. Around it:
 # Shell: elevated Windows PowerShell (Run as administrator)
 # Does: <what the block does, one or two lines>
 # Source: <the printer, the SKILL.md template or the repair plan file>
-# Written: <YYYY-MM-DD HH:MM local time>
+# Written: <YYYY-MM-DD HH:MM> (<YYYY-MM-DD HH:MM> UTC)
 # Writes its output to run-me-admin.out.txt beside this file in the cwd.
 Start-Transcript -Path "<cwd>\run-me-admin.out.txt" -Force
 try {
 <the block, word for word>
 } finally { Stop-Transcript }
 ```
+
+The `# Written:` times come from the machine, never from a guess or the
+conversation: read them just before writing the file,
+
+```
+python -B -c "from datetime import datetime, timezone; n = datetime.now().astimezone(); print(n.strftime('%Y-%m-%d %H:%M'), n.astimezone(timezone.utc).strftime('(%Y-%m-%d %H:%M UTC)'))"
+```
+
+and copy its output after `# Written: `.
 
 For `run-me.ps1` the shell line says normal (non-elevated) Windows
 PowerShell and the transcript line is
@@ -88,8 +97,35 @@ setting. Never run either file yourself.
 The out file (`run-me.out.txt` or `run-me-admin.out.txt`) is for the user
 only: never open, read or search it (it is raw output with the machine and
 account names). Whether the block ran, and what it changed, is shown only by
-a new run of the skill, from its JSON: a summary newer than the moment the
-file was written (`elevated` `true` for an elevated pass). When the user says
-it failed, ask only for the error message in their own words, never to paste
-the out file or the window (its header and paths carry the machine and
-account names); a new run of the skill shows what changed.
+what the block's source names for reading it back, from JSON: for a skill's
+elevated re-run, a new summary of that skill whose `generated_at` (UTC) is
+later than the UTC time in the file's `# Written:` header, with `elevated`
+`true`; for a change block, a new run of the skill (the repair plan's
+`Odczyt po zmianie`); where the source names its own read-back (the
+`ush-events` dump copy: `manifest.json` `copied_at` against the UTC time read
+before the hand-off), that one. Never use the file's modification time: the
+header is the moment of the hand-off.
+
+A skill's read-only elevated re-run changes nothing, so it can always be run
+again. When it left a summary newer than the header whose `elevated` is not
+`true`, it ran without the rights: tell the user to run the same
+`run-me-admin.ps1` again, with the same command line, from an elevated
+PowerShell (Run as administrator); a normal run of the skill cannot read what
+needs the rights. When it left no summary newer than the header, ask the user
+whether the window showed an error. Without one, it did not run: hand the same
+file back as above. With one, ask for the error message (below) and say what
+it points to (a wrong folder in `Set-Location`, a refused prompt, `python` not
+found, the script stopping); then hand the same file back as above, once that
+cause is put right. For `ush-runall` a child that fails shows in the new
+summary as its status, so only a pass that wrote no summary at all comes
+here.
+
+A file with a change block is never handed back to be run again on that rule:
+a change block writes no summary, and it may have changed the machine
+already.
+
+When the user says a block failed, ask only for the error message in their
+own words, never to paste the out file or the window (its header and paths
+carry the machine and account names). After a change block, also a failed
+one, a new run of the skill reads back what it changed before anything else
+is proposed.

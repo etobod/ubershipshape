@@ -287,6 +287,80 @@ class TestRunMe(unittest.TestCase):
                         ignored = not negated
                 self.assertTrue(ignored, f".gitignore does not ignore {name}")
 
+    # loc/inbox/046-plan-2-easy-run-me-handoff-utc.md, M1: the hand-off time is UTC.
+
+    def test_reference_time_is_utc(self):
+        path = SKILLS / "ush-common/references/run-me.md"
+        self.assertTrue(path.is_file(), "ush-common/references/run-me.md is missing")
+        rule = flat(read(path))
+        stamp = r"(?:<[^<>]+>|\d{4}-\d{2}-\d{2} \d{2}:\d{2})"
+        self.assertRegex(
+            rule, rf"# Written: {stamp} \({stamp} UTC\)",
+            "the # Written: header carries the local time and the UTC time in brackets")
+        text = read(path)
+        lowered = text.lower()
+        start = lowered.find("after the run")
+        self.assertNotEqual(start, -1, "run-me.md has no 'After the run' part")
+        end = re.compile(r"(?m)^##+ ").search(text, start + len("after the run"))
+        part = flat(lowered[start:end.start() if end else len(text)])
+        for token in ("generated_at", "utc", "# written:", "modification time"):
+            self.assertIn(token, part, f"'After the run' does not mention {token!r}")
+        self.assertRegex(
+            part, r"modification time[^.]*\b(?:not|never)\b|\b(?:not|never)\b[^.]*modification time",
+            "'After the run' says the file's modification time is not used")
+
+    def test_written_header_utc_has_the_date(self):
+        # K1 asks for the full UTC date and time: a hand-off near midnight has a
+        # different UTC date, so a time-only "(<HH:MM> UTC)" is not enough.
+        path = SKILLS / "ush-common/references/run-me.md"
+        rule = flat(read(path))
+        header = re.search(r"# Written: [^\n]*?\(([^()]*) UTC\)", rule)
+        self.assertIsNotNone(header, "run-me.md has no # Written: header with a UTC time")
+        self.assertRegex(
+            header.group(1), r"YYYY-MM-DD HH:MM|\d{4}-\d{2}-\d{2} \d{2}:\d{2}",
+            "the UTC time in the # Written: header has no date")
+        self.assertIn(
+            "%Y-%m-%d %H:%M UTC", rule,
+            "the machine-time one-liner does not print the UTC date and time")
+
+    def test_read_back_names_utc_header(self):
+        for name in ("health", "files", "inventory", "processes", "runall", "settings"):
+            doc = SKILLS / f"ush-{name}" / "SKILL.md"
+            with self.subTest(skill=f"ush-{name}"):
+                self.assertTrue(doc.is_file(), f"ush-{name} has no SKILL.md")
+                lowered = flat(read(doc)).lower()
+                windows = [lowered[max(0, m.start() - 300):m.end() + 300]
+                           for m in re.finditer(re.escape("# written:"), lowered)]
+                self.assertTrue(windows, "the SKILL.md does not name the # Written: header")
+                self.assertTrue(
+                    any("utc" in w and "newer" in w and "run-me-admin.ps1" in w for w in windows),
+                    "the read-back does not name the UTC time of run-me-admin.ps1's "
+                    "# Written: header as the moment the summary must be newer than")
+
+    def test_failed_elevated_pass_reruns_the_file(self):
+        docs = [("run-me.md", SKILLS / "ush-common/references/run-me.md")]
+        docs += [(f"ush-{name}", SKILLS / f"ush-{name}" / "SKILL.md")
+                 for name in ("health", "files", "inventory", "processes", "runall", "settings")]
+        not_run = re.compile(r"did not run|didn't run|not run|not elevated|without elevation")
+        rerun = re.compile(r"run-me-admin\.ps1`?(?:(?!\. ).){0,200}?\bagain\b")
+        for label, doc in docs:
+            with self.subTest(doc=label):
+                self.assertTrue(doc.is_file(), f"{label} is missing")
+                lowered = flat(read(doc)).lower()
+                windows = [lowered[max(0, m.start() - 300):m.end() + 300]
+                           for m in re.finditer(r"\bagain\b", lowered)]
+                self.assertTrue(
+                    any("run-me-admin.ps1" in w and "elevated" in w and not_run.search(w)
+                        for w in windows)
+                    # The file and "again" in one sentence: an unrelated "again" nearby
+                    # (write the report again) is not a rerun of the file.
+                    and rerun.search(lowered),
+                    "does not tell the user to run the same run-me-admin.ps1 again from an "
+                    "elevated PowerShell when the elevated pass did not run")
+                if label == "run-me.md":
+                    self.assertNotIn("a new run of the skill shows what changed", lowered,
+                                     "still offers a new run of the skill as the recovery")
+
 
 if __name__ == "__main__":
     unittest.main()

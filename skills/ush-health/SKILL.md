@@ -205,12 +205,15 @@ anything automatically. Say so if the user asks for these.
    ```
 
    After the user says it ran, read the new summary: the newest
-   `<data dir>/work/health-*.summary.json`,
-   newer than the moment `run-me-admin.ps1` was written (otherwise the block
-   did not run: say so), whose `elevated` must be `true`
-   (otherwise the block did not run elevated: say so). Then write the whole
-   report again from that one summary, as in steps 3-6: a new
-   `ush:summary` line, a new report file name, and the checker run on it
-   until it prints `OK`. Never merge two summaries into one report: the
-   elevated run reads a superset of the sources. The earlier report stays
-   as it is.
+   `<data dir>/work/health-*.summary.json`, which must be newer than the hand-off (its
+   `generated_at`, UTC, later than the UTC time in the `# Written:` header of
+   `run-me-admin.ps1`, never the file's modification time; `run-me.md` "After
+   the run") and whose `elevated` must be `true`. When it is not newer, or
+   `elevated` is not `true`, the elevated pass did not run, failed or ran
+   without the rights: follow `run-me.md` "After the run", which says when to
+   tell the user to run the same `run-me-admin.ps1` again from an elevated
+   PowerShell and when to ask for the error first. Otherwise write the whole
+   report again from that one summary, as in steps 3-6: a new `ush:summary`
+   line, a new report file name, and the checker run on it until it prints `OK`.
+   Never merge two summaries into one report: the elevated run reads a superset
+   of the sources. The earlier report stays as it is.

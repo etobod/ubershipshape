@@ -361,11 +361,17 @@ or running anything on a schedule. Say so if the user asks for these.
    python -B skills/ush-runall/scripts/runall.py --data-dir "<absolute data dir>"
    ```
 
-   Children with an elevated baseline compare an elevated run only with
-   it, so their first elevated run has no comparison. After the user says
-   it ran, read the newest `<data dir>/work/runall-*.summary.json`,
-   newer than the moment `run-me-admin.ps1` was written (otherwise the block
-   did not run: say so), check
-   that the children that report `elevated` have it `true` (otherwise say
-   that the block did not run elevated), and write a new report from that
-   one pass, as in steps 2-7. Never merge two passes into one report.
+   Children with an elevated baseline compare an elevated run only with it, so
+   their first elevated run has no comparison. After the user says it ran, read
+   the newest `<data dir>/work/runall-*.summary.json`, which must be newer than
+   the hand-off (its `generated_at`, UTC, later than the UTC time in the
+   `# Written:` header of `run-me-admin.ps1`, never the file's modification time;
+   `run-me.md` "After the run"), in which no child with status `ok` has
+   `elevated` `false`: a child whose status is not `ok` shows only as its
+   status, and an `elevated` of `null` (`ush-events` and `ush-advice` report
+   none) is not a missing right. When it is not newer, or a child with status
+   `ok` has `elevated` `false`, the elevated pass did not run, failed or ran
+   without the rights: follow `run-me.md` "After the run", which says when to
+   tell the user to run the same `run-me-admin.ps1` again from an elevated
+   PowerShell and when to ask for the error first. Otherwise write a new report
+   from that one pass, as in steps 2-7. Never merge two passes into one report.
