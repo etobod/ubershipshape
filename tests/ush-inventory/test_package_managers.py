@@ -29,7 +29,7 @@ from datetime import timedelta
 from pathlib import Path
 from unittest import mock
 
-from .fakes import NOW, FakePowerShell, InventoryTestCase, ok
+from .fakes import NOW, FakePowerShell, InventoryTestCase, failure, ok
 from .test_budget import BUDGET, budget_summary, slim_autostart_responses, slim_run_key
 
 # An invented %APPDATA% expansion (not a reading from any machine).
@@ -1029,6 +1029,117 @@ class TestPackageManagersSingleElement(PipTestCase):
         items = self.by_key(self.npm_items(summary))
         self.assertEqual(set(items), {"npm:left-pad"}, sorted(map(str, items)))
         self.assertEqual(items["npm:left-pad"].get("version"), "1.3.0")
+
+
+# Plan 042 M1 (TEST-PLAN (b) "new source" in a diff skill): an unreadable registrations
+# job, a first run with no baseline, and a package added between two runs.
+class TestPackageSourcesDiff(PipTestCase):
+    # The helpers of TestNpm, without running its tests a second time.
+    setUp = TestNpm.setUp
+    npm = TestNpm.npm
+    npm_items = TestNpm.npm_items
+
+    PYTHON_PATH = "C:\\Invented\\DiffPython312"
+    REQUESTS_KEY = "pip:PythonCore/3.12|install|requests"
+    IDNA_KEY = "pip:PythonCore/3.12|install|idna"
+
+    def saved_sources(self, data_dir):
+        state = data_dir / "state" / "ush-inventory.json"
+        self.assertTrue(state.is_file(), f"{state} was not written")
+        saved = json.loads(state.read_text(encoding="utf-8-sig"))
+        sources = saved.get("sources")
+        self.assertIsInstance(sources, dict, sorted(saved))
+        return sources
+
+    def test_registrations_job_fails_keeps_baseline(self):
+        data_dir = self.data_dir()
+        regs = [registration("3.12", self.PYTHON_PATH)]
+        folders = {install_folder(self.PYTHON_PATH): read_folder(
+            package("requests", "2.31.0"), package("idna", "3.6"))}
+        stderr = "Invented registry error: the key HKLM\\Software\\Python could not be opened"
+
+        self.collect(npm_fake(folders, registrations=regs), data_dir=data_dir, now=NOW)
+        run2 = self.collect(
+            npm_fake(folders, extra={"python_registrations": failure(stderr)}),
+            data_dir=data_dir, now=NOW + timedelta(days=1))
+
+        self.assertEqual(self.pip(run2), {"status": "unreadable", "pythons": None})
+        notes = [item for item in self.not_checked(run2)
+                 if item.get("what") == "pip_packages"
+                 and stderr in str(item.get("reason"))]
+        self.assertTrue(notes, run2.get("not_checked"))
+        self.assertEqual(self.comparison(run2).get("pip_packages"), "not_read",
+                         self.comparison(run2))
+        self.assertEqual(self.changes_from(run2, "pip_packages"), [])
+
+        saved_pip = self.saved_sources(data_dir).get("pip_packages")
+        self.assertIsInstance(saved_pip, dict, saved_pip)
+        self.assertTrue({self.REQUESTS_KEY, self.IDNA_KEY} <= set(saved_pip),
+                        sorted(map(str, saved_pip)))
+
+        run3 = self.collect(npm_fake(folders, registrations=regs), data_dir=data_dir,
+                            now=NOW + timedelta(days=2))
+        self.assertEqual(self.comparison(run3).get("pip_packages"), "compared",
+                         self.comparison(run3))
+        self.assertEqual(self.changes_from(run3, "pip_packages"), [])
+
+    def test_first_run_no_comparison(self):
+        regs = [registration("3.12", self.PYTHON_PATH)]
+        fake = npm_fake(
+            {install_folder(self.PYTHON_PATH): read_folder(package("requests", "2.31.0")),
+             DEFAULT_NPM_FOLDER: read_folder(npm_package("left-pad", "1.3.0"))},
+            registrations=regs)
+        summary = self.collect(fake, data_dir=self.data_dir(), now=NOW)
+
+        comparison = self.comparison(summary)
+        self.assertEqual(comparison.get("pip_packages"), "no_baseline", comparison)
+        self.assertEqual(comparison.get("npm_packages"), "no_baseline", comparison)
+        self.assertEqual(self.changes_from(summary, "pip_packages"), [])
+        self.assertEqual(self.changes_from(summary, "npm_packages"), [])
+
+        self.assertEqual(self.source(summary, "pip_packages").get("status"), "read")
+        self.assertEqual(self.source(summary, "npm_packages").get("status"), "read")
+        pip_items = self.by_key(self.pip_items(summary))
+        self.assertEqual(set(pip_items), {self.REQUESTS_KEY}, sorted(map(str, pip_items)))
+        npm_items = self.by_key(self.npm_items(summary))
+        self.assertEqual(set(npm_items), {"npm:left-pad"}, sorted(map(str, npm_items)))
+        for item in list(pip_items.values()) + list(npm_items.values()):
+            self.assertEqual(item.get("status"), "read", item)
+            self.assertNotEqual(item.get("from_baseline"), True, item)
+
+    def test_pip_package_added(self):
+        data_dir = self.data_dir()
+        regs = [registration("3.12", self.PYTHON_PATH)]
+        first = {install_folder(self.PYTHON_PATH): read_folder(
+            package("requests", "2.31.0"))}
+        second = {install_folder(self.PYTHON_PATH): read_folder(
+            package("requests", "2.31.0"), package("idna", "3.6"))}
+
+        self.collect(npm_fake(first, registrations=regs), data_dir=data_dir, now=NOW)
+        run2 = self.collect(npm_fake(second, registrations=regs), data_dir=data_dir,
+                            now=NOW + timedelta(days=1))
+
+        self.assertEqual(self.comparison(run2).get("pip_packages"), "compared",
+                         self.comparison(run2))
+        changes = self.by_key(self.changes_from(run2, "pip_packages"))
+        self.assertEqual({key: change.get("change") for key, change in changes.items()},
+                         {self.IDNA_KEY: "added"})
+
+    def test_npm_package_added(self):
+        data_dir = self.data_dir()
+        first = {DEFAULT_NPM_FOLDER: read_folder(npm_package("left-pad", "1.3.0"))}
+        second = {DEFAULT_NPM_FOLDER: read_folder(
+            npm_package("left-pad", "1.3.0"), npm_package("rimraf", "5.0.5"))}
+
+        self.collect(npm_fake(first), data_dir=data_dir, now=NOW)
+        run2 = self.collect(npm_fake(second), data_dir=data_dir,
+                            now=NOW + timedelta(days=1))
+
+        self.assertEqual(self.comparison(run2).get("npm_packages"), "compared",
+                         self.comparison(run2))
+        changes = self.by_key(self.changes_from(run2, "npm_packages"))
+        self.assertEqual({key: change.get("change") for key, change in changes.items()},
+                         {"npm:rimraf": "added"})
 
 
 if __name__ == "__main__":
