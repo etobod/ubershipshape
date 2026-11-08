@@ -13,7 +13,7 @@ sets the active inbound Allow firewall rules of `ush-inventory` against the
 TCP listening ports of `ush-processes` (items `w1`...), and links each
 pending driver update of `ush-health` to a driver package of
 `ush-inventory` that no present device uses when the provider and the
-driver class are the same
+driver class are the same or paired by `data/driver-link-aliases.json`
 (items `y1`...). A script runs and
 counts; you read the children one at a time, judge and write one Markdown
 report; the user decides what to act on.
@@ -149,7 +149,12 @@ or running anything on a schedule. Say so if the user asks for these.
   `false` whose names match in the JSON go into one entry with both sources (the rule "Links
   between skills"). So does each `driver_update_links` item (`y..`): the
   pending driver update `ush-health q<n>` and the orphan package
-  `ush-inventory o<n>` of the same provider and driver class.
+  `ush-inventory o<n>` it links to: name both sides' provider and class
+  (`provider`, `driver_class`, `package_provider`, `package_class`). Call
+  the two providers the same only when `provider_via` is `equal`, and the
+  two classes the same only when `class_via` is `equal`; when one of them is
+  `table`, say that a line of `driver-link-aliases.json` paired those two
+  names.
 - **Firewall rules as facts.** Describe each `firewall_ports` item by facts:
   the program listens only on the loopback address (`loopback_only` `true`)
   or on other addresses too, and the rule's `profile` set against

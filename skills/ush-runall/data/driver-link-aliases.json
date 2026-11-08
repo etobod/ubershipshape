@@ -1,0 +1,9 @@
+{
+  "classes": [
+    {"windows_update": "Networking", "inf": ["Net"], "seen": "plan 028 M3 run, 2026-11-06"},
+    {"windows_update": "OtherHardware", "inf": ["AudioProcessingObject"], "seen": "plan 028 M3 run, 2026-11-06"}
+  ],
+  "providers": [
+    {"names": ["AMD", "Advanced Micro Devices, Inc"], "seen": "plan 028 M3 run, 2026-11-06"}
+  ]
+}

@@ -40,8 +40,10 @@ and ``not_checked`` says why.
 ``driver_update_links`` links a pending driver update of the ``ush-health`` detail file
 (``pending_updates``, type ``driver``) to a driver package of the ``ush-inventory`` detail
 file that no present device uses (``driver_packages``, ``present_device`` false) when their
-providers and driver classes are equal after case-folding: an item ``y...`` per pair,
-naming both ids, with ``link_counts``. When either list or the inventory source ``drivers`` was not read, both
+providers and driver classes are equal after case-folding or paired by
+``data/driver-link-aliases.json``: an item ``y...`` per pair, naming both ids, both sides'
+provider and class and, per side, whether equal names or a table line matched them, with
+``link_counts``. When either list or the inventory source ``drivers`` was not read, both
 are null and ``not_checked`` names the side.
 
 ``decisions`` checks the user's decisions of ``<data dir>/decisions.json`` (read by the
@@ -81,6 +83,8 @@ SKILL = "ush-runall"
 SCHEMA_VERSION = 1
 SKILLS_DIR = Path(__file__).resolve().parents[2]
 CHILDREN_FILE = SKILLS_DIR / "ush-runall" / "data" / "children.json"
+# Explicit pairs of Windows Update and INF names for the driver update links (D-05).
+ALIASES_FILE = SKILLS_DIR / "ush-runall" / "data" / "driver-link-aliases.json"
 CHILD_KEYS = ("skill", "script", "timeout_s")
 SKILL_NAME = re.compile(r"ush-[a-z]+")  # as check_report.check_skill_name, fullmatch
 FORBIDDEN_SCRIPTS = ("logs.py", "dumps.py")  # they change the disk or a log
@@ -557,12 +561,60 @@ def compare_firewall(outcomes: dict) -> tuple:
     return result, notes
 
 
+def read_link_aliases() -> tuple:
+    """``(classes, groups, reason)`` of the alias table ``ALIASES_FILE``: ``classes`` maps a
+    case-folded Windows Update class to the set of case-folded INF classes it stands for,
+    ``groups`` a case-folded provider name to the number of its group. When the file cannot
+    be read or has a wrong shape, both are empty and ``reason`` says why."""
+    try:
+        data = json.loads(ALIASES_FILE.read_text(encoding="utf-8-sig"))
+    except FileNotFoundError:
+        return {}, {}, "the file is missing"
+    except (OSError, UnicodeDecodeError) as error:
+        return {}, {}, f"the file could not be read: {error}"
+    except json.JSONDecodeError as error:
+        return {}, {}, f"the file is not JSON: {error}"
+
+    def names(value):
+        return (isinstance(value, list) and bool(value)
+                and all(isinstance(name, str) and name.strip() for name in value))
+
+    if not (isinstance(data, dict) and isinstance(data.get("classes"), list)
+            and isinstance(data.get("providers"), list)):
+        return {}, {}, "classes and providers must be lists"
+    classes, groups = {}, {}
+    for line in data["classes"]:
+        update_class = line.get("windows_update") if isinstance(line, dict) else None
+        if not (isinstance(update_class, str) and update_class.strip()
+                and names(line.get("inf"))):
+            return {}, {}, ("every classes line needs a windows_update name and an inf "
+                            "list of names")
+        key = update_class.casefold()
+        if key in classes:
+            return {}, {}, f"the class {update_class!r} appears twice"
+        classes[key] = {name.casefold() for name in line["inf"]}
+    for number, line in enumerate(data["providers"]):
+        members = line.get("names") if isinstance(line, dict) else None
+        if not (names(members) and len(members) >= 2):
+            return {}, {}, "every providers group needs a list of at least two names"
+        for name in members:
+            key = name.casefold()
+            if groups.get(key, number) != number:
+                return {}, {}, f"the provider {name!r} is in two groups"
+            groups[key] = number
+    return classes, groups, None
+
+
 def link_driver_updates(outcomes: dict) -> tuple:
     """``(result, notes)``: one item ``y...`` per pair of a pending driver update of
     ``ush-health`` and a driver package of ``ush-inventory`` that no present device uses,
-    whose providers and driver classes are each equal after case-folding (an update or
-    package without either is linked to nothing), and ``link_counts``. When a side was not
-    read, both are null and one not_checked entry names why."""
+    whose providers are equal after case-folding or in one group of ``ALIASES_FILE``, and
+    whose driver classes are equal after case-folding or the package's class is listed for
+    the update's class there (an update or package without either is linked to nothing),
+    and ``link_counts``. Each item names both sides' provider and class and, in
+    ``provider_via`` and ``class_via``, how that side matched: ``equal`` or ``table``.
+    When a side was not read, both are null and one not_checked entry
+    names why; when the table cannot be used, only equal names link and one entry says so."""
     inputs = ((SKILL_HEALTH, "pending_updates", ("pending_updates",)),
               (SKILL_INVENTORY, "driver_packages", ("driver_packages",)),
               (SKILL_INVENTORY, "drivers", ()))
@@ -581,6 +633,31 @@ def link_driver_updates(outcomes: dict) -> tuple:
                if isinstance(item, dict) and item.get("type") == "driver"]
     packages = [item for item in details[1]["driver_packages"]
                 if isinstance(item, dict) and item.get("present_device") is False]
+    classes, groups, reason = read_link_aliases()
+    notes = []
+    if reason is not None:
+        notes.append({"what": f"driver link alias table ({ALIASES_FILE.name})",
+                      "reason": f"{reason}; only equal provider and class names were "
+                                f"linked"})
+
+    def provider_match(first, second):
+        """``"equal"``, ``"table"`` or None: how two provider names match."""
+        first, second = first.casefold(), second.casefold()
+        if first == second:
+            return "equal"
+        if first in groups and groups[first] == groups.get(second):
+            return "table"
+        return None
+
+    def class_match(update_class, package_class):
+        """``"equal"``, ``"table"`` or None: how an update's class matches a package's."""
+        update_class, package_class = update_class.casefold(), package_class.casefold()
+        if update_class == package_class:
+            return "equal"
+        if package_class in classes.get(update_class, ()):
+            return "table"
+        return None
+
     links, linked_updates, linked_packages = [], set(), set()
     for u, update in enumerate(updates):
         provider, cls = update.get("driver_provider"), update.get("driver_class")
@@ -588,22 +665,27 @@ def link_driver_updates(outcomes: dict) -> tuple:
             continue
         for p, package in enumerate(packages):
             other, other_cls = package.get("provider"), package.get("class")
-            if not isinstance(other, str) or other.casefold() != provider.casefold():
+            if not (isinstance(other, str) and isinstance(cls, str)
+                    and isinstance(other_cls, str)):
                 continue
-            if not (isinstance(cls, str) and isinstance(other_cls, str)
-                    and other_cls.casefold() == cls.casefold()):
+            provider_via = provider_match(provider, other)
+            class_via = class_match(cls, other_cls)
+            if provider_via is None or class_via is None:
                 continue
             links.append({"id": f"y{len(links) + 1}",
                           "update": f"{SKILL_HEALTH} {update.get('id')}",
                           "package": f"{SKILL_INVENTORY} {package.get('id')}",
-                          "provider": provider, "title": update.get("title"),
+                          "provider": provider, "driver_class": cls,
+                          "package_provider": other, "package_class": other_cls,
+                          "provider_via": provider_via, "class_via": class_via,
+                          "title": update.get("title"),
                           "original_name": package.get("original_name")})
             linked_updates.add(u)
             linked_packages.add(p)
     counts = {"linked": len(links),
               "updates_without_package": len(updates) - len(linked_updates),
               "packages_without_update": len(packages) - len(linked_packages)}
-    return {"driver_update_links": links, "link_counts": counts}, []
+    return {"driver_update_links": links, "link_counts": counts}, notes
 
 
 # --- the user's decisions ---------------------------------------------------------------

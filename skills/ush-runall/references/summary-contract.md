@@ -192,11 +192,25 @@ that was not read. Nothing linked gives `[]`, never `null`.
 
 Only updates of `type` `driver` and packages whose `present_device` is
 `false` take part (`true` or `null` never links). An update and a package
-link when the update's `driver_provider` and the package's `provider` are
-equal after case-folding, and so are the update's `driver_class` and the
-package's `class` (an update or package without either links to nothing);
-a provider that only contains the other (`Contoso` and `Contoso Ltd`) does
-not link, nor does a package of the same provider and another class. Each pair is one item, in the
+link when both hold:
+
+- the update's `driver_provider` and the package's `provider` are equal
+  after case-folding, or are in one `providers` group of the table
+  `data/driver-link-aliases.json` (a group works in both directions);
+- the update's `driver_class` and the package's `class` are equal after
+  case-folding, or the package's class is in the `inf` list of the
+  update's class in the table's `classes` (one way only: Windows Update
+  class to INF class).
+
+An update or package without a provider or class links to nothing. Names are
+never matched by similarity: a provider that only contains the other
+(`Contoso` and `Contoso Ltd`) does not link unless a table line pairs them,
+nor does a package of the same provider and another class. Each line of the
+table names the run that showed the pair (`seen`). When the table is missing,
+is not JSON or has a wrong shape (a list that is not a list, an `inf` or
+`names` that is not a list of names, a group of fewer than two names, a name
+in two groups, a Windows Update class twice), only equal names link and
+`not_checked` gets one item naming the file and the reason. Each pair is one item, in the
 order of the updates, then of the packages:
 
 | Field | Meaning |
@@ -205,6 +219,11 @@ order of the updates, then of the packages:
 | `update` | the update as `ush-health q<n>` |
 | `package` | the package as `ush-inventory o<n>` |
 | `provider` | the update's `driver_provider` |
+| `driver_class` | the update's `driver_class` |
+| `package_provider` | the package's `provider` |
+| `package_class` | the package's `class` |
+| `provider_via` | `equal` when the two providers are equal after case-folding, `table` when a provider group of `driver-link-aliases.json` paired them |
+| `class_via` | `equal` when the two classes are equal after case-folding, `table` when a class line of `driver-link-aliases.json` paired them |
 | `title` | the update's `title` |
 | `original_name` | the package's `original_name` |
 

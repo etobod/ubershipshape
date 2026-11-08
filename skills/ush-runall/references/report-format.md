@@ -315,7 +315,13 @@ no installed program matches.
 Each `driver_update_links` item (`y..`) is one entry here with both sources:
 the pending driver update (`ush-health q<n>` in its `update`, with its
 `title`) and the orphan driver package (`ush-inventory o<n>` in its
-`package`, with its `original_name`), tied by the same `provider` and driver class. Such a
+`package`, with its `original_name`), with both sides' provider and class
+(`provider` and `driver_class` of the update, `package_provider` and
+`package_class` of the package). The two providers are the same only when
+`provider_via` is `equal`, and the two classes only when `class_via` is
+`equal`; when one of them is `table`, a line of `driver-link-aliases.json`
+paired those two names, and the entry says so instead of calling them the
+same. Such a
 package is not named a second time as a lone leftover. Then one line with
 `link_counts` (`updates_without_package`, `packages_without_update`).
 `driver_update_links` `null`: say that the updates were not linked and why
