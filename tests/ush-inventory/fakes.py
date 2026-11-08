@@ -241,6 +241,9 @@ class InventoryTestCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.inventory = load_script("ush-inventory", "inventory")
+        # Tests never read the machine: the process environment (NPM_CONFIG_PREFIX)
+        # is replaced by an empty one; a test that needs a variable patches its own.
+        cls.inventory.ENVIRON = {}
 
     def data_dir(self):
         tmp = tempfile.TemporaryDirectory()

@@ -131,6 +131,12 @@ def _summary_data(summary_file, detail_file, *, programs, changes, truncated, ba
         "driver_packages": [],
         # Plan 025 M1: vendor_folders joins the profile's required_keys, empty here.
         "vendor_folders": [],
+        # Plan 029 M2: package_managers joins the profile's required_keys, empty here.
+        "package_managers": {
+            "pip": {"status": "empty", "pythons": []},
+            "npm": {"status": "empty", "prefix_from": "default", "count": 0,
+                    "unreadable": 0},
+        },
     }
 
 
@@ -895,6 +901,104 @@ class TestVendorFoldersProfile(unittest.TestCase):
             any("not named in the report" in line and re.search(r"\bv2\b", line)
                 for line in output.splitlines()),
             f"expected 'not named in the report' naming v2; output:\n{output}")
+
+
+# Plan 029 M2 (K5): package_managers is a required key of the profile.
+PACKAGE_MANAGERS_NOTES = [
+    {"what": "winget",
+     "reason": "not read: `winget list` may go online and has no offline flag"},
+    {"what": "Python installs not registered in PEP 514 (venvs, portable builds)",
+     "reason": "not searched"},
+    {"what": "other package managers (choco, scoop, cargo, go)", "reason": "not searched"},
+]
+
+
+def _summary_package_managers(summary_file, detail_file):
+    """The clean summary plus one Python with 3 packages and npm with 2 packages."""
+    summary = _clean_summary(summary_file, detail_file)
+    summary["sources"] += [{"name": name, "status": "read", "reason": None}
+                           for name in ("pip_packages", "npm_packages")]
+    summary["comparison"].update({"pip_packages": "compared", "npm_packages": "compared"})
+    summary["not_checked"] += [dict(note) for note in PACKAGE_MANAGERS_NOTES]
+    summary["package_managers"] = {
+        "pip": {"status": "read", "pythons": [{
+            "python": "PythonCore/3.12", "count": 3, "unreadable": 0,
+            "folders": {"install": "read", "user": "absent"},
+        }]},
+        "npm": {"status": "read", "prefix_from": "npmrc", "count": 2, "unreadable": 0},
+    }
+    return summary
+
+
+def _summary_without_package_managers(summary_file, detail_file):
+    """The same summary without the package_managers key (a summary before plan 029)."""
+    summary = _summary_package_managers(summary_file, detail_file)
+    summary.pop("package_managers")
+    return summary
+
+
+PACKAGE_MANAGERS_SECTION = [
+    "## Package managers",
+    "- pip, Python PythonCore/3.12: 3 packages, 0 unreadable; the user folder is absent.",
+    "- npm (prefix from .npmrc): 2 global packages, 0 unreadable.",
+    "- No package changes since the baseline.",
+    "- Newer versions are not checked here; that is a matter for ush-advice.",
+    "",
+]
+PACKAGE_MANAGERS_NOT_CHECKED = [
+    "- winget: not read, `winget list` may go online and has no offline flag.",
+    "- Python installs not registered in PEP 514 (venvs, portable builds): not searched.",
+    "- Other package managers (choco, scoop, cargo, go): not searched.",
+]
+
+
+def _report_package_managers_lines(summary_file, with_section=True):
+    """The clean report plus a Package managers section (numbers from
+    _summary_package_managers) and the three not-checked lines."""
+    lines = _clean_report_lines(summary_file)
+    if with_section:
+        at = lines.index("## Not checked")
+        lines[at:at] = PACKAGE_MANAGERS_SECTION
+    return lines + PACKAGE_MANAGERS_NOT_CHECKED
+
+
+class TestPackageManagersProfile(unittest.TestCase):
+    # The helpers of TestProfile, without running its tests a second time.
+    setUp = TestProfile.setUp
+    _assert_real_profile = TestProfile._assert_real_profile
+    _write_summary = TestProfile._write_summary
+    _write_report = TestProfile._write_report
+    _run = TestProfile._run
+    _run_guarded = TestProfile._run_guarded
+
+    def test_package_managers_required(self):
+        self._assert_real_profile()
+
+        summary_file, summary = self._write_summary("inventory-package-managers",
+                                                    _summary_package_managers)
+        self.assertIn("package_managers", summary)
+        lines = _report_package_managers_lines(summary_file)
+        code, output = self._run_guarded(
+            self._write_report(lines, "inventory-2026-11-08-1000.md"))
+        self.assertEqual(code, 0,
+                         f"the report with package managers should pass; output:\n{output}")
+        self.assertIn("OK", output)
+
+        old_file, old = self._write_summary("inventory-before-029",
+                                            _summary_without_package_managers)
+        self.assertNotIn("package_managers", old)
+        lines = _report_package_managers_lines(old_file, with_section=False)
+        self.assertFalse(any("package_managers" in line for line in lines))
+        self.assertNotIn("package_managers", str(self.root), "temp path contains the key")
+        code, output = self._run_guarded(self._write_report(lines, "no-package-managers.md"))
+        self.assertEqual(code, 1, f"output:\n{output}")
+        self.assertNotIn("OK", output)
+        self.assertIn("package_managers", output)
+
+        path = Path(self.check.SKILLS_DIR) / SKILL / "data" / "report-profile.json"
+        profile = json.loads(path.read_text(encoding="utf-8"))
+        self.assertIn("package_managers", profile.get("required_keys") or [],
+                      profile.get("required_keys"))
 
 
 if __name__ == "__main__":

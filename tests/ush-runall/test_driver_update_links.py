@@ -373,6 +373,8 @@ class TestDriverUpdateLinks(RunallTestCase):
     def test_real_detail_files_link(self):
         health = load_script("ush-health", "health")
         inventory = load_script("ush-inventory", "inventory")
+        # Tests never read the machine: no NPM_CONFIG_PREFIX of this process.
+        inventory.ENVIRON = {}
         skills_dir = self.temp() / "skills-data"
 
         health_stdout = self.run_skill(

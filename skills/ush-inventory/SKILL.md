@@ -50,6 +50,10 @@ another way (a shell command, another folder).
 - The user asks what was added to the system: firewall rules, root
   certificates, hosts entries, members of Administrators, Defender
   exclusions.
+- The user asks which packages pip (each Python registered in PEP 514) or npm
+  (global packages) has installed, read offline from the files on disk; winget
+  and other package managers are not read, and newer versions are a matter for
+  `ush-advice`.
 
 Not for: processes running now (`ush-processes`), Windows settings and
 policies (`ush-settings`), the event logs (`ush-events`), the health of

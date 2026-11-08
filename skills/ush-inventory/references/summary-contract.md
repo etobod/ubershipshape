@@ -20,7 +20,9 @@ contract):
   `comparison` and the full lists `programs`, `autostart`, `components`,
   `drivers`, `driver_packages`, `additions`, `leftovers`, `vendor_folders` (every folder read, see "Vendor folders") and `changes` (never truncated), with the same ids
   as the summary, plus `vendor_folder_roots`, `hosts_file` (with `raw_dir`, `expanded_dir` and
-  `path`), `current_sid` and `drivers_without_inf_items` (see "Drivers"). It also holds what the summary leaves out: the
+  `path`), `current_sid`, `drivers_without_inf_items` (see "Drivers") and the package lists
+  `pip_packages` and `npm_packages` (every package read, each item with its `key`; see
+  "Package managers"). It also holds what the summary leaves out: the
   programs, autostart entries, drivers, firewall rules and certificates
   that are part of Windows, the entries with `own: null`, the components
   that are not listed, the changes of own items, the fields the summary
@@ -45,6 +47,7 @@ did not make the summary fit:
 
 | Stage | List | Count key | Cut first |
 |---|---|---|---|
+| 0 | `changes`, its `pip_packages` and `npm_packages` changes (the last sources, so the end of the list), down to none of them | `truncated_changes` (with `change_counts`) | the end of the change order |
 | 1 | `programs`, down to the 20 newest (`PROGRAMS_MIN`) | `truncated` | programs without an install date, then the oldest installs |
 | 2 | `vendor_folders`, down to the first 10 (`VENDOR_FOLDERS_MIN`) | `truncated_vendor_folders` | the end of the folder order (by the order of `roots`, then by name) |
 | 3 | `driver_packages`, down to the first 10 (`DRIVER_PACKAGES_MIN`) | `truncated_driver_packages` | the end of the package order (`provider`, `original_name`, `version`) |
@@ -63,7 +66,9 @@ did not make the summary fit:
 | 16 | `changes`, below the first 20 | `truncated_changes` | as in stage 14 |
 | 17 | `components`, `driver_packages`, `drivers`, `vendor_folders`, `additions`, then `programs`, each to nothing | as in stages 8 to 13 | as in stages 8 to 13 |
 
-Stages 1 to 6 keep a short list of each: a list with fewer items than its
+Stage 0 runs before any other list is cut: the package changes go first,
+whatever their number, and the changes of the other sources stay. Stages 1
+to 6 keep a short list of each: a list with fewer items than its
 minimum keeps them all. Every short list keeps its minimum before any list
 goes below it, and `autostart` goes to its short list (stage 7) before any
 short list goes below its minimum. Then components go to nothing, then driver
@@ -127,6 +132,8 @@ the summary goes out over the limit and `not_checked` gets the item
 | `hosts` | the `hosts` file in the folder of `HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\DataBasePath` (a missing value fails the job; a missing file is read and holds no entries) | additions (`hosts_entry`), `hosts_file` |
 | `administrators` | the members of Administrators (`S-1-5-32-544`) by `Get-LocalGroupMember`, with `Enabled` from `Get-LocalUser` for local and Microsoft accounts; when `Get-LocalGroupMember` fails, ADSI. The source entry has `method`: `local_group_member` or `adsi` (`null` when the job gave nothing) | additions (`administrator`) |
 | `defender_exclusions` | only with administrator rights (same reason as `capabilities` otherwise): `Get-MpPreference`, or, when it fails (e.g. another antivirus is active), the value names of `HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\*`; in both cases the value names of the policy keys `HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Exclusions\*`. The source entry has `method`: `preference`, `registry` or `null` (not run or nothing given). A value Defender hides (`N/A: ...`) makes the source `unreadable` | additions (`defender_exclusion`) |
+| `pip_packages` | the Pythons registered under PEP 514 (`HKCU\Software\Python` once, `HKLM\SOFTWARE\Python` in the 64-bit and the 32-bit view; job `python_registrations`), and for each the `*.dist-info\METADATA` and `*.egg-info\PKG-INFO` files (the first `Name:` and `Version:` header lines) of `<InstallPath>\Lib\site-packages` and of the per-user `%APPDATA%\Python\Python<XY>[-32]\site-packages` (job `package_folders`, layout `python`). pip and python never run. `read` with at least one Python whose folders were looked at, `empty` with none (no registration, or every one skipped: from the Microsoft Store, without an InstallPath, or without a company or tag, each named in `not_checked`), `unreadable` when the registrations could not be read | `package_managers.pip`, the detail list `pip_packages` |
+| `npm_packages` | the npm global prefix: a non-blank environment variable `NPM_CONFIG_PREFIX` (its name in any case; `.npmrc` is then not read), else the first `prefix=` line of `%USERPROFILE%\.npmrc` (spaces around `=` allowed; job `npmrc`), else `%APPDATA%\npm`; the prefix stays raw, its `%VAR%` expanded by the job `package_folders`; then `name` and `version` of each `<prefix>\node_modules\*\package.json` and `<prefix>\node_modules\@<scope>\*\package.json` (job `package_folders`, layout `npm`; a folder without `package.json`, such as `.bin`, is no package; an empty, `null` or non-object `package.json`, or one without a string `version`, is a package with status `unreadable`). npm never runs. `read` with at least one package; `empty` when `node_modules` is missing ("npm not present") or holds no package; `unreadable` when `.npmrc` or the folder could not be read, or when nothing but scope folders that could not be listed came, never `empty` | `package_managers.npm`, the detail list `npm_packages` |
 | `vendor_folders` | the direct child folders of the roots of `data/vendor-folders.json` (see "Vendor folders"); `read` when at least one root was listed (each root that could not be listed is a `not_checked` item `vendor_folders <root>`); `unreadable` when the job failed, no root could be listed or the data file could not be used. Not a baseline source: it is not in `comparison` and has no changes | vendor folders |
 
 A missing key (no `StartupApproved` key, no `RunOnce` key, no `Uninstall` key
@@ -172,6 +179,8 @@ Every item has a stable `key`, the same in every run:
 | `administrators` | `admin:<SID>` |
 | `defender_exclusions` | `defender:<path / extension / process / ip>:<value, lower case>` |
 | `vendor_folders` | `vendor_folder:<path>`, case-folded |
+| `pip_packages` | `pip:<company>/<tag>\|<install / user>\|<name>`, the name normalised by PEP 503 (runs of `-`, `_`, `.` as one `-`) and case-folded; for a file that could not be read the name comes from the folder name. A second entry of the same name in one folder (a stale `dist-info`) gets `\|<entry, case-folded>` added; the plain key goes to the higher version |
+| `npm_packages` | `npm:<name>`, case-folded: the install name, i.e. the `node_modules` entry (`left-pad`, `@contoso/tool`), which is the package name; the same key when `package.json` could not be read |
 
 The hive part of a `run:` key names the registry key: `hkcu` is
 `HKCU\Software\Microsoft\Windows\CurrentVersion`, `hklm64` is
@@ -185,13 +194,13 @@ Besides the shared fields (`schema_version`, `skill` = `"ush-inventory"`,
 `generated_at`, `sources`, `not_checked`, `summary_file`, `detail_file`,
 `truncated`), a summary has (each key is always present; the profile's
 `required_keys` make the report checker fail a summary without
-`components`, `component_counts`, `drivers`, `driver_packages`, `additions`, `hosts_file` or `vendor_folders`):
+`components`, `component_counts`, `drivers`, `driver_packages`, `additions`, `hosts_file`, `vendor_folders` or `package_managers`):
 
 | Field | Type | Meaning |
 |---|---|---|
 | `elevated` | bool | the run had administrator rights; it then reads and writes the elevated baseline |
 | `baseline` | object | shared contract, "Baseline": `status` (`none`, `compared`, `unreadable`), `created_at`, `age_days`, `saved`, `reason`, `reference` (`latest` or the `--compare-to` value, e.g. `7d`) and `reference_file` (the history copy compared with, or `null`). `created_at` and `age_days` are those of the state compared with |
-| `comparison` | object | per item source (`win32_programs`, `msix_programs`, `run_keys`, `startup_folders`, `scheduled_tasks`, `services`, `optional_features`, `capabilities`, `drivers`, `driver_packages`, `firewall_rules`, `root_certificates`, `hosts`, `administrators`, `defender_exclusions`): `compared`, `no_baseline` or `not_read` (shared contract). A source added to the skill after the baseline was made is `no_baseline` on the first run |
+| `comparison` | object | per item source (`win32_programs`, `msix_programs`, `run_keys`, `startup_folders`, `scheduled_tasks`, `services`, `optional_features`, `capabilities`, `drivers`, `driver_packages`, `firewall_rules`, `root_certificates`, `hosts`, `administrators`, `defender_exclusions`, `pip_packages`, `npm_packages`): `compared`, `no_baseline` or `not_read` (shared contract). A source added to the skill after the baseline was made is `no_baseline` on the first run |
 | `truncated_vendor_folders`, `truncated_driver_packages`, `truncated_drivers`, `truncated_components`, `truncated_additions`, `truncated_autostart`, `truncated_changes` | int | the items cut from `vendor_folders`, `driver_packages`, `drivers`, `components`, `additions`, `autostart` and `changes` (see "Files and output"), `0` when none (also when the list is `null`) |
 | `autostart_counts` | object or `null` | `{kind: number}` of the whole `autostart` list when it was cut, else `null` |
 | `change_counts` | object or `null` | `{source: {added, removed, changed}}` of the whole `changes` list (a collapsed entry by its `count`) when it was cut, else `null` |
@@ -206,6 +215,7 @@ Besides the shared fields (`schema_version`, `skill` = `"ush-inventory"`,
 | `leftovers` | list | what removed programs left, never cut (see "Leftovers"); ids `l..`; `[]` when nothing is left |
 | `vendor_folders` | list or `null` | the top-level folders of the vendor roots that no rule matches, cut to the budget like `driver_packages` (`truncated_vendor_folders`, see "Files and output" and "Vendor folders"): `matched` `false` (no installed program matches) or `matched` `null` with `not_judged` (not judged, because something was not read); ids `v..`; `[]` with `truncated_vendor_folders` `0` when every folder read is matched or a Windows name (with `truncated_vendor_folders` above `0` the folders were cut: give the count, never call the list clean) |
 | `hosts_file` | object | `{exists, path_is_default}` and, when any is `null`, `unread_fields` naming it (see "hosts_file") |
+| `package_managers` | object | `{pip, npm}`: counts only, the packages are in the detail file (see "Package managers") |
 | `own_counts` | object | `programs`: the number of programs with `own: true`; `autostart`: `{kind: number}` of the entries with `own: true`, per `kind`; `unknown`: the number of entries with `own: null`; `drivers`: the drivers with `own: true` (`null` when not read); `firewall_rules`: `{local, app_iso, policy}` numbers of rules with `own: true` per store (`null` when not read); `root_certificates`: the certificates with `own: true` (`null` when not read) |
 | `changes` | list | the changes since the baseline whose item is not own on at least one side; ids `c..`. The changes named by a rule of `data/collapsed_names.json` (a list of `{source, collapsed, prefix}`; today the firewall rules whose `name` starts with `ms-resource:`, an unresolved resource string, case-insensitive) are collapsed: one entry `{collapsed, source, change, count}` (e.g. `{collapsed: "ms-resource", source: "firewall_rules", change, count}`) per rule and change type, without an id, ahead of the other changes, so the budget cuts the other changes first; the detail file keeps each with its id. Cut to the budget (`truncated_changes`, `change_counts`) |
 | `own_changes` | object | `{added, removed, changed, by_source}`: the counts of the changes of items that are own on every side they have; those changes are only in the detail file. `by_source` is `{<source>: {added, removed, changed}}` for every item source of `comparison`, zeros included, so the model can say which source they came from (e.g. firewall rules after an update) |
@@ -684,6 +694,50 @@ data file could not be used (the roots are then unknown).
 
 This skill has no block for a folder (`--block v<n>` says so).
 
+### Package managers
+
+`package_managers` holds counts; every package is in the detail lists
+`pip_packages` and `npm_packages`. Their changes are in `changes` with the
+other sources, and because `pip_packages` and `npm_packages` are the last
+sources, their changes come last and the budget cuts them first. Newer
+versions are not looked up (that needs the network; a later plan of
+ush-advice): a count, never a verdict.
+
+`package_managers.pip` is `{status, pythons}`: `status` as the source
+`pip_packages`; `pythons` is `[]` when no Python's packages were read: none is
+registered, or every registration was skipped, each with its `not_checked`
+entry (`what` `Python <tag> from the Microsoft Store (WindowsApps)`; `what`
+`pip_packages <company>/<tag>` with a reason naming no InstallPath; `what`
+`pip_packages registration` for one without a company or tag), `null` when the registrations
+could not be read, else one entry per Python:
+
+| Field | Meaning |
+|---|---|
+| `python` | `<company>/<tag>` of the PEP 514 registration (`PythonCore/3.12`) |
+| `count` | the packages read in both folders; `null` when a folder exists but could not be listed (the folder is in `not_checked`), never `0` |
+| `unreadable` | the packages whose metadata file could not be read |
+| `folders` | `{install, user}`: `read`, `absent` (the folder does not exist, counted `0`), `unreadable`, or `skipped` (the user folder name is not known from the registration; named in `not_checked`) |
+
+`package_managers.npm` is `{status, prefix_from, count, unreadable}`:
+
+| Field | Meaning |
+|---|---|
+| `status` | as the source `npm_packages`: `read`, `empty` (no `node_modules` folder: npm not present, or no package in it), `unreadable` |
+| `prefix_from` | `NPM_CONFIG_PREFIX` (the environment variable), `npmrc` (a `prefix=` line of `%USERPROFILE%\.npmrc`) or `default` (`%APPDATA%\npm`), in that order; `null` when `.npmrc` could not be read |
+| `count` | the packages read; `0` for `empty`; `null` for `unreadable` and when a scope folder (`@<scope>`) could not be listed, never `0` |
+| `unreadable` | the packages whose `package.json` could not be read; `null` for `unreadable` |
+
+Items of the detail lists:
+
+| Field | Meaning |
+|---|---|
+| `key` | see "Keys" |
+| `python`, `folder` | `pip_packages`: the Python and `install` or `user`. `npm_packages` has `folder`, the package folder (`<prefix>\node_modules\<name>`, the prefix raw) |
+| `name`, `version` | as the metadata says (`Name`/`Version`, `name`/`version`); for a file that could not be read `version` is `null` and named in `unread_fields` (never compared), and `name` is `null` (pip) or the folder entry (npm) |
+| `status`, `reason` | `read`, or `unreadable` with the reason |
+| `entry` | pip, `unreadable` only: the `dist-info` / `egg-info` entry |
+| `from_baseline` | `true` when the folder could not be read in this run and the item is the previous baseline's |
+
 ### Changes (`c..`)
 
 | Field | Meaning |
@@ -712,6 +766,7 @@ Compared fields:
 | `hosts` | none: the key holds the name and the address, and `line` is not compared, so a moved line is no change and any other change is `added` or `removed` |
 | `administrators` | `name`, `enabled` |
 | `defender_exclusions` | `origin` |
+| `pip_packages`, `npm_packages` | `version` |
 
 A fact change is named by its target, for example
 `facts[C:\Program Files\Invented Editor\tray.exe].signature_status`. A target
@@ -928,3 +983,12 @@ Besides one item per `unreadable` source (`what` = the source name):
 | `vendor_folders <root>` | that root could not be listed; its folders are in no list, those of the other roots are |
 | `vendor_folders rows` | child folder rows of the job that are not a direct child of their root or lack `reparse_point`; the reason gives their number |
 | `collapsed_names.json` | the collapse rule file could not be used; no change is collapsed in the summary `changes` |
+| `Python installs not registered in PEP 514 (venvs, portable builds)` | every run: "not searched" |
+| `winget: not read` | every run: "`winget list` may go online and has no offline flag" |
+| `other package managers (choco, scoop, cargo, go)` | every run: "not searched" |
+| `Python <tag> from the Microsoft Store (WindowsApps)` | a registered Python under `WindowsApps`: "packages not read" |
+| `pip_packages <company>/<tag>`, `pip_packages registration` | a registration without company, tag or install path, or a second one with the same company and tag; its packages are not read |
+| `pip_packages <company>/<tag> <install / user>` | that folder could not be listed (the Python's `count` is `null`), or the user folder is not known from the registration (`skipped`); its items keep the previous baseline's |
+| `npm_packages` | the source is `unreadable`: `.npmrc` or the global `node_modules` folder could not be read (the reason says which); `package_managers.npm.count` is `null`. A missing `node_modules` is no item of this kind: npm is not present at that prefix (see the next row) |
+| `npm global packages under another prefix` | `package_managers.npm.status` is `empty`: the global `node_modules` folder of the prefix read (from `NPM_CONFIG_PREFIX`, `.npmrc` or the default) is absent or holds no package: "the prefixes from the global or builtin npmrc and the folder of node.exe (nvm-windows, zip builds) were not searched". Not added with status `read` or `unreadable` |
+| `npm_packages <node_modules folder>\@<scope>` | that scope folder could not be listed (the reason says why); its packages keep the previous baseline's items (`from_baseline`), no `npm:@<scope>` item is listed, and `package_managers.npm.count` is `null` |
