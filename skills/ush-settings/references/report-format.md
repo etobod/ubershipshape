@@ -120,8 +120,10 @@ required.
      `catalogue_changes`: "The catalogue gained <added> and lost <removed>
      settings since the baseline; these are not changes of the machine."
    - One section per area with listed entries, `differs` first: each entry
-     (`e..`) with `title`, `effective`, `expected`, `source` and, for a
-     policy, `from_policy_on_home`. Then the `not_read` and `default_unknown`
+     (`e..`) with `title`, `effective`, `expected`, `source`, for a
+     policy `from_policy_on_home`, and with `expected_from` the note that the
+     expectation is the user's decision (`expected_from`, e.g. "decision
+     D1"), not the catalogue's. Then the `not_read` and `default_unknown`
      entries with their `reason`, then the `info` entries (read, with no
      expected value). Each finding gets a recommendation with the problem in
      plain words (`Problem`), what to do now (`Co zrobić`) and `weight`,

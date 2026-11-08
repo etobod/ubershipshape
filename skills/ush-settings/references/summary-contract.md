@@ -56,6 +56,30 @@ that is only reported), `default` (the Windows default when nothing is set,
 `manual` step), and optionally `applies_if` (`{entry, in}`) and
 `rollback_manual`.
 
+## The user's decisions
+
+`<data dir>/decisions.json` (outside the repository, written only from
+decisions the user confirmed) is read by `<plugin root>/skills/ush-common/scripts/decisions.py`
+after the catalogue loads. It holds `{"schema_version": 1, "decisions": [...]}`;
+each decision has `id` (`D<n>`, unique), `made` (a date, `YYYY-MM-DD`),
+`text` (the user's words), `source` (the repair plan or the chat date) and
+`checks`, a non-empty list of `{"kind": "setting", "skill": "ush-settings",
+"item": "<catalogue id>", "expected": <value or list>}` or `{"kind":
+"vendor_absent", "match": "publisher" | "provider" | "folder", "name":
+"<exact name>"}` (ush-settings uses only the `setting` checks).
+
+- No file: nothing changes and `not_checked` says nothing about it.
+- A readable file: a `setting` check replaces that entry's `expected` with
+  its value as a list, so `state` is `matches` or `differs` against the
+  user's decision, and the item carries `expected_from` (`"decision
+  D<n>"`).
+- An unreadable file (bad JSON, a bad shape, a check of an unknown kind, an
+  item id the catalogue does not have, a check on an entry whose catalogue
+  `expected` is `null`, an `expected` value of another kind (bool, number,
+  string) than the catalogue's, two `setting` checks for one item):
+  no decision is used, every `expected` stays the catalogue's, and
+  `not_checked` has a `decisions.json` item with the reason.
+
 ## Sources
 
 `sources` is a list of `{name, status, reason}`, one per job the catalogue
@@ -98,7 +122,9 @@ and is named in `not_checked`. When `capability_usage` is `unreadable`,
 ## Settings items
 
 Summary fields: `id` (`e1`...), `entry` (the catalogue id), `area`,
-`level`, `title`, `state`, `effective`, `expected`, `source`,
+`level`, `title`, `state`, `effective`, `expected`, `expected_from`
+(only on an item whose `expected` comes from the user's decision:
+`"decision D<n>"`; see "The user's decisions"), `source`,
 `from_policy_on_home`, `reason`, `has_block`, and in an elevated run
 `hkcu_elevated`.
 
@@ -193,7 +219,12 @@ and only printed lines count as commands; texts are
 quoted with `psrun.ps_quote`. An item without a block gives a `# <id>
 <entry>: no block: <reason>` comment: already as expected, not read, does not
 apply, set by a policy above the target, no scripted change, a previous
-value that cannot be restored safely, a firewall profile whose local setting
+value that cannot be restored safely, `set by decision D<n>` (an item with
+`expected_from` whose catalogue change would set a value outside the
+decision's `expected`; `--block` reads `decisions.json` again from the data
+directory, so a decision recorded after the collection counts too, and when
+it cannot be read it prints a `# decisions.json ...; the decisions of the
+detail file apply` line: no block ever undoes a user decision), a firewall profile whose local setting
 was not read or is not what decides its effective state, or read in an
 elevated run (no normal-shell commands from such a detail file). The
 firewall rollback writes back the local setting. Exit 0 with at least one command,

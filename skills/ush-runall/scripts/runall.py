@@ -43,6 +43,21 @@ file that no present device uses (``driver_packages``, ``present_device`` false)
 providers and driver classes are equal after case-folding: an item ``y...`` per pair,
 naming both ids, with ``link_counts``. When either list or the inventory source ``drivers`` was not read, both
 are null and ``not_checked`` names the side.
+
+``decisions`` checks the user's decisions of ``<data dir>/decisions.json`` (read by the
+shared ``decisions`` module, its setting checks validated against the settings
+catalogue) against the child detail files of this pass: an item ``j...`` per decision with
+``decision``, ``state`` (``kept``, ``broken`` or ``not_checked``), ``evidence`` (a list of
+``{skill, id}``), ``reason``, ``text``, ``made`` and ``source``. A ``setting`` check reads the
+``ush-settings`` item of its catalogue entry: ``matches`` is kept, ``differs`` broken, any
+other state not checked. A ``vendor_absent`` check compares its exact name, case-folded,
+with the inventory ``programs`` publishers, the driver ``provider`` of the inventory
+``driver_packages`` and ``drivers`` and of the ``ush-health`` ``pending_updates``, or the
+``name`` of every inventory ``vendor_folders`` item; a source not read in this run, or a
+list that is null or missing, makes it not checked. A decision is broken when a check is
+broken, kept only when every check was made and kept; a broken item's ``evidence``
+holds only the items of its broken checks. No file gives ``[]``; a file that
+cannot be used gives ``null`` and one ``not_checked`` entry.
 """
 
 import argparse
@@ -59,6 +74,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).absolute().parents[2] / "ush-common" / "scripts"))
 
 import datadir
+import decisions as decisions_file
 from psrun import dump
 
 SKILL = "ush-runall"
@@ -73,10 +89,21 @@ FORBIDDEN_SCRIPTS = ("logs.py", "dumps.py")  # they change the disk or a log
 SCRIPT_NAME = re.compile(r"[a-z_]+\.py")
 # A child that reads the baseline of another must run after it: (earlier, later).
 ORDER_RULES = (("ush-inventory", "ush-processes"),)
-DETAIL_SECTIONS = ("children", "firewall_ports", "driver_update_links")
+DETAIL_SECTIONS = ("children", "firewall_ports", "driver_update_links", "decisions")
 SKILL_HEALTH = "ush-health"
 SKILL_INVENTORY = "ush-inventory"
 SKILL_PROCESSES = "ush-processes"
+SKILL_SETTINGS = "ush-settings"
+CATALOGUE_FILE = SKILLS_DIR / SKILL_SETTINGS / "data" / "settings-catalogue.json"
+# vendor_absent match -> ((skill, source, detail section, field compared), ...)
+VENDOR_LISTS = {
+    "publisher": ((SKILL_INVENTORY, "win32_programs", "programs", "publisher"),
+                  (SKILL_INVENTORY, "msix_programs", "programs", "publisher")),
+    "provider": ((SKILL_INVENTORY, "driver_packages", "driver_packages", "provider"),
+                 (SKILL_INVENTORY, "drivers", "drivers", "provider"),
+                 (SKILL_HEALTH, "pending_updates", "pending_updates", "driver_provider")),
+    "folder": ((SKILL_INVENTORY, "vendor_folders", "vendor_folders", "name"),),
+}
 # (skill, source that must be read, detail sections the comparison needs)
 FIREWALL_INPUTS = ((SKILL_INVENTORY, "firewall_rules", ("additions",)),
                    (SKILL_PROCESSES, "tcp_listeners", ("groups", "ports")))
@@ -427,8 +454,9 @@ def firewall_ports(inventory_detail: dict, processes_detail: dict,
             "network_categories": (processes_summary or {}).get("network_categories")}
 
 
-def read_child_detail(skill: str, outcome, source: str, sections: tuple):
-    """``(detail, None)`` of an ok child whose ``source`` was read, or ``(None, reason)``."""
+def read_child_detail(skill: str, outcome, source, sections: tuple):
+    """``(detail, None)`` of an ok child whose ``source`` was read (``None``: no source is
+    required), or ``(None, reason)``."""
     if outcome is None:
         return None, f"{skill} is not in children.json"
     if outcome["status"] != "ok":
@@ -444,7 +472,7 @@ def read_child_detail(skill: str, outcome, source: str, sections: tuple):
         return None, f"the {skill} detail file does not hold an object"
     entries = [entry for entry in detail.get("sources") or []
                if isinstance(entry, dict) and entry.get("name") == source]
-    if not entries:
+    if source is not None and not entries:
         return None, f"source {source} is not in the {skill} detail file"
     for entry in entries:
         if entry.get("status") not in READ_STATUSES:
@@ -578,13 +606,137 @@ def link_driver_updates(outcomes: dict) -> tuple:
     return {"driver_update_links": links, "link_counts": counts}, []
 
 
+# --- the user's decisions ---------------------------------------------------------------
+def catalogue_expectations():
+    """``{entry id: expected}`` of the settings catalogue, or None when it cannot be read
+    (the setting checks are then measured only against the ``ush-settings`` items)."""
+    try:
+        data = json.loads(CATALOGUE_FILE.read_text(encoding="utf-8-sig"))
+        return {entry["id"]: entry.get("expected") for entry in data["entries"]}
+    except (OSError, UnicodeDecodeError, ValueError, TypeError, KeyError):
+        return None
+
+
+def check_setting(check: dict, outcomes: dict) -> tuple:
+    """``(state, evidence, reason)`` of one ``setting`` check."""
+    detail, reason = read_child_detail(SKILL_SETTINGS, outcomes.get(SKILL_SETTINGS), None,
+                                       ("settings",))
+    if reason is not None:
+        return "not_checked", [], reason
+    items = [item for item in detail["settings"]
+             if isinstance(item, dict) and item.get("entry") == check["item"]]
+    if not items:
+        return "not_checked", [], f"no {SKILL_SETTINGS} item for {check['item']}"
+    item = items[0]
+    evidence = [{"skill": SKILL_SETTINGS, "id": item.get("id")}]
+    if item.get("expected") != check["expected"]:
+        return "not_checked", evidence, (
+            f"{SKILL_SETTINGS} {item.get('id')} was measured against "
+            f"{item.get('expected')!r}, not the decision's {check['expected']!r}")
+    state = item.get("state")
+    if state == "matches":
+        return "kept", evidence, None
+    if state == "differs":
+        return "broken", evidence, None
+    return "not_checked", evidence, f"{SKILL_SETTINGS} {item.get('id')} is {state}"
+
+
+def unread_roots(detail: dict):
+    """The reason no folder check can be made from ``vendor_folder_roots``, or None."""
+    roots = detail.get("vendor_folder_roots")
+    if not isinstance(roots, list):
+        return f"the {SKILL_INVENTORY} detail file has no list vendor_folder_roots"
+    unread = [str(root.get("root")) if isinstance(root, dict) else repr(root)
+              for root in roots
+              if not (isinstance(root, dict) and root.get("status") == "read")]
+    if unread:
+        return f"vendor folder roots not read: {', '.join(unread)}"
+    return None
+
+
+def check_vendor(check: dict, outcomes: dict) -> tuple:
+    """``(state, evidence, reason)`` of one ``vendor_absent`` check."""
+    name = check["name"].casefold()
+    evidence, reasons = [], []
+    for skill, source, section, field in VENDOR_LISTS[check["match"]]:
+        detail, reason = read_child_detail(skill, outcomes.get(skill), source, (section,))
+        if reason is not None:
+            reasons.append(reason)
+            continue
+        if section == "vendor_folders":
+            # A root not read leaves the check open, but a hit under a root that was
+            # read is still a hit.
+            root_reason = unread_roots(detail)
+            if root_reason is not None:
+                reasons.append(root_reason)
+        for item in detail[section]:
+            if not isinstance(item, dict):
+                continue
+            if section == "programs" and item.get("source") != source:
+                continue
+            value = item.get(field)
+            if not (isinstance(value, str) and value.casefold() == name):
+                continue
+            hit = {"skill": skill, "id": item.get("id")}
+            if section == "vendor_folders":
+                hit.update(folder=item.get("name"), root=item.get("root"))
+            evidence.append(hit)
+    if evidence:
+        return "broken", evidence, "; ".join(reasons) or None
+    if reasons:
+        return "not_checked", [], "; ".join(reasons)
+    return "kept", [], None
+
+
+def check_one_decision(item_id: str, decision: dict, outcomes: dict) -> dict:
+    """The ``j`` item of one decision."""
+    states, found_by_check, unmade = [], [], []
+    for n, check in enumerate(decision["checks"], 1):
+        if check["kind"] == "setting":
+            label = f"check {n} (setting {check['item']})"
+            state, found, reason = check_setting(check, outcomes)
+        else:
+            label = f"check {n} (vendor_absent {check['match']} {check['name']!r})"
+            state, found, reason = check_vendor(check, outcomes)
+        states.append(state)
+        found_by_check.append(found)
+        if reason:
+            unmade.append(f"{label}: {reason}"[:REASON_MAX])
+    # A broken decision keeps only the evidence of its broken checks: what came back.
+    broken = "broken" in states
+    evidence = [entry for check_state, found in zip(states, found_by_check)
+                if not broken or check_state == "broken" for entry in found]
+    if broken:
+        state = "broken"
+    elif all(value == "kept" for value in states):
+        state = "kept"
+    else:
+        state = "not_checked"
+    return {"id": item_id, "decision": decision["id"], "state": state,
+            "evidence": evidence, "reason": "; ".join(unmade) or None,
+            "text": decision["text"], "made": decision["made"],
+            "source": decision["source"]}
+
+
+def check_decisions(outcomes: dict, data_dir: Path) -> tuple:
+    """``(items or None, notes)``: one ``j`` item per decision of ``decisions.json``;
+    ``[]`` without the file, ``None`` and one not_checked entry when it cannot be used."""
+    loaded = decisions_file.load(data_dir, catalogue_expected=catalogue_expectations())
+    if loaded["status"] == "unreadable":
+        return None, [{"what": f"the user's decisions ({decisions_file.FILE_NAME})",
+                       "reason": f"{loaded['reason']}; no decision was checked"}]
+    return [check_one_decision(f"j{n}", decision, outcomes)
+            for n, decision in enumerate(loaded["decisions"], 1)], []
+
+
 # --- command line -----------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     datadir.add_arguments(parser)
     parser.add_argument("--detail", metavar="ID",
                         help="print one item (a child h1, h2, ..., a firewall item w1, "
-                             "w2, ... or a driver update link y1, y2, ...) of the newest "
+                             "w2, ..., a driver update link y1, y2, ... or a decision j1, "
+                             "j2, ...) of the newest "
                              "detail file and exit; no child is run")
     parser.add_argument("--detail-file", metavar="PATH",
                         help="with --detail: read this detail file (the summary's "
@@ -673,6 +825,8 @@ def main(argv=None, run_child=None, now=None) -> int:
     not_checked.extend(firewall_notes)
     links, link_notes = link_driver_updates(outcomes)
     not_checked.extend(link_notes)
+    decision_items, decision_notes = check_decisions(outcomes, data_dir)
+    not_checked.extend(decision_notes)
     all_ports = firewall["firewall_ports"]
     listed_ports = all_ports[:FIREWALL_PORTS_MAX] if all_ports is not None else None
     cut_ports = len(all_ports) - len(listed_ports) if all_ports is not None else 0
@@ -692,6 +846,7 @@ def main(argv=None, run_child=None, now=None) -> int:
         "network_categories": firewall["network_categories"],
         "driver_update_links": links["driver_update_links"],
         "link_counts": links["link_counts"],
+        "decisions": decision_items,
     }
     detail_file.write_text(dump(detail) + "\n", encoding="utf-8")
 
@@ -712,6 +867,7 @@ def main(argv=None, run_child=None, now=None) -> int:
         "network_categories": firewall["network_categories"],
         "driver_update_links": links["driver_update_links"],
         "link_counts": links["link_counts"],
+        "decisions": decision_items,
     }
     text_out = dump(summary)
     summary_file.write_text(text_out + "\n", encoding="utf-8")

@@ -18,7 +18,8 @@ absolute at once; see the shared contract):
   `schema_version`, `skill`, `generated_at`, `summary_file` (the summary of
   the same run), `children` (one item per child with its full summary),
   `firewall_ports` (every matched rule, no limit), `firewall_ports_counts`,
-  `network_categories`, `driver_update_links` and `link_counts`.
+  `network_categories`, `driver_update_links`, `link_counts` and
+  `decisions`.
 
 Each child writes its own summary, detail file, baseline and id map to the
 same `<data dir>`, as in a run of its own; `runall` keeps no baseline.
@@ -82,6 +83,7 @@ Besides the shared fields (`schema_version`, `skill` `"ush-runall"`,
 | `network_categories` | object or `null` | a copy of `network_categories` of the `ush-processes` summary (network profiles counted per category, `{"Private": 1}`); `null` when that child is not `ok` or its summary has no such value |
 | `driver_update_links` | list or `null` | pending driver updates linked to driver packages no present device uses, ids `y1`... (see "Pending driver updates and orphan driver packages"); `[]` when nothing links; `null` when a side was not read |
 | `link_counts` | object or `null` | `{linked, updates_without_package, packages_without_update}`; `null` with `driver_update_links` `null` |
+| `decisions` | list or `null` | one item per decision of `<data dir>/decisions.json`, ids `j1`... (see "The user's decisions"); `[]` when there is no file; `null` when the file cannot be used (one `not_checked` item names `decisions.json`) |
 | `truncated` | int | `firewall_ports` items cut from the summary by the limit of 50, from the end of the order; `0` when none. The detail file has them all |
 
 The summary holds no child summary and is cut nowhere else; `runall`
@@ -212,6 +214,40 @@ the pending driver updates that link to no package, and
 link to no update. The detail file holds the same list; `--detail y1`
 prints one item.
 
+## The user's decisions (`decisions`, ids `j..`)
+
+After the children, `runall` reads `<data dir>/decisions.json` with the
+shared `decisions` module (`<plugin root>/skills/ush-common/scripts/decisions.py`; its
+`setting` checks validated against the settings catalogue) and gives each
+decision one item, the same in the summary and the detail file:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | string | `j1`... in the order of the file |
+| `decision` | string | the decision's id, `D<n>` |
+| `state` | string | `kept`, `broken` or `not_checked` |
+| `evidence` | list | `{skill, id}` of each child item the checks read or hit; on a `broken` item only those of its broken checks; a vendor folder adds `folder` and `root` (its `id` may be `null`) |
+| `reason` | string or `null` | why a check was not made, one part per check; on a `broken` item, what a check could not read besides its hits (a vendor folder root not read) |
+| `text`, `made`, `source` | string | copied from the decision |
+
+A `setting` check reads the `ush-settings` detail item of its catalogue
+entry: `matches` is `kept`, `differs` is `broken`; any other state, an item
+measured against another expectation than the decision's, a missing item or
+a child that is not `ok` is `not_checked`. A `vendor_absent` check compares
+its `name`, case-folded and exact, with the detail files of this pass,
+never the cut summaries:
+
+| `match` | Lists (sources that must be read) |
+|---|---|
+| `publisher` | `ush-inventory` `programs` `publisher` (`win32_programs`, `msix_programs`) |
+| `provider` | `ush-inventory` `driver_packages` and `drivers` `provider` (`driver_packages`, `drivers`), `ush-health` `pending_updates` `driver_provider` (`pending_updates`) |
+| `folder` | `ush-inventory` `vendor_folders` `name`, matched ones included (`vendor_folders`; a root of `vendor_folder_roots` not `read` leaves the check `not_checked` unless a folder under a read root hits, which is `broken` with that root in `reason`) |
+
+Every hit is evidence and makes the check `broken`; with no hit it is
+`kept` only when every list was read, else `not_checked` (an empty list of
+an unread source is not "no hit"). A decision is `broken` when any check
+is, `kept` only when every check is, and `not_checked` otherwise.
+
 ## not_checked
 
 Besides the shared cases:
@@ -258,7 +294,7 @@ The `not_checked` entries of each child stay in its `h` item.
 ## --detail
 
 `runall.py --detail <id>` prints one item, a child (`h3`), a firewall
-item (`w1`) or a driver update link (`y1`), from the newest `runall-*.detail.json` in `<data dir>/work/`
+item (`w1`), a driver update link (`y1`) or a decision (`j1`), from the newest `runall-*.detail.json` in `<data dir>/work/`
 (by name, so by time) and exits 0. `--detail-file <path>` (the summary's
 `detail_file`) reads that file instead and needs no data directory;
 `--detail-file` without `--detail` is a usage error. An unknown id, no

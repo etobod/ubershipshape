@@ -3,7 +3,7 @@
 The checker loads the real ``skills/ush-runall/data/report-profile.json`` through its
 unpatched ``SKILLS_DIR``; no copy of the profile is used, and the checker is not changed.
 The plan gives the profile: ``report_prefix`` ``runall-``, ``detail_sections``
-children/firewall_ports, ``id_letters`` ``hw`` (``hwy`` since plan 028, M2), ``required_lists`` children/firewall_ports,
+children/firewall_ports, ``id_letters`` ``hw`` (``hwy`` since plan 028, M2; ``hjwy`` since plan 030, M2), ``required_lists`` children/firewall_ports,
 ``required_keys`` children/firewall_ports/firewall_ports_counts, ``truncated`` for
 firewall_ports (w, count_key ``truncated``), ``id_keys`` ``[]`` and ``path_keys``
 summary_file, detail_file, program_path.
@@ -156,6 +156,8 @@ def _clean_summary(summary_file, detail_file):
         "driver_update_links": [],
         "link_counts": {"linked": 0, "updates_without_package": 0,
                         "packages_without_update": 0},
+        # Plan 030, M2: no decisions file, so no decision to name.
+        "decisions": [],
         "truncated": 0,
         "not_checked": [],
     }
@@ -171,7 +173,8 @@ def _detail_data(summary):
             "sources": [], "not_checked": [], "truncated": 0,
             "summary_file": child["summary_file"]}})
     return {"children": children, "firewall_ports": list(summary["firewall_ports"]),
-            "driver_update_links": list(summary.get("driver_update_links") or [])}
+            "driver_update_links": list(summary.get("driver_update_links") or []),
+            "decisions": list(summary.get("decisions") or [])}
 
 
 # --- K6 and K7 ---------------------------------------------------------------------------
@@ -228,7 +231,7 @@ class TestReportProfile(RunallTestCase):
             self.assertEqual(len(path_keys), 3, path_keys)
 
         with self.subTest("id_letters"):
-            self.assertEqual(data.get("id_letters"), "hwy")
+            self.assertEqual(data.get("id_letters"), "hjwy")
 
         with self.subTest("id_keys"):
             self.assertIn("id_keys", data)
@@ -476,6 +479,118 @@ class TestDriverUpdateLinksProfile(unittest.TestCase):
             self.assertEqual(code, 1, f"output:\n{output}")
             self.assertNotIn("OK", output)
             self.assertIn("not named in the report: y1", output)
+
+
+# --- plan 030, M2, K6 ----------------------------------------------------------------------
+
+# A broken user decision (D1) with a ush-settings item as its evidence. Field names as in
+# plan 030, M2: decision, state, evidence [{skill, id}], text, made, source, reason.
+J1_ITEM = {
+    "id": "j1",
+    "decision": "D1",
+    "state": "broken",
+    "evidence": [{"skill": "ush-settings", "id": "e3"}],
+    "text": "Invented: the privacy settings stay as they were set.",
+    "made": "2026-10-31",
+    "source": "invented repair plan",
+    "reason": None,
+}
+J1_LINE = ("- j1: decyzja D1 złamana: ush-settings e3 znów ma dawną wartość. "
+           "Niczego nie zmieniono.")
+
+
+class TestDecisionsProfile(unittest.TestCase):
+    """A report that leaves out a listed ``j`` id fails the checker (plan 030, M2, K6).
+
+    The summary and detail file are hand-written (``_clean_summary`` plus one decision);
+    the real ``skills/ush-runall/data/report-profile.json`` is used, which the plan gives
+    ``j`` in ``id_letters`` and ``decisions`` in ``required_lists``, ``required_keys`` and
+    ``detail_sections``."""
+
+    def setUp(self):
+        self.check = load_script("ush-common", "check_report")
+        tmp = _digit_free_tempdir()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name).resolve()
+        self.work_dir = self.root / "work"
+        self.work_dir.mkdir()
+        self.reports_dir = self.root / "reports"
+        self.reports_dir.mkdir()
+        self.summary_file = self.work_dir / "runall-summary.json"
+        self.detail_file = self.work_dir / "runall-detail.json"
+
+    def _write_data(self):
+        summary = _clean_summary(self.summary_file, self.detail_file)
+        summary["decisions"] = [json.loads(json.dumps(J1_ITEM))]
+        detail = _detail_data(summary)
+        detail["decisions"] = [json.loads(json.dumps(J1_ITEM))]
+        self.summary_file.write_text(json.dumps(summary), encoding="utf-8")
+        self.detail_file.write_text(json.dumps(detail), encoding="utf-8")
+
+    def _write_report(self, decision_lines, name):
+        lines = [
+            f"<!-- ush:summary {self.summary_file} -->",
+            "# Raport zbiorczy, 2026-09-20",
+            "",
+            "## Decyzje",
+            *(decision_lines or ["Brak decyzji do omówienia."]),
+            "",
+            "## Stan przebiegu",
+            "- h1 ush-health: ok, 1.5 s.",
+            "- h2 ush-events: ok, 1.5 s.",
+            "- h3 ush-settings: ok, 1.5 s.",
+            "- h4 ush-inventory: ok, 1.5 s.",
+            "- h5 ush-processes: ok, 1.5 s.",
+            "- h6 ush-files: ok, 1.5 s.",
+            "- h7 ush-advice: ok, 1.5 s.",
+            "- Cały przebieg trwał 10.5 s.",
+            "",
+            "## Zalecenia",
+            "Brak zaleceń w tym przebiegu.",
+            "",
+            "## Powiązania między skillami",
+            "Brak powiązań między ustaleniami różnych skilli.",
+            "",
+            "## Zapora wobec portów nasłuchu",
+            ("- w1: reguła ush-inventory x2 (Invented Server) dopuszcza port 8080; program "
+             "słucha tylko na pętli zwrotnej (127.0.0.1), profil Private; sieci Private: 1."),
+            ("- Pozostałe reguły przychodzące: bez nasłuchu 2, nieporównane 4, UDP 2, "
+             "inny protokół 0."),
+            "",
+            "## Sprzeczne ustalenia",
+            "Brak.",
+            "",
+            "## Nie sprawdzono",
+            "<!-- ush:not-checked -->",
+            "Nic.",
+        ]
+        path = self.reports_dir / name
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return path
+
+    def _run(self, report_path):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                code = self.check.main([str(report_path)])
+            except SystemExit as exc:
+                code = exc.code
+        return code, out.getvalue() + err.getvalue()
+
+    def test_decision_must_be_named(self):
+        self._write_data()
+
+        with self.subTest("control: j1 named"):
+            code, output = self._run(self._write_report([J1_LINE],
+                                                        "runall-2026-09-20-1200.md"))
+            self.assertEqual(code, 0, f"output:\n{output}")
+            self.assertIn("OK", output)
+
+        with self.subTest("j1 not named"):
+            code, output = self._run(self._write_report([], "runall-2026-09-20-1201.md"))
+            self.assertEqual(code, 1, f"output:\n{output}")
+            self.assertNotIn("OK", output)
+            self.assertIn("not named in the report: j1", output)
 
 
 if __name__ == "__main__":

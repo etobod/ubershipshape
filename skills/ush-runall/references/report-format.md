@@ -88,14 +88,14 @@ list); in short:
 
 ## Items the report must name
 
-Every `children[*].id` (`h1`…`h7`), every `firewall_ports[*].id` (`w1`…)
-and every `driver_update_links[*].id` (`y1`…) of the summary appears in a visible line of the report, as a word of its own
+Every `children[*].id` (`h1`…`h7`), every `firewall_ports[*].id` (`w1`…),
+every `driver_update_links[*].id` (`y1`…) and every `decisions[*].id` (`j1`…) of the summary appears in a visible line of the report, as a word of its own
 (`h12` does not name `h1`), each with a short name after it (rule 6 of
 `report-style.md`): the skill for an `h` item, the rule's name or program
-for a `w` item, the provider for a `y` item. An id on an `ush:detail` line, on another marker line or in
+for a `w` item, the provider for a `y` item, the decision (`D<n>`) for a `j` item. An id on an `ush:detail` line, on another marker line or in
 a fenced code block does not count. The check lists each missing id as
-`not named in the report: <id> (<list>)` and fails. A `firewall_ports` that
-or `driver_update_links` that is `null` requires nothing.
+`not named in the report: <id> (<list>)` and fails. A list that is `null`
+(`firewall_ports`, `driver_update_links` or `decisions`) requires no id.
 
 ## Blocks
 
@@ -175,7 +175,29 @@ Right after the header, so the user reads the answer first:
   open repair plans could not be listed, and the reason goes to "Not
   checked"; it is never "no open plans".
 
-### 3. Run state
+### 3. Decisions (Decyzje)
+
+The user's decisions of `<data dir>/decisions.json`, one line per item of
+`decisions` (`j1`…), each with its id, the decision's id (`D<n>`), its
+`text` in short and its `made` date. Order:
+
+- `broken` first: the decision was this, and something came back; give
+  every `evidence` entry as `<skill> <id>` (a vendor folder with `id`
+  `null` by its `folder` name and `root`); when it also has a `reason`,
+  say in plain words what was not searched (a folder root not read) and
+  list it under "Not checked" as well; and say that nothing was
+  changed: the pass only reports, the user decides what to do. A broken
+  decision is also a recommendation of section 5, with the evidence as its
+  sources.
+- `not_checked` next, with its `reason` in plain words: the decision was
+  not checked in this pass, never "kept".
+- `kept` last, in one line per item.
+
+`decisions` `[]` (no file): one line saying that no decisions are recorded.
+`decisions` `null`: the file could not be used; say so, and its
+`not_checked` item goes to "Not checked", never "no decisions".
+
+### 4. Run state
 
 One line per item of `children`, in order: id, skill, `status` in words,
 `duration_s`, and for an `ok` child its `not_checked_count`, its own
@@ -185,7 +207,7 @@ One line per item of `children`, in order: id, skill, `status` in words,
 and that its findings are not in this report; its reason goes to "Not
 checked". Then `counts` in one line.
 
-### 4. Recommendations
+### 5. Recommendations
 
 One list for the whole machine, by weight: `high` first, then `medium`, then
 `low`. Each recommendation has the problem in plain words (`Problem`), what
@@ -216,7 +238,7 @@ first old dump file, `ush-events d<n>` (the file ids are in the `h` item:
 are left out. With `null` the dumps could not be listed: they go under "Not
 checked" with the child's reason, never as "no old dumps".
 
-### 5. Changes since the last run (Zmiany)
+### 6. Changes since the last run (Zmiany)
 
 The pass has updated the baselines of the children, so a later run of a
 single skill will not show these changes again. That is why this section
@@ -247,7 +269,7 @@ its file name or expanded path (the name carries digits no number backs, the
 path the account name). A child whose baseline was missing or unreadable gives
 "no comparison" for it, never "no changes". With none, say so per child.
 
-### 6. Disk clean-up (Porządki)
+### 7. Disk clean-up (Porządki)
 
 One line per item of `cleanup` in the `ush-files` summary (`h6`), in its
 order:
@@ -266,7 +288,7 @@ The section says what each line frees and that the user chooses which, if
 any, to clean. Never a total: do not add the items up or give their sum
 ("Never add children's numbers up").
 
-### 7. Links between skills
+### 8. Links between skills
 
 One entry per link: findings of different children about the same device,
 driver, setting or time (for example a graphics crash after resume in
@@ -299,13 +321,13 @@ package is not named a second time as a lone leftover. Then one line with
 `driver_update_links` `null`: say that the updates were not linked and why
 (the `not_checked` item), never "no link".
 
-### 8. Contradicting findings
+### 9. Contradicting findings
 
 Findings of different children that say different things about the same
 thing, side by side, each with its source and value, without deciding
 between them. With none, say so in one line.
 
-### 9. Firewall rules and listening ports
+### 10. Firewall rules and listening ports
 
 Facts only; the script judges nothing and the report decides no risk on its
 own. First the network categories: `network_categories` in words (`{}`: no
@@ -344,7 +366,7 @@ give `ports_without_path` alone and never write the other count as 0.
 active inbound Allow rule matched a listening program; `null` means the
 comparison was not made: say so and give the reason in "Not checked".
 
-### 10. Run with administrator rights
+### 11. Run with administrator rights
 
 Only when a child has `elevated` `false` and `not_checked` entries that need
 administrator rights:
@@ -363,7 +385,7 @@ python -B skills/ush-runall/scripts/runall.py --data-dir "C:\dane\ush"
 
 Without such entries this section is left out.
 
-### 11. What you can do (Co możesz zrobić)
+### 12. What you can do (Co możesz zrobić)
 
 The last section before "Not checked": the actions of the recommendations
 (their `Co zrobić`), one line each, named by the recommendation's main source,
@@ -374,7 +396,7 @@ after the user decides, the blocks go into a repair plan per
 `repair-plan.md`, not into the chat. With no
 recommendation, it says that nothing needs doing.
 
-### 12. Not checked
+### 13. Not checked
 
 Always last. Its marker stands directly before (or right after) the section
 heading:
@@ -423,6 +445,8 @@ account, an administrator), and shorten a sample around such a value. The
   "no open rules".
 - `driver_update_links` and `link_counts` `null`: not linked, never "no
   pending driver update" or "no link".
+- `decisions` `null`: the decisions file could not be used, never "no
+  decisions"; a `j` item `not_checked`: not checked, never "kept".
 
 ## Degradation cases
 

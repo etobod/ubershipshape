@@ -10,6 +10,7 @@ into the plugin root first, so its script paths stay relative (``skills/...``). 
 inside a four-backtick example are report text quoted as an example, not commands.
 """
 
+import fnmatch
 import json
 import re
 import unittest
@@ -214,6 +215,77 @@ class TestSkillPaths(unittest.TestCase):
         rule = " ".join(read(SKILLS / "ush-common/references/repair-plan.md").split())
         self.assertRegex(
             rule, r"Set-Location[^.]*older plugin version[^.]*\.[^.]*current plugin root")
+
+
+# Skills whose SKILL.md hands the user a block (not ush-advice, which hands off none).
+RUN_ME_SKILLS = ("settings", "health", "inventory", "processes", "files", "runall", "events")
+RUN_ME_FILES = ("run-me.ps1", "run-me-admin.ps1", "run-me.out.txt", "run-me-admin.out.txt")
+OLD_HAND_OFF = ("paste this block", "paste it into", "offer the user this block")
+
+
+def flat(text):
+    return " ".join(text.split())
+
+
+class TestRunMe(unittest.TestCase):
+    """A block for the user is delivered in run-me.ps1 / run-me-admin.ps1 in the cwd
+    (loc/inbox/031-plan-3-medium-run-me-delivery.md, M1)."""
+
+    def test_skills_hand_off_through_run_me(self):
+        for name in RUN_ME_SKILLS:
+            doc = SKILLS / f"ush-{name}" / "SKILL.md"
+            with self.subTest(skill=f"ush-{name}"):
+                self.assertTrue(doc.is_file(), f"ush-{name} has no SKILL.md")
+                text = flat(read(doc))
+                for wanted in ("run-me.md", "run-me.ps1", "run-me-admin.ps1"):
+                    self.assertIn(wanted, text)
+                lowered = text.lower()
+                for phrase in OLD_HAND_OFF:
+                    self.assertNotIn(phrase, lowered, f"still says {phrase!r}")
+
+    def test_rule_holds_its_parts(self):
+        path = SKILLS / "ush-common/references/run-me.md"
+        self.assertTrue(path.is_file(), "ush-common/references/run-me.md is missing")
+        rule = flat(read(path))
+        lowered = rule.lower()
+        # The transcript path is the absolute cwd, written into the file: a pasted
+        # file has no $PSScriptRoot and would write its transcript to the drive root.
+        self.assertNotIn("$PSScriptRoot", rule)
+        for phrase in ('Start-Transcript -Path "<cwd>\\run-me.out.txt"',
+                       'Start-Transcript -Path "<cwd>\\run-me-admin.out.txt"',
+                       "finally { Stop-Transcript }",
+                       "run-me.out.txt",
+                       "run-me-admin.out.txt",
+                       "git check-ignore",
+                       "powershell -ExecutionPolicy Bypass -File .\\run-me.ps1",
+                       "powershell -ExecutionPolicy Bypass -File .\\run-me-admin.ps1"):
+            self.assertIn(phrase, rule)
+        self.assertRegex(rule, r"\btry\s*\{", "the block is wrapped in try {")
+        self.assertRegex(
+            rule, r"Set-Location\b[^`\n]*;\s*powershell -ExecutionPolicy Bypass -File "
+                  r"\.\\run-me-admin\.ps1",
+            "the elevated command changes into the cwd first")
+        # The written file is read back and compared with its source line by line.
+        self.assertIn("read back", lowered)
+        self.assertIn("line by line", lowered)
+        self.assertIn("word for word", lowered)
+
+    def test_gitignore_lists_run_me_files(self):
+        path = REPO_ROOT / ".gitignore"
+        self.assertTrue(path.is_file(), ".gitignore is missing")
+        patterns = [line.strip() for line in read(path).splitlines()
+                    if line.strip() and not line.strip().startswith("#")]
+        for name in RUN_ME_FILES:
+            with self.subTest(name=name):
+                ignored = False
+                # The last matching line wins; a "!" line un-ignores.
+                for pattern in patterns:
+                    negated = pattern.startswith("!")
+                    body = pattern[1:] if negated else pattern
+                    body = body.lstrip("/").rstrip("/")
+                    if fnmatch.fnmatchcase(name, body):
+                        ignored = not negated
+                self.assertTrue(ignored, f".gitignore does not ignore {name}")
 
 
 if __name__ == "__main__":

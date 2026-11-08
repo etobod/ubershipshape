@@ -1,13 +1,14 @@
 {
-  "detail_sections": ["children", "firewall_ports", "driver_update_links"],
-  "id_letters": "hwy",
+  "detail_sections": ["children", "firewall_ports", "driver_update_links", "decisions"],
+  "id_letters": "hjwy",
   "path_keys": ["summary_file", "detail_file", "program_path"],
   "id_keys": [],
-  "required_lists": ["children", "firewall_ports", "driver_update_links"],
+  "required_lists": ["children", "firewall_ports", "driver_update_links",
+                     "decisions"],
   "truncated": [
     {"list": "firewall_ports", "prefix": "w", "count_key": "truncated"}
   ],
   "required_keys": ["children", "firewall_ports", "firewall_ports_counts",
-                    "driver_update_links", "link_counts"],
+                    "driver_update_links", "link_counts", "decisions"],
   "report_prefix": "runall-"
 }

@@ -80,6 +80,7 @@ sys.path.insert(0, str(Path(__file__).absolute().parent))
 import baseline  # called as baseline.save(...), so tests can patch it
 import catalogue
 import datadir
+import decisions
 import ids
 import psrun
 from psrun import dump, ps_script, run_job
@@ -1145,13 +1146,15 @@ def policy_on_home(source, edition):
 
 # --- summary items -------------------------------------------------------------
 def build_items(entries: list, found: dict, edition, elevated: bool,
-                numbering=None) -> list:
+                numbering=None, expected_from=None) -> list:
     """Every entry as a detail item with an id: listed states first, then the rest.
 
     The id is the stable number of the catalogue entry id (``numbering``, an
     ``ids.Numbering``); without one, or on the first run with a map, it is the place
-    after sorting.
+    after sorting. ``expected_from`` (``{entry id: "decision D<n>"}``) marks the items
+    whose ``expected`` comes from the user's decision.
     """
+    expected_from = expected_from or {}
     order = {state: n for n, state in enumerate(STATES)}
     ranked = sorted(
         enumerate(entries),
@@ -1169,6 +1172,10 @@ def build_items(entries: list, found: dict, edition, elevated: bool,
             "state": result["state"],
             "effective": result["effective"],
             "expected": entry["expected"],
+        }
+        if entry["id"] in expected_from:
+            item["expected_from"] = expected_from[entry["id"]]
+        item |= {
             "source": result["source"],
             "from_policy_on_home": policy_on_home(result["source"], edition),
             "reason": result["reason"],
@@ -1202,7 +1209,7 @@ def build_items(entries: list, found: dict, edition, elevated: bool,
 
 
 SUMMARY_ITEM_FIELDS = ("id", "entry", "area", "level", "title", "state", "effective",
-                       "expected", "source", "from_policy_on_home", "reason", "has_block",
+                       "expected", "expected_from", "source", "from_policy_on_home", "reason", "has_block",
                        "hkcu_elevated")
 
 
@@ -1645,6 +1652,9 @@ def item_block(item: dict, elevated: bool = False) -> tuple:
     read = item.get("read")
     if not isinstance(item.get("apply"), dict) or not isinstance(read, dict):
         raise NoBlock("the detail file does not hold the change; run the collection again")
+    decided = decision_note(item)
+    if decided is not None:
+        raise NoBlock(decided)
     builder = BLOCK_BUILDERS.get(read.get("type"))
     if builder is None:
         raise NoBlock(f"no block for read type {read.get('type')}")
@@ -1655,6 +1665,27 @@ def item_block(item: dict, elevated: bool = False) -> tuple:
     if shell == "normal" and (elevated or item.get("hkcu_elevated")):
         raise NoBlock(ELEVATED_NOTE)
     return shell, change, rollback
+
+
+def apply_target(apply: dict):
+    """The value an apply sets (``value``, ``start_type``, ``enabled`` or ``state``);
+    None for a ``remove``."""
+    for field in ("value", "start_type", "enabled", "state"):
+        if field in apply:
+            return apply[field]
+    return None
+
+
+def decision_note(item: dict):
+    """The reason text when the catalogue's change would undo the user's decision."""
+    expected_from = item.get("expected_from")
+    if not expected_from:
+        return None
+    expected = item.get("expected")
+    if isinstance(expected, list) and is_in(apply_target(item["apply"]), expected):
+        return None
+    return (f"set by {expected_from} (expected {one_line(expected)}); the catalogue's "
+            f"change to {apply_label(item)} would undo it")
 
 
 def apply_label(item: dict) -> str:
@@ -1724,7 +1755,38 @@ def read_detail(path: Path):
     return detail
 
 
-def show_block(work: Path, ids_text: str, detail_file: Path | None = None) -> int:
+def load_decisions(data_dir: Path, entries: list) -> dict:
+    """The user's decisions, checked against the catalogue's ids and expectations."""
+    return decisions.load(data_dir, catalogue_expected={
+        entry["id"]: entry.get("expected") for entry in entries})
+
+
+def current_decisions(data_dir: Path, items: list) -> tuple:
+    """``(items, note)``: the detail items with the expectations of the decisions in
+    ``<data_dir>/decisions.json`` now, so a decision recorded after the collection still
+    refuses a block; ``note`` is a comment line when the file or the catalogue cannot be
+    read (the items then keep the decisions of the detail file)."""
+    try:
+        entries = catalogue.load(CATALOGUE_PATH)
+    except catalogue.CatalogueError as exc:
+        return items, (f"# decisions.json not read again: {one_line(str(exc))}; the "
+                       "decisions of the detail file apply")
+    decided = load_decisions(data_dir, entries)
+    if decided["status"] == "unreadable":
+        return items, (f"# {one_line(decided['reason'])}; the decisions of the detail "
+                       "file apply")
+    expectations = decisions.setting_expectations(decided["decisions"])
+    result = []
+    for item in items:
+        found = expectations.get(item.get("entry"))
+        if found is not None:
+            item = dict(item, expected=found[1], expected_from=f"decision {found[0]}")
+        result.append(item)
+    return result, None
+
+
+def show_block(work: Path, ids_text: str, detail_file: Path | None = None,
+               data_dir: Path | None = None, data_dir_problem: str | None = None) -> int:
     path = detail_file if detail_file is not None else newest_detail(work)
     if path is None:
         print(f"no detail file in {work}; run the collection first", file=sys.stderr)
@@ -1746,8 +1808,15 @@ def show_block(work: Path, ids_text: str, detail_file: Path | None = None) -> in
         print(f"id(s) {', '.join(unknown)} not found among the settings of {path}",
               file=sys.stderr)
         return 1
-    text_out, count = render_block([by_id[item_id] for item_id in ids],
-                                   detail.get("elevated") is not False)
+    chosen, note = [by_id[item_id] for item_id in ids], None
+    if data_dir_problem is not None:
+        note = (f"# decisions.json not read again: {one_line(data_dir_problem)}; the "
+                "decisions of the detail file apply")
+    elif data_dir is not None:
+        chosen, note = current_decisions(data_dir, chosen)
+    text_out, count = render_block(chosen, detail.get("elevated") is not False)
+    if note is not None:
+        print(note)
     print(text_out)
     if count == 0:
         print("no command to paste: every item has a reason above", file=sys.stderr)
@@ -1827,10 +1896,16 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
             parser.error(f"--compare-to takes <N>d with N from 1 to "
                          f"{baseline.HISTORY_DAYS - 1}, e.g. 7d: {args.compare_to!r}")
     if args.detail_file:
-        # The detail file is named explicitly: no data directory is needed.
+        # The detail file is named explicitly: no data directory is needed, but a block
+        # reads the user's decisions from it when one is given.
         detail_file = Path(args.detail_file).absolute()
         if args.block is not None:
-            return show_block(Path(), args.block, detail_file)
+            try:
+                block_dir = datadir.resolve(args.data_dir, default=args.default_data_dir)
+            except datadir.DataDirError as exc:
+                return show_block(Path(), args.block, detail_file,
+                                  data_dir_problem=f"no data directory ({exc})")
+            return show_block(Path(), args.block, detail_file, block_dir)
         return show_detail(Path(), args.detail, detail_file)
     try:
         data_dir = datadir.resolve(args.data_dir, default=args.default_data_dir)
@@ -1841,13 +1916,21 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
     if args.detail is not None:
         return show_detail(work, args.detail)
     if args.block is not None:
-        return show_block(work, args.block)
+        return show_block(work, args.block, data_dir=data_dir)
 
     try:
         entries = catalogue.load(CATALOGUE_PATH)
     except catalogue.CatalogueError as exc:
         print(f"nothing was read: {exc}", file=sys.stderr)
         return 2
+    # The user's decisions beat the catalogue's expectation for the same entry.
+    decided = load_decisions(data_dir, entries)
+    expectations = (decisions.setting_expectations(decided["decisions"])
+                    if decided["status"] == "read" else {})
+    entries = [dict(entry, expected=expectations[entry["id"]][1])
+               if entry["id"] in expectations else entry for entry in entries]
+    expected_from = {entry_id: f"decision {decision_id}"
+                     for entry_id, (decision_id, _) in expectations.items()}
 
     run_ps = run_ps or default_run_ps
     is_admin = is_admin or default_is_admin
@@ -1872,6 +1955,9 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
     reference_usage = reference_sources.get(USAGE_SOURCE) or {}
 
     col = Collector(run_ps, work, stamp)
+    if decided["status"] == "unreadable":
+        col.skip(decisions.FILE_NAME, f"{decided['reason']}; no decision was used and the "
+                 "catalogue's expectations stay")
     registry = collect_registry(col, entries)
     edition = read_edition(col, registry)
     wifi = collect_wifi(col, entries)
@@ -1882,7 +1968,7 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
     if map_reason is not None:
         col.skip(*ids.load_note(map_reason))
     numbering = ids.Numbering(id_map, now.date().isoformat())
-    items = build_items(entries, found, edition, admin, numbering)
+    items = build_items(entries, found, edition, admin, numbering, expected_from)
     usage = (build_usage(usage_result, col)
              if usage_result["status"] in READ_STATUSES else [])
     if admin:
