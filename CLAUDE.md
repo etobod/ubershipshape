@@ -81,3 +81,9 @@ Polish. (B-12)
 - Every plan ends with a milestone that runs the skill on this machine and produces a report. (B-13)
 - Keep plans small (at most 3–5 milestones). No work on tooling in this project. (B-13)
 - Plans are made one at a time from a `loc/PRD.md` direction, in the order given there. (B-13)
+
+## Diagrams
+<!-- Topics whose diagram `loc-diagram` keeps up to date in `loc/diagrams/` besides the project overview, one per line, e.g. "saving an entry". Empty: only the overview. -->
+
+## Frontend
+<!-- Only for a project with a user interface; empty: none. The UI check command (masterskills scripts/ui_check.py, which fails on a defect and takes the screenshot), Screenshots: on or declined, References: on or off, the tokens file, the pages and the widths, e.g. 375, 768, 1440; Scene views: the project's own screenshot command for states an address cannot reach, or none; an optional design plugin and its review command. Plans prove UI milestones with them, loc-review runs the design review. -->
