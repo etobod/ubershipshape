@@ -58,7 +58,8 @@ files, file contents or cloud storage. Say so if the user asks for these.
 
 - **Read-only.** `files.py` changes nothing on the machine. It writes only
   to `<data dir>/work/` and its baseline in `<data dir>/state/`. It deletes
-  nothing: every cleanup is a block the user pastes into a shell himself.
+  nothing: every cleanup is a block the user runs himself, delivered in
+  `run-me.ps1` or `run-me-admin.ps1` per `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/run-me.md`.
 - **Nothing leaves the machine.** No web search, no upload, no online tool,
   also not to look up a folder or a file.
 - **Read only the summary JSON.** Never open the detail file or other files
@@ -164,8 +165,10 @@ files, file contents or cloud storage. Say so if the user asks for these.
    rollback block: so the undo section gets, for the same id, the no-undo
    marker `<!-- ush:noundo ush-files <id> -->` followed by a line of words
    saying it cannot be undone, never a fenced block. Check the plan with
-   `python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-common/scripts/check_repair_plan.py" <file>` and tell the user
-   which file to open and what to paste where; the block never goes into
+   `python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-common/scripts/check_repair_plan.py" <file>`, tell the user
+   which plan holds it, and deliver the block per
+   `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/run-me.md`: in `run-me-admin.ps1` when
+   `needs_admin` is `true`, else in `run-me.ps1`; the block never goes into
    the chat or the report. After a new run has read the result back, write
    it under `Notatki` and move the plan to `plans/done/` only when every value
    the plan sets reads back as set (see the step before judging); otherwise it
@@ -247,7 +250,9 @@ files, file contents or cloud storage. Say so if the user asks for these.
    administrator rights reads more (system folders such as the Windows
    temporary files, the error reports and the Delivery Optimization cache,
    and the folders of other accounts). It is not required; do not run it
-   yourself.
+   yourself. When the user wants it, deliver this block in `run-me-admin.ps1`
+   per `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/run-me.md` (`run-me.ps1` is for a
+   normal shell; this block needs the elevated one).
 
    ```
    # Runs the same read-only walk with administrator rights. It changes
@@ -260,6 +265,8 @@ files, file contents or cloud storage. Say so if the user asks for these.
    An elevated run compares only with the elevated baseline
    (`ush-files.elevated.json`); its first run has no comparison. After the
    user says it ran, read the newest `<data dir>/work/files-*.summary.json`,
+   newer than the moment `run-me-admin.ps1` was written (otherwise the block
+   did not run: say so),
    whose `elevated` must be `true` (otherwise say that the block did not run
    elevated), and write a new report from that one summary, as in steps
    3-6. Never merge two summaries into one report.

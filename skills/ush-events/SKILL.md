@@ -60,8 +60,10 @@ for these.
   every guard of the template kept; in words only where no template exists
   for that change (rule 8 of `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/report-style.md`).
   You write it into a repair plan per `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/repair-plan.md`,
-  check the plan with `python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-common/scripts/check_repair_plan.py" <file>`, and tell the user which file to open and
-  what to paste where; the block never goes into the chat or the report.
+  check the plan with `python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-common/scripts/check_repair_plan.py" <file>`, tell the user which plan holds it,
+  and deliver the block per `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/run-me.md`:
+  in `run-me-admin.ps1` for an elevated PowerShell (`run-me.ps1` only for a
+  block that names a normal shell); the block never goes into the chat or the report.
   After a new run has read the value back, write the result under `Notatki`
   and move the plan to `plans/done/` only when every value the plan sets reads
   back as set (see the step before judging); otherwise it stays open; never

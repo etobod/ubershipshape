@@ -192,7 +192,9 @@ these.
 7. Only when `elevated` is `false`: you may say that a run with
    administrator rights reads more (paths, command lines and owners of the
    processes of other accounts and of the system). It is not required; do
-   not run it yourself.
+   not run it yourself. When the user wants it, deliver this block in
+   `run-me-admin.ps1` per `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/run-me.md`
+   (`run-me.ps1` is for a normal shell; this block needs the elevated one).
 
    ```
    # Runs the same read-only process snapshot with administrator rights. It
@@ -205,7 +207,9 @@ these.
    Say that an elevated run links groups only to the elevated ush-inventory
    baseline (`ush-inventory.elevated.json`); without one its `inventory.status`
    is `none`. After the user says it ran, read the newest
-   `<data dir>/work/processes-*.summary.json`, whose `elevated` must be
+   `<data dir>/work/processes-*.summary.json`,
+   newer than the moment `run-me-admin.ps1` was written (otherwise the block
+   did not run: say so), whose `elevated` must be
    `true` (otherwise say that the block did not run elevated), and write a
    new report from that one summary, as in steps 3-5. Never merge two
    summaries into one report.

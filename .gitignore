@@ -3,3 +3,7 @@ loc/
 claude.bat
 ush-data/
 __pycache__/
+run-me.ps1
+run-me-admin.ps1
+run-me.out.txt
+run-me-admin.out.txt

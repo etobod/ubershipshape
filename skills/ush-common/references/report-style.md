@@ -176,8 +176,10 @@ the other rules.
    verify step, the abort, the rollback). After the decision the model puts
    either block, with its shell, its risk and its undo block, into a repair
    plan per `repair-plan.md` (`<data dir>/plans/`), checks the plan with
-   `check_repair_plan.py` and tells the user which file to open. The blocks
-   never go into the chat or the report. Only where the skill has neither a
+   `check_repair_plan.py` and tells the user which plan holds them. The plan
+   still holds the blocks; they reach the user in `run-me.ps1` /
+   `run-me-admin.ps1` in the cwd per `run-me.md`. The blocks never go into
+   the chat or the report. Only where the skill has neither a
    printer nor a template for that change does the model give the step in
    words, also after the decision, in the repair plan. A skill whose format hands
    changes to another skill (processes hands ending and disabling to

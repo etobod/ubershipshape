@@ -56,8 +56,12 @@ file could be committed and ask before writing.
 ## After writing
 
 Read back the written file and compare its block lines with their source line
-by line. Then give it the BOM, whatever the file tool wrote (it reads an
-existing BOM and writes exactly one):
+by line. For a block taken from a repair plan whose `Set-Location` folder was
+replaced per `repair-plan.md` (an older plugin version), the source is the
+block after that replacement: the replaced folder is the one line that may
+differ from the stored plan, and the user is told it was changed. Then give
+it the BOM, whatever the file tool wrote (it reads an existing BOM and writes
+exactly one):
 
 ```
 python -B -c "import sys; p = sys.argv[1]; t = open(p, encoding='utf-8-sig').read(); open(p, 'w', encoding='utf-8-sig', newline='').write(t); print(open(p, 'rb').read(3) == bytes([239, 187, 191]))" "<absolute path of the file>"

@@ -16,9 +16,11 @@ Never `python3` (a Microsoft Store stub that exits 0 silently) and never bare `r
 
 ## Invariants
 - **Read-only by default.** Any change to the machine, or to disk outside the data directory,
-  needs an explicit flag. `ush-runall` never passes such flags on. (B-08)
+  needs an explicit flag. `ush-runall` never passes such flags on. The one write outside the data
+  directory without a flag is the model writing `run-me.ps1` / `run-me-admin.ps1` in the cwd. (B-08)
 - **Skills do not change the machine themselves.** They hand the user a paste-ready block for an
-  elevated shell, say what it does, and then read the values back. The only exceptions are
+  elevated shell (delivered in run-me.ps1 / run-me-admin.ps1 in the cwd, B-02/B-09), say what it
+  does, and then read the values back. The only exceptions are
   operations with an explicit flag whose safety condition is met (e.g. clearing a log only after
   a verified export). (B-08)
 - **Copy and verify before anything irreversible.** A failed or unverified copy aborts. (B-08)

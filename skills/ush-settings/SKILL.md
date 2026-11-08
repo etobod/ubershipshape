@@ -53,8 +53,9 @@ a change automatically. Say so if the user asks for these.
 
 - **Read-only.** `settings.py` changes nothing on the machine and writes only
   to `<data dir>`. `--block` only prints commands. The skill never applies a
-  change: the user pastes the block into the shell it names, and you then
-  read the value back by running the skill again.
+  change: you deliver the block in `run-me.ps1` or `run-me-admin.ps1` in the
+  cwd per `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/run-me.md`, the user runs it in the shell
+  it names, and you then read the value back by running the skill again.
 - **Nothing leaves the machine.** No web search, no upload, no online tool,
   also not to look up a setting.
 - **Read only the summary JSON.** Never open the raw captures or other files
@@ -163,11 +164,13 @@ a change automatically. Say so if the user asks for these.
    part under `<!-- ush:undo ush-settings <normal or elevated> -->`, the id
    of its shell. Check the plan with
    `python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-common/scripts/check_repair_plan.py" <file>`, then tell the user
-   which file to open and which part goes to which shell: the part under "Run in a
-   normal (non-elevated) Windows PowerShell" in the user's own normal shell,
-   the part under "Run in an elevated Windows PowerShell" in a shell started
-   with "Run as administrator"; the rollback parts undo them in the same
-   shells. Lines starting with `#` that say "no block" give the reason an
+   which plan holds the blocks and deliver each part per
+   `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/run-me.md`: the part under "Run in a
+   normal (non-elevated) Windows PowerShell" in `run-me.ps1`, for the user's own normal shell,
+   the part under "Run in an elevated Windows PowerShell" in `run-me-admin.ps1`, for a shell started
+   with "Run as administrator". A rollback part never goes into a file with
+   its run part: only when the user asks to undo is it written, as its own
+   `run-me.ps1` or `run-me-admin.ps1` for its shell. Lines starting with `#` that say "no block" give the reason an
    entry got no command; give that reason. An entry with `has_block`
    `false` gets its `manual` step in words instead, also after the decision.
    After a new run has read the values back, write the result under
@@ -198,7 +201,7 @@ a change automatically. Say so if the user asks for these.
 7. Tell the user where the report is (the absolute path of the report file, in the chat answer only) and give the dashboard and the main
    findings in a few lines.
 
-8. After the user says they pasted a block, run `settings.py` again in a
+8. After the user says they ran a block, run `settings.py` again in a
    **normal (non-elevated)** shell and check that each changed entry now has
    `state` `matches` and appears in `changes`; write a new report from that
    run. Every entry with a block can be read without administrator rights
@@ -206,7 +209,8 @@ a change automatically. Say so if the user asks for these.
    message from PowerShell that it finished is not a read-back.
 
 Optional: when the user wants the entries that need administrator rights
-(`vss_max_space`) read as well, give this block for an elevated shell. Do not
+(`vss_max_space`) read as well, deliver this block in `run-me-admin.ps1` per
+`${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/run-me.md`. Do not
 run it yourself.
 
 ```
@@ -223,6 +227,7 @@ has no comparison, and that in it the `HKCU` values, the per-user apps and
 the usage are those of the account that elevated the shell, which may not be
 the user's (entries with `hkcu_elevated` `true`; `--block` gives no normal-
 shell commands from such a run). After the user says it ran, read the newest
-`<data dir>/work/settings-*.summary.json`, whose `elevated` must be `true`
+`<data dir>/work/settings-*.summary.json`, newer than the moment
+`run-me-admin.ps1` was written (otherwise the block did not run: say so), whose `elevated` must be `true`
 (otherwise say that the block did not run elevated), and write a new report
 from that one summary. Never merge two summaries into one report.
