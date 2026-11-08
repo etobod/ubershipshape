@@ -256,7 +256,7 @@ class TestDriverPackages(DriverPackagesTestCase):
         self.assert_package(detail.get(package_key(idless)), idless, True)
         self.assert_package(detail.get(package_key(device)), device, True)
 
-    def test_detail_section_and_no_block(self):
+    def test_detail_section_and_block(self):
         data_dir = self.data_dir()
         summary = self.collect(FakePowerShell({
             "driver_packages": store([MOUSE, PAD]),
@@ -271,12 +271,11 @@ class TestDriverPackages(DriverPackagesTestCase):
         self.assert_package(detail[package_key(PAD)], PAD, True)
         self.assertIn("o1", {item.get("id") for item in detail.values()}, detail)
 
+        # Plan 027: an orphan package (present_device false) now has a printer block.
         code, stdout, stderr = self.block(data_dir, "o1", summary.get("detail_file"))
-        self.assertRegex(stdout, r"(?m)^\s*#\s*o1\s*:\s*no block\s*:", stdout or stderr)
-        commands = [line for line in stdout.splitlines()
-                    if line.strip() and not line.strip().startswith("#")]
-        self.assertEqual(commands, [], stdout)
-        self.assertEqual(code, 1, stdout[:300] or stderr[:300])
+        self.assertNotRegex(stdout, r"(?m)^\s*#\s*o1\s*:\s*no block\s*:", stdout)
+        self.assertIn("/delete-driver", stdout, stdout or stderr)
+        self.assertEqual(code, 0, stdout[:300] or stderr[:300])
 
 
 class TestDriverPackagesBaseline(DriverPackagesTestCase):

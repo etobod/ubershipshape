@@ -4856,8 +4856,8 @@ AUTOSTART_BLOCKS = {
 }
 NOT_AUTOSTART = {
     "programs": "this skill has no change block for a program",
-    "drivers": "no block for a driver, ever",
-    "driver_packages": "this skill has no change block for a driver package",
+    "drivers": ("no block for a device driver; a driver in use is removed only through "
+                "its vendor's uninstaller or Device Manager, after the user decides"),
     "changes": "a change has no block; give the id of the item it names",
     "vendor_folders": "this skill has no block for a folder; ush-files has its own clean-up",
 }
@@ -5456,6 +5456,77 @@ def block_registry_key(part: dict, context: dict) -> tuple:
     return elevated, header, change, back, rollback
 
 
+# An orphan driver package (o..): the published name the driver store gives and the
+# original inf name; nothing else reaches the printed block.
+PUBLISHED_INF = re.compile(r"^oem\d+\.inf$", re.IGNORECASE)
+ORIGINAL_INF = re.compile(r"^[A-Za-z0-9_.\-]+\.inf$")
+
+
+def block_driver_package(item: dict, context: dict) -> tuple:
+    """SKILL.md "Orphan driver package": export the package into ``<data dir>\\work``,
+    check the export's exit code and the exported inf, delete the package from the
+    driver store without force, then read back that the published inf is gone; the
+    rollback adds the exported package back. Neither name is printed unless it passed
+    its pattern."""
+    if item.get("from_baseline") is True:
+        raise NoBlock("not read in this run (from_baseline true), so it is not known "
+                      "whether a present device uses it now")
+    for name in ("driver_packages", "drivers"):
+        status = context["statuses"].get(name)
+        if status not in READ_STATUSES:
+            raise NoBlock(f"the source {name} was not read in this run (status "
+                          f"{one_line(status)}), so it is not known whether a present "
+                          "device uses the package")
+    present = item.get("present_device")
+    if present is not False:
+        raise NoBlock(f"present_device is {'true' if present is True else 'not false'}: "
+                      "only a package that no present device uses gets a block")
+    published = item.get("published_name")
+    if not isinstance(published, str) or not PUBLISHED_INF.match(published):
+        raise NoBlock("the published name is not oem<digits>.inf, so it is not printed")
+    if item.get("other_published_names"):
+        raise NoBlock("the package has more than one copy in the driver store "
+                      "(other_published_names), and the block removes only one")
+    original = item.get("original_name")
+    if not isinstance(original, str) or not ORIGINAL_INF.match(original):
+        raise NoBlock("the original name is not an inf name of letters, digits and _ . - "
+                      "only, so it is not printed")
+    folder = f"{work_dir(context)}\\driver-{context['stamp']}-{published[:-4].lower()}"
+    exported = f"{folder}\\{original}"
+    oem = ps_quote(published)
+    header = [
+        (f"Removes the orphan driver package {published} ({original}) "
+         f"from the driver store. Exports it first to {folder} and stops if the export is "
+         "missing; a package a device uses is not deleted."),
+        SHELL_NOTE[True],
+        ("Risk: a device that needs this package (one unplugged now, too) is no longer "
+         "installed by itself when it is plugged in; it needs the package added back."),
+        f"Previous state: {published} is in the driver store, no present device uses it.",
+    ]
+    change = [
+        "& {",
+        GUARD_64,
+        (f"  if (Test-Path -LiteralPath {ps_quote(folder)}) {{ throw \"the export folder is "
+         "already there; nothing removed\" }"),
+        f"  New-Item -ItemType Directory -Path {ps_quote(folder)} -ErrorAction Stop | Out-Null",
+        f"  pnputil /export-driver {oem} {ps_quote(folder)}",
+        ("  if ($LASTEXITCODE -ne 0) { throw \"the export failed (exit code $LASTEXITCODE); "
+         "export missing, nothing removed\" }"),
+        (f"  if (-not (Test-Path -LiteralPath {ps_quote(exported)})) {{ throw \"export "
+         "missing, nothing removed\" }"),
+        f"  pnputil /delete-driver {oem}",
+        ("  if ($LASTEXITCODE -ne 0) { throw \"the delete failed (exit code $LASTEXITCODE); "
+         "a device may use the package; the export stays\" }"),
+        (f"  if (Test-Path \"$env:WINDIR\\INF\\{published}\") {{ 'the inf is still there' }} "
+         "else { 'the inf is gone' }"),
+        "}",
+    ]
+    rollback = [f"pnputil /add-driver {ps_quote(exported)} /install",
+                ("# Adds the exported package back to the driver store (its oem number may "
+                 "differ).")]
+    return True, header, change, "", rollback
+
+
 def leftover_part_block(part: dict, context: dict) -> tuple:
     """``(label, block parts)`` of one part of a leftover; NoBlock for a part without
     one. An autostart entry or firewall rule prints through its own template."""
@@ -5571,7 +5642,8 @@ def render_blocks(found: list, context: dict, encoding=None) -> tuple:
         if lines:
             lines.append("")
         builder = {"autostart": autostart_block, "additions": addition_block,
-                   "components": addition_block}.get(section)
+                   "components": addition_block,
+                   "driver_packages": block_driver_package}.get(section)
         if builder is None:
             entry_lines, entry_count = [f"# {item_id}: no block: {NOT_AUTOSTART[section]}"], 0
         else:
@@ -5582,7 +5654,7 @@ def render_blocks(found: list, context: dict, encoding=None) -> tuple:
             else:
                 entry_lines = [f"# {item_id}: {header[0]}",
                                *(f"# {line}" for line in header[1:]),
-                               *change, f"{ROLLBACK_NOTE} {back}", *rollback]
+                               *change, f"{ROLLBACK_NOTE} {back}".rstrip(), *rollback]
                 entry_count = len(change)
         if encoding is not None and not encodes(entry_lines, encoding):
             entry_lines, entry_count = [f"# {item_id}: no block: {CODE_PAGE_REASON}"], 0

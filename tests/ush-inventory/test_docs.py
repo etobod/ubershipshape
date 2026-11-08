@@ -65,6 +65,46 @@ class TestDocs(unittest.TestCase):
         with self.subTest("a profile path is expanded"):
             self.assertIn('"$env:USERPROFILE\\', text)
 
+    def test_driver_package_block_documented(self):
+        """Test K5 (plan 027 M1): a device driver gets no block, an orphan driver package
+        has a printer block for an elevated shell, and the old rule is gone."""
+        text = SKILL_MD.read_text(encoding="utf-8")
+        sentences = _sentences(text)
+        device_id = re.compile(r"(?<![A-Za-z0-9<])d\.\.(?!\.)")
+        package_id = re.compile(r"(?<![A-Za-z0-9<])o\.\.(?!\.)")
+
+        with self.subTest("a device driver (d..) gets no block"):
+            found = [s for s in sentences
+                     if device_id.search(s) and re.search(r"(?i)\bdriver\b", s)
+                     and re.search(r"(?i)\bno (?:printer )?block\b", s)]
+            self.assertTrue(found, "no sentence saying a device driver (`d..`) gets no block")
+
+        with self.subTest("an orphan driver package (o..) has a printer block"):
+            found = [s for s in sentences
+                     if package_id.search(s) and re.search(r"(?i)\bpackage\b", s)
+                     and re.search(r"(?i)\bprinter block\b", s)
+                     and not re.search(r"(?i)\bno printer block\b", s)
+                     and re.search(r"(?i)\belevated\b", s)]
+            self.assertTrue(found, "no sentence saying an orphan driver package (`o..`) "
+                                   "has a printer block for an elevated shell")
+
+        with self.subTest("no passage still says 'a driver, ever'"):
+            self.assertNotIn("a driver, ever", _flat(text).lower())
+
+        with self.subTest("the forbidden word stays absent"):
+            self.assertNotIn("pnputil", text.lower())
+
+
+def _sentences(text):
+    """The sentences of ``text``: paragraphs and list items are split apart, each made one
+    line, then split after a full stop, question or exclamation mark before a space."""
+    units = re.split(r"\n\s*\n|\n(?=\s*(?:[-*+]|\d+\.)\s)|\n(?=#)", text)
+    result = []
+    for unit in units:
+        flat = " ".join(unit.split())
+        result.extend(part for part in re.split(r"(?<=[.!?])\s+", flat) if part)
+    return result
+
 
 REFERENCES = REPO_ROOT / "skills" / "ush-inventory" / "references"
 FIRST_RUN_FILE = "ush-inventory.first-run.json"
@@ -136,7 +176,7 @@ class TestBudgetDocs(unittest.TestCase):
             self.assertIn(never, text)
 
         with self.subTest("report format: driver packages paragraph"):
-            start = report.find("This skill has no block for a driver package.")
+            start = report.find("An orphan package (`o..`) has a printer block")
             self.assertNotEqual(start, -1, "driver packages paragraph")
             end = report.find(" - ", start)
             paragraph = report[start:end if end != -1 else len(report)]

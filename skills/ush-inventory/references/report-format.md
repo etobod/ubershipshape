@@ -276,8 +276,9 @@ is of an older shape and fails with
      newer one in use, a program's helper) and whether it looks worth a
      look. "No present device" is a fact about this moment (a device
      unplugged now counts as not present), not proof that the package is
-     unused or safe to remove; say so once. This skill has no block for a
-     driver package. An empty list (`[]`) with `truncated_driver_packages`
+     unused or safe to remove; say so once. An orphan package (`o..`) has a
+     printer block for an elevated shell (`--block o<n>`), given only after
+     the user decides. An empty list (`[]`) with `truncated_driver_packages`
      `0` says that every third-party package has a present device (or
      `present_device` `null`: such a package is not judged, and "Not
      checked" names those whose published name was not read, as

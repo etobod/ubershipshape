@@ -54,7 +54,9 @@ another way (a shell command, another folder).
 Not for: processes running now (`ush-processes`), Windows settings and
 policies (`ush-settings`), the event logs (`ush-events`), the health of
 disks, devices or updates (`ush-health`), uninstalling a program or a
-driver, fixing anything automatically. Say so if the user asks for these.
+device driver, fixing anything automatically. A device driver (`d..`) gets no block;
+an orphan driver package (`o..`) has a printer block for an elevated shell,
+printed only after the user decides. Say so if the user asks for these.
 
 ## Rules
 
@@ -67,7 +69,8 @@ driver, fixing anything automatically. Say so if the user asks for these.
   the report; never fill a template by hand. When the printer gives
   `no block: <reason>`, you say that reason and give no block (rule 8 of
   `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/report-style.md`). The user runs the block
-  themselves, and you then read the value back by running the skill again.
+  themselves, delivered in `run-me.ps1` or `run-me-admin.ps1` per
+  `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/run-me.md`, and you then read the value back by running the skill again.
 - **Nothing leaves the machine.** No web search, no upload, no online tool,
   also not to look up a program or a file.
 - **Read only the summary JSON.** Never open the raw captures or other files
@@ -136,9 +139,11 @@ driver, fixing anything automatically. Say so if the user asks for these.
   account); under the source's `method: adsi`, `name` and
   `principal_source` (and `enabled` for an `object_class` `User`) are in
   `unread_fields`.
-- **No blocks for drivers.** A driver is reported and judged, never
-  removed by this skill; the vendor's uninstaller or Device Manager is the
-  way, and the user decides.
+- **No block for a device driver.** A device driver (`d..`) gets no block:
+  it is reported and judged, never removed by this skill; the vendor's
+  uninstaller or Device Manager is the way, and the user decides. An
+  orphan driver package (`o..`) has a printer block for an elevated shell
+  (see "Orphan driver package" under "Change blocks").
 - **Driver packages with no present device are facts.** `driver_packages`
   (`o..`) lists the third-party packages of the driver store that no
   present device uses (`present_device` `false`); the detail file has every
@@ -147,7 +152,8 @@ driver, fixing anything automatically. Say so if the user asks for these.
   unplugged now is not present, so "no present device" is not "safe to
   remove". A package with `present_device` `null` (an `Extension` package,
   or every package when the drivers were not read) is never called unused.
-  There is no block for a driver package.
+  Only a package with `present_device` `false` read in this run gets a
+  block, and only after the user decides.
 - **Leftovers are named, the model judges them.** The report names each of
   these with its evidence and says whether it is worth a look: an autostart
   entry with a target that exists (`exists` `true`) and whose
@@ -272,13 +278,15 @@ driver, fixing anything automatically. Say so if the user asks for these.
    and any other `service`), the additions (`x..`: `firewall_rule`,
    `root_certificate`, `hosts_entry`, `administrator`,
    `defender_exclusion`), the components (`f..`: `feature`,
-   `capability`) and the leftovers (`l..`: one block per part, see
+   `capability`), the orphan driver packages (`o..`, see "Orphan driver
+   package") and the leftovers (`l..`: one block per part, see
    "Leftover of a removed program"); each block has its shell, risk, previous value and
    rollback block. Several ids print in the order given, duplicates
-   dropped. A certificate export or a hosts backup goes into
-   `<data dir>\work\`, so give `--data-dir` when the data directory is not
-   the default one. An entry for which "Change blocks" allows no block
-   (a driver, ever, and a driver package) prints `# <id>: no block: <reason>`: say the reason
+   dropped. A certificate export, a driver package export or a hosts backup
+   goes into `<data dir>\work\`, so give `--data-dir` when the data
+   directory is not the default one. An entry for which "Change blocks"
+   allows no block (a device driver `d..`, and a driver package that fails
+   a guard) prints `# <id>: no block: <reason>`: say the reason
    instead. The printer prints each entry as its `# <id>: ...` comment
    lines, the change, a line `# Rollback, same shell: ...` and then the
    rollback; a blank line separates the entries. Split each entry at its
@@ -323,7 +331,8 @@ driver, fixing anything automatically. Say so if the user asks for these.
 8. Only when `elevated` is `false`: you may offer an elevated run, which
    also sees the tasks this account cannot and reads the capabilities and
    the Defender exclusions. It compares only with an elevated baseline, so
-   its first run has no comparison. Do not run it yourself.
+   its first run has no comparison. Deliver this block in `run-me-admin.ps1`
+   per `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/run-me.md`. Do not run it yourself.
 
    ```
    # Runs the same read-only inventory with administrator rights. It changes
@@ -334,7 +343,9 @@ driver, fixing anything automatically. Say so if the user asks for these.
    ```
 
    After the user says it ran, read the newest
-   `<data dir>/work/inventory-*.summary.json`, whose `elevated` must be
+   `<data dir>/work/inventory-*.summary.json`,
+   newer than the moment `run-me-admin.ps1` was written (otherwise the block
+   did not run: say so), whose `elevated` must be
    `true` (otherwise say that the block did not run elevated), and write a
    new report from that one summary, as in steps 3-6. Never merge two
    summaries into one report.
@@ -344,8 +355,11 @@ driver, fixing anything automatically. Say so if the user asks for these.
 The blocks go into a repair plan per `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/repair-plan.md`
 after the user decides, never into the chat or the report (rule 8 of
 `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/report-style.md`, step 5). Check the plan with
-`python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-common/scripts/check_repair_plan.py" <file>` and tell the user which
-file to open and what to paste where. After a new run has read the value
+`python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-common/scripts/check_repair_plan.py" <file>`, tell the user which
+plan holds the blocks, and deliver the run blocks per
+`${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/run-me.md`: all non-elevated run blocks in one
+`run-me.ps1`, all elevated ones in one `run-me-admin.ps1`, in the plan's order;
+an undo block only when the user asks to undo, as its own file. After a new run has read the value
 back, write the result under `Notatki` and move the plan to `plans/done/` only
 when every value the plan sets reads back as set (see the step before judging);
 otherwise it stays open; never delete it.
@@ -553,7 +567,9 @@ read-back lines inside a block are a first look, not the verification.
 
 Give no block for an item whose source was not read in this run, for a
 field the block needs that is `null` or in `unread_fields`, or for a kind
-this section excludes; say why instead. No block for a driver, ever.
+this section excludes; say why instead. A device driver (`d..`) gets no
+block; an orphan driver package (`o..`) has a printer block for an
+elevated shell (see "Orphan driver package").
 
 ### Defender exclusion (`defender_exclusion`)
 
@@ -794,6 +810,27 @@ download the package from Windows Update, so it needs the network:
 ```
 Add-WindowsCapability -Online -Name 'Invented.Tools~~~~0.0.1.0'
 ```
+
+### Orphan driver package (`o..`)
+
+An orphan driver package (`o..`) has a printer block for an elevated
+shell: `--block o<n>` prints it, never write it by hand. It is printed only
+when the package has `present_device` `false`, is not `from_baseline`, the
+sources `driver_packages` and `drivers` were read in that run, the
+published name is `oem<digits>.inf` and the original name is an inf name
+of letters, digits, `_`, `.` and `-`; otherwise `# o<n>: no block:
+<reason>`. A device driver (`d..`) gets no block.
+
+The block exports the package with the driver store tool into a stamped
+folder `<data dir>\work\driver-<stamp>-<oem>`, checks the tool's exit code
+and the exported inf, and stops with "nothing removed" when either fails.
+Then it deletes the package from the driver store without force, so a
+package a device uses is not deleted (the block stops with the exit code),
+and reads back whether `%WINDIR%\INF\<oem>.inf` is gone. Risk: a device
+that needs the package (one unplugged now, too) is no longer installed by
+itself until the package is added back. Rollback, same shell: the driver
+store tool adds the exported inf back and installs it; its `oem` number may
+differ. The next run of the skill is the verification.
 
 ### Leftover of a removed program (`l..`)
 
