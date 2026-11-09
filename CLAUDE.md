@@ -23,11 +23,20 @@ Never `python3` (a Microsoft Store stub that exits 0 silently) and never bare `r
   does, and then read the values back. The only exceptions are
   operations with an explicit flag whose safety condition is met (e.g. clearing a log only after
   a verified export). (B-08)
+- **Elevation lives in the file.** When a block needs administrator rights, `run-me-admin.ps1`
+  elevates itself: run from a normal shell it starts itself again with `-Verb RunAs` (a UAC
+  prompt, `-NoExit`) and stops; the user is never told to open an elevated shell first.
+  (user, 2026-11-09)
+- **A window shows its progress.** Every `run-me.ps1` / `run-me-admin.ps1` and every script it
+  runs tells the user what it is doing while it runs: a line when each step starts and ends,
+  and a counter (`Write-Progress` or `n / total`) in any loop longer than a few seconds; a
+  silent window is never left to the user. (user, 2026-11-09)
 - **Copy and verify before anything irreversible.** A failed or unverified copy aborts. (B-08)
 - **The script counts, the model judges.** No "this is a problem" threshold in code. Scripts
   classify only by explicit data files (known-noise list, settings catalogue). (B-08)
 - **The model never reads raw command output.** Scripts return a JSON summary on stdout and a
-  detail file on disk. Every number in a report comes from the script's JSON. (B-08)
+  detail file on disk. Every number in a report comes from the script's JSON, or is a count of
+  the report's own items that `check_report.py` checks (e.g. the low items of the summary). (B-08, 054 A)
 - **Empty is not unreadable.** Code distinguishes "read, nothing there" from "could not read"
   in the data structure, never collapses the second into the first, and reports what it could
   not read and why. (B-08)
