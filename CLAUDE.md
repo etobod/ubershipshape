@@ -90,6 +90,9 @@ Polish. (B-12)
 - Every plan ends with a milestone that runs the skill on this machine and produces a report. (B-13)
 - Keep plans small (at most 3–5 milestones). No work on tooling in this project. (B-13)
 - Plans are made one at a time from a `loc/PRD.md` direction, in the order given there. (B-13)
+- **Commit and push without asking.** Finished work is committed and pushed to `origin master`
+  at once, with no question: the plugin marketplace installs from GitHub, so an unpushed commit
+  never reaches the installed plugin. (user, 2026-11-09)
 
 ## Diagrams
 <!-- Topics whose diagram `loc-diagram` keeps up to date in `loc/diagrams/` besides the project overview, one per line, e.g. "saving an entry". Empty: only the overview. -->
