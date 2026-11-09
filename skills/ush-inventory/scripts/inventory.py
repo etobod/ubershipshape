@@ -385,7 +385,9 @@ DEFENDER_HIDDEN = "N/A:"
 ADMIN_SOURCES = ("Local", "MicrosoftAccount")  # principal sources with a local Enabled
 # The fields of one fact compared by path, as facts[<path>].<field>.
 FACT_COMPARED = ("exists", "signature_status", "signer", "program")
-FACT_FIELDS = ("expanded_path", "exists", "signature_status", "signer", "company")
+FACT_FIELDS = ("expanded_path", "exists", "signature_status", "signer", "company", "sha256",
+               "sha256_error")
+SHA256_RE = re.compile(r"[0-9a-fA-F]{64}")
 APPROVED_FIELDS = ("approved", "approved_byte", "approved_raw", "enabled")
 CHANGE_ORDER = ("added", "removed", "changed")
 HIVE_SCOPE = {"hklm64": "machine", "hklm32": "machine", "hkcu": "user"}
@@ -746,8 +748,10 @@ foreach ($p in $paths) {
         if (Test-LocalPath $expanded) { $reason = 'not_confirmed' } else { $reason = 'not_local' }
       }
     }
-    $status = $null; $signer = $null; $company = $null
+    $status = $null; $signer = $null; $company = $null; $sha = $null; $shaError = $null
     if ($exists) {
+      try { $sha = S (Get-FileHash -LiteralPath $expanded -Algorithm SHA256 -ErrorAction Stop).Hash }
+      catch { $shaError = S $_.Exception.Message }
       $sig = Get-AuthenticodeSignature -LiteralPath $expanded
       $status = S $sig.Status
       if ($null -ne $sig.SignerCertificate) {
@@ -766,6 +770,7 @@ foreach ($p in $paths) {
       Kind = 'file'; Path = $path; ExpandedPath = $expanded; Exists = $exists
       ExistsReason = $reason
       SignatureStatus = $status; Signer = $signer; Company = $company
+      Sha256 = $sha; Sha256Error = $shaError
     })
   } catch {
     $rows.Add([pscustomobject]@{ Kind = 'file'; Path = $path; Error = S $_.Exception.Message })
@@ -2267,6 +2272,40 @@ def collect_services(col: Collector, previous: dict,
     return status, items
 
 
+def file_hash(row: dict, exists) -> dict:
+    """``{sha256, sha256_error}`` of a ``file_facts`` row: the lower-case hash the job
+    read, or None with the reason it has none."""
+    value = text(row.get("Sha256"))
+    if value is not None and SHA256_RE.fullmatch(value):
+        return {"sha256": value.lower(), "sha256_error": None}
+    error = text(row.get("Sha256Error"))
+    if error is None:
+        error = ("the file does not exist" if exists is False
+                 else "the file's existence is not confirmed" if exists is None
+                 else "the job gave no hash" if value is None
+                 else f"the job gave no valid hash: {value[:40]!r}")
+    return {"sha256": None, "sha256_error": error}
+
+
+def carried_fact(known: dict) -> dict:
+    """The fact fields of a baseline fact; a baseline from before the hash existed
+    gives a null ``sha256`` with its reason."""
+    fact = {field: known.get(field) for field in FACT_FIELDS}
+    if fact["sha256"] is None and fact["sha256_error"] is None:
+        fact["sha256_error"] = "the baseline holds no hash"
+    return fact
+
+
+def hash_reason(fact: dict, default: str) -> dict:
+    """``fact`` with a reason for every null hash: its ``check_error``, else
+    ``default``, or "no path" for a target without one."""
+    if fact.get("sha256") is None and fact.get("sha256_error") is None:
+        fact["sha256_error"] = (fact.get("check_error")
+                                or (default if fact.get("path") is not None
+                                    else "the target has no path"))
+    return fact
+
+
 def null_fact(path) -> dict:
     return {"path": path, **{field: None for field in FACT_FIELDS}, "program": None}
 
@@ -2386,7 +2425,7 @@ def collect_facts(col: Collector, current: dict, previous: dict, programs: dict,
                     errors.setdefault(target, text(row.get("Error")))
                     fact["check_error"] = text(row.get("Error"))
                     if target in known:
-                        fact.update({f: known[target].get(f) for f in FACT_FIELDS})
+                        fact.update(carried_fact(known[target]))
                         item["facts_from_baseline"] = True
                         col.carried_facts.setdefault((source, key), set()).add(target)
                     else:
@@ -2404,19 +2443,23 @@ def collect_facts(col: Collector, current: dict, previous: dict, programs: dict,
                         signer=text(row.get("Signer")),
                         company=text(row.get("Company")),
                     )
+                    fact.update(file_hash(row, fact["exists"]))
+                elif target is not None:
+                    fact["sha256_error"] = "the job gave no row for this file"
+                    unread.add("facts")
                 fact["program"] = match(fact["expanded_path"])
-                facts.append(fact)
+                facts.append(hash_reason(fact, "the file could not be checked"))
         else:
             for target in item["targets"]:
                 fact = null_fact(target)
                 if target in known:
-                    fact.update({f: known[target].get(f) for f in FACT_FIELDS})
+                    fact.update(carried_fact(known[target]))
                     fact["program"] = match(fact["expanded_path"])
                     item["facts_from_baseline"] = True
                     col.carried_facts.setdefault((source, key), set()).add(target)
                 elif target is not None:
                     unread.add("facts")
-                facts.append(fact)
+                facts.append(hash_reason(fact, "the file facts were not read"))
         item["facts"] = facts
         if unread:
             item["unread_fields"] = sorted(unread)
@@ -4264,7 +4307,7 @@ def summary_fact(fact):
     if not isinstance(fact, dict):
         return fact
     return {k: v for k, v in fact.items()
-            if k not in ("company", "check_error")
+            if k not in ("company", "check_error", "sha256", "sha256_error")
             and not (k == "expanded_path" and v == fact.get("path"))}
 
 

@@ -18,8 +18,8 @@ absolute at once; see the shared contract):
   `schema_version`, `skill`, `generated_at`, `summary_file` (the summary of
   the same run), `children` (one item per child with its full summary),
   `firewall_ports` (every matched rule, no limit), `firewall_ports_counts`,
-  `network_categories`, `driver_update_links`, `link_counts` and
-  `decisions`.
+  `network_categories`, `driver_update_links`, `link_counts`,
+  `decisions`, `accepted` and `accepted_counts`.
 
 Each child writes its own summary, detail file, baseline and id map to the
 same `<data dir>`, as in a run of its own; `runall` keeps no baseline.
@@ -84,6 +84,8 @@ Besides the shared fields (`schema_version`, `skill` `"ush-runall"`,
 | `driver_update_links` | list or `null` | pending driver updates linked to driver packages no present device uses, ids `y1`... (see "Pending driver updates and driver packages no present device uses"); `[]` when nothing links; `null` when a side was not read |
 | `link_counts` | object or `null` | `{linked, updates_without_package, packages_without_update}`; `null` with `driver_update_links` `null` |
 | `decisions` | list or `null` | one item per decision of `<data dir>/decisions.json`, ids `j1`... (see "The user's decisions"); `[]` when there is no file; `null` when the file cannot be used (one `not_checked` item names `decisions.json`) |
+| `accepted` | list or `null` | one item per entry of `<data dir>/state/accepted.json`, ids `a1`... (see "Accepted findings"); `[]` when there is no file; `null` when the file or the kinds file cannot be used (one `not_checked` item names `accepted.json`) |
+| `accepted_counts` | object or `null` | `{quiet, back, gone, not_checked}`: the `accepted` items per state, every state present (`0` when none); `null` with `accepted` `null` |
 | `truncated` | int | `firewall_ports` items cut from the summary by the limit of 50, from the end of the order; `0` when none. The detail file has them all |
 
 The summary holds no child summary and is cut nowhere else; `runall`
@@ -272,9 +274,56 @@ Every hit is evidence and makes the check `broken`; with no hit it is
 an unread source is not "no hit"). A decision is `broken` when any check
 is, `kept` only when every check is, and `not_checked` otherwise.
 
+## Accepted findings (`accepted`, ids `a..`)
+
+After the decisions, `runall` reads `<data dir>/state/accepted.json` with the
+shared `accepted` module (`<plugin root>/skills/ush-common/scripts/accepted.py`,
+validated against `<plugin root>/skills/ush-common/data/accepted-kinds.json`)
+and gives each entry one item, the same in the summary and the detail file:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | string | `a1`... in the order of the file |
+| `kind` | string | `update`, `autostart`, `event_group` or `firewall_rule` |
+| `key` | string or list | the entry's key, as stored |
+| `state` | string | `quiet`, `back`, `gone` or `not_checked` |
+| `changed` | list | on `back`, one `{field, accepted, now}` per watched field that brings it back; a field under a target fact is named `facts[<path>].<field>`; `[]` otherwise |
+| `skipped` | list | the watched fields (named as in `changed`) not compared because a side was null or not read; on `back` they are the fields beside `changed` that were not checked; `[]` otherwise |
+| `evidence` | string or `null` | `"<skill> <id>"` of the child item matched in this pass; `null` when no item matched or the detail was not read |
+| `accepted_on` | string | the date the entry was accepted, copied |
+| `reason` | string or `null` | on `not_checked`, why; `null` otherwise |
+
+Per entry the kinds file names the child skill, its detail section, an
+optional `match` on the item, the key and the child `source` that must have
+been read. The item is looked up in that child's detail file of this pass,
+never its cut summary:
+
+- the child not `ok`, its detail file unreadable or without the section,
+  or the named source missing or not `read`/`empty`: `not_checked`, with
+  the reason;
+- no item with the same key: `gone`;
+- several items with the same key (an `update` key, title and hresult,
+  matches every failure group with them): the one with the latest `last`;
+- an item whose own values were not read in this pass (`facts_from_baseline`
+  true, a target fact with `check_error`, or a non-empty `unread_fields`):
+  `not_checked`; carried values are never compared;
+- otherwise each watched field is compared as the kinds file says
+  (`changed`: any other value; `rises`: a larger number; `later`: a later
+  UTC time); a field under `facts[]` per target fact present on both sides,
+  by `path`. A `null` on one side (or a value that cannot be compared) is
+  not compared: with no other change the item is `not_checked` naming those
+  fields, never `back` and never `quiet`. Any change gives `back`, else
+  `quiet`.
+
+The script sets no threshold. `--detail a1` prints one item.
+
 ## not_checked
 
 Besides the shared cases:
+
+- The accepted findings file not usable: `what` "the user's accepted
+  findings (accepted.json)", `reason` why the file or the kinds file cannot
+  be used, followed by "no accepted finding was checked".
 
 - A child not `ok`: `{what, id, status, reason}`, `what`
   `"<skill> (<script>)"`, `id` its `h` id, `status` its status, `reason` the

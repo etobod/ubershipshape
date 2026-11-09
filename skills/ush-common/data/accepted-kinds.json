@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "_comment": "Kinds of findings the user may accept (plan 060, B-23, B-24). Per kind: the child skill and its detail section, an optional match on the item, the key (one field, or a list of fields), the facts kept with the entry, an optional source (the child source that must have been read; a value @field is taken from the entry's facts), and per watched field how it brings an accepted item back: changed (any other value), rises (a larger number), later (a later UTC time). A field under facts[] is compared per target fact, by path. A null on one side is not compared: that field is not_checked, never back. A null on both sides is equal only when it was read: a target fact was read when its file does not exist (exists false) or exists with no error beside the field (sha256 with sha256_error); a file whose existence was not confirmed was not read; both sides must be read, and an item whose kept fields were not read (facts_from_baseline, a check_error, unread_fields) is not_checked as a whole. No threshold is in code.",
+  "kinds": {
+    "update": {
+      "skill": "ush-health",
+      "section": "update_failures",
+      "key": ["title", "hresult"],
+      "facts": ["title", "hresult", "result", "count", "first", "last"],
+      "source": {"name": "update_history"},
+      "watched": {"last": "later"}
+    },
+    "autostart": {
+      "skill": "ush-inventory",
+      "section": "autostart",
+      "key": "key",
+      "facts": ["source", "kind", "command", "targets", "facts"],
+      "source": {"name": "@source"},
+      "fact_fields": ["path", "expanded_path", "exists", "signature_status", "signer", "sha256", "sha256_error"],
+      "watched": {
+        "command": "changed",
+        "targets": "changed",
+        "facts[].expanded_path": "changed",
+        "facts[].exists": "changed",
+        "facts[].signature_status": "changed",
+        "facts[].signer": "changed",
+        "facts[].sha256": "changed"
+      }
+    },
+    "event_group": {
+      "skill": "ush-events",
+      "section": "groups",
+      "key": ["log", "provider", "event_id"],
+      "facts": ["log", "provider", "event_id", "level", "count", "last"],
+      "source": {"log": "@log", "pass": "A"},
+      "watched": {"count": "rises", "last": "later"}
+    },
+    "firewall_rule": {
+      "skill": "ush-inventory",
+      "section": "additions",
+      "match": {"kind": "firewall_rule"},
+      "source": {"name": "firewall_rules"},
+      "key": "key",
+      "facts": ["name", "app", "svc", "lport", "protocol", "dir", "action", "active", "profile"],
+      "watched": {
+        "app": "changed",
+        "svc": "changed",
+        "lport": "changed",
+        "protocol": "changed",
+        "action": "changed",
+        "active": "changed",
+        "profile": "changed"
+      }
+    }
+  }
+}

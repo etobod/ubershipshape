@@ -76,8 +76,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).absolute().parents[2] / "ush-common" / "scripts"))
 
+import accepted as accepted_file
 import datadir
 import decisions as decisions_file
+from baseline import parse_utc
 from psrun import dump
 
 SKILL = "ush-runall"
@@ -94,7 +96,9 @@ FORBIDDEN_SCRIPTS = ("logs.py", "dumps.py")  # they change the disk or a log
 SCRIPT_NAME = re.compile(r"[a-z_]+\.py")
 # A child that reads the baseline of another must run after it: (earlier, later).
 ORDER_RULES = (("ush-inventory", "ush-processes"),)
-DETAIL_SECTIONS = ("children", "firewall_ports", "driver_update_links", "decisions")
+DETAIL_SECTIONS = ("children", "firewall_ports", "driver_update_links", "decisions",
+                   "accepted")
+ACCEPTED_STATES = ("quiet", "back", "gone", "not_checked")
 SKILL_HEALTH = "ush-health"
 SKILL_INVENTORY = "ush-inventory"
 SKILL_PROCESSES = "ush-processes"
@@ -460,8 +464,9 @@ def firewall_ports(inventory_detail: dict, processes_detail: dict,
 
 
 def read_child_detail(skill: str, outcome, source, sections: tuple):
-    """``(detail, None)`` of an ok child whose ``source`` was read (``None``: no source is
-    required), or ``(None, reason)``."""
+    """``(detail, None)`` of an ok child whose ``source`` was read, or ``(None, reason)``.
+    ``source`` is a source name, an object of fields a source must have (``{"log":
+    "System", "pass": "A"}``), or ``None``/``{}`` when no source is required."""
     if outcome is None:
         return None, f"{skill} is not in children.json"
     if outcome["status"] != "ok":
@@ -475,14 +480,18 @@ def read_child_detail(skill: str, outcome, source, sections: tuple):
         return None, f"the {skill} detail file could not be read: {error_text(exc)}"
     if not isinstance(detail, dict):
         return None, f"the {skill} detail file does not hold an object"
-    entries = [entry for entry in detail.get("sources") or []
-               if isinstance(entry, dict) and entry.get("name") == source]
-    if source is not None and not entries:
-        return None, f"source {source} is not in the {skill} detail file"
+    want = {"name": source} if isinstance(source, str) else dict(source or {})
+    label = source if isinstance(source, str) else ", ".join(
+        f"{field} {value}" for field, value in want.items())
+    entries = [entry for entry in detail.get("sources") or [] if want
+               and isinstance(entry, dict)
+               and all(entry.get(field) == value for field, value in want.items())]
+    if want and not entries:
+        return None, f"source {label} is not in the {skill} detail file"
     for entry in entries:
         if entry.get("status") not in READ_STATUSES:
             why = str(entry.get("reason") or "no reason given")[:REASON_MAX]
-            return None, f"source {source} of {skill} is {entry.get('status')}: {why}"
+            return None, f"source {label} of {skill} is {entry.get('status')}: {why}"
     missing = [name for name in sections if not isinstance(detail.get(name), list)]
     if missing:
         return None, f"the {skill} detail file has no list {', '.join(missing)}"
@@ -824,14 +833,139 @@ def check_decisions(outcomes: dict, data_dir: Path) -> tuple:
             for n, decision in enumerate(loaded["decisions"], 1)], []
 
 
+# --- accepted findings (plan 060) -------------------------------------------------------
+def fact_read(fact: dict, sub: str) -> bool:
+    """Whether a target fact's ``sub`` field was read: the file does not exist (read,
+    nothing there), or it exists and the field has no error beside it (sha256 with
+    sha256_error). A file whose existence was not confirmed was not read."""
+    if fact.get("exists") is False:
+        return True
+    return fact.get("exists") is True and fact.get(f"{sub}_error") is None
+
+
+def watched_differs(how: str, accepted, now, now_read: bool = True):
+    """True when ``now`` brings an accepted value back by ``how``, False when not,
+    None when the two cannot be compared (a null on one side, a null now that was not
+    read (``now_read`` false), a value of another type)."""
+    if accepted is None and now is None:
+        return False if now_read else None
+    if accepted is None or now is None:
+        return None
+    if how == "changed":
+        return accepted != now
+    if how == "rises":
+        numbers = all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                      for v in (accepted, now))
+        return now > accepted if numbers else None
+    try:
+        return parse_utc(now) > parse_utc(accepted)
+    except (TypeError, ValueError):
+        return None
+
+
+def compare_watched(kind: dict, facts: dict, item: dict) -> tuple:
+    """``(changed, skipped)``: the watched fields whose value brings the entry back, as
+    ``{field, accepted, now}``, and the names of those that could not be compared. A
+    field under ``facts[]`` is compared per target fact present on both sides, by path,
+    and named ``facts[<path>].<field>``."""
+    changed, skipped = [], []
+    for field, how in kind["watched"].items():
+        if field.startswith(accepted_file.FACT_LIST):
+            sub = field[len(accepted_file.FACT_LIST):]
+            before = {fact.get("path"): fact for fact in facts.get("facts") or []
+                      if isinstance(fact, dict) and fact.get("path") is not None}
+            pairs = [(f"facts[{fact['path']}].{sub}", before[fact["path"]].get(sub),
+                      fact.get(sub), fact_read(fact, sub)
+                      and fact_read(before[fact["path"]], sub))
+                     for fact in item.get("facts") or []
+                     if isinstance(fact, dict) and fact.get("path") in before]
+        else:
+            pairs = [(field, facts.get(field), item.get(field), True)]
+        for name, then, now, now_read in pairs:
+            differs = watched_differs(how, then, now, now_read)
+            if differs is None:
+                skipped.append(name)
+            elif differs:
+                changed.append({"field": name, "accepted": then, "now": now})
+    return changed, skipped
+
+
+def accepted_source(kind: dict, facts: dict) -> dict:
+    """The fields of the child source a kind needs read (its ``source``; a value
+    ``@field`` is taken from the entry's facts)."""
+    return {field: facts.get(value[1:]) if isinstance(value, str) and value.startswith("@")
+            else value for field, value in (kind.get("source") or {}).items()}
+
+
+def latest(candidates: list) -> dict:
+    """The candidate with the latest ``last``; one without a readable time loses."""
+    def when(item):
+        try:
+            return (1, parse_utc(item.get("last")))
+        except (TypeError, ValueError):
+            return (0, datetime.min.replace(tzinfo=timezone.utc))
+    return max(candidates, key=when)
+
+
+def match_accepted(item_id: str, entry: dict, kinds: dict, outcomes: dict) -> dict:
+    """The ``a`` item of one accepted entry: its state against this pass."""
+    result = {"id": item_id, "kind": entry["kind"], "key": entry["key"],
+              "state": "not_checked", "changed": [], "skipped": [], "evidence": None,
+              "accepted_on": entry.get("accepted_on"), "reason": None}
+    kind = kinds[entry["kind"]]
+    skill, section = kind["skill"], kind["section"]
+    facts = entry.get("facts") if isinstance(entry.get("facts"), dict) else {}
+    detail, reason = read_child_detail(skill, outcomes.get(skill),
+                                       accepted_source(kind, facts), (section,))
+    if reason is not None:
+        return dict(result, reason=reason)
+    match = kind.get("match") or {}
+    candidates = [item for item in detail[section] if isinstance(item, dict)
+                  and all(item.get(field) == value for field, value in match.items())
+                  and accepted_file.key_of(kind, item) == entry["key"]]
+    if not candidates:
+        return dict(result, state="gone")
+    item = latest(candidates)
+    result["evidence"] = f"{skill} {item.get('id')}"
+    reason = accepted_file.not_read_reason(item, REASON_MAX, kind["facts"])
+    if reason is not None:
+        return dict(result, reason=reason)
+    changed, skipped = compare_watched(kind, facts, item)
+    if changed:
+        return dict(result, state="back", changed=changed, skipped=skipped)
+    if skipped:
+        return dict(result, skipped=skipped,
+                    reason=f"not compared (a null value): {', '.join(skipped)}")
+    return dict(result, state="quiet")
+
+
+def check_accepted(outcomes: dict, data_dir: Path) -> tuple:
+    """``(items or None, counts or None, notes)``: one ``a`` item per entry of
+    ``accepted.json``; ``[]`` without the file, ``None`` and one not_checked entry when
+    the file or the kinds file cannot be used."""
+    kinds, kinds_reason = accepted_file.load_kinds()
+    loaded = accepted_file.load(data_dir, kinds)
+    if loaded["status"] == "none":
+        return [], dict.fromkeys(ACCEPTED_STATES, 0), []
+    if loaded["status"] != "read" or kinds is None:
+        why = loaded["reason"] or kinds_reason
+        return None, None, [{"what": f"the user's accepted findings "
+                                     f"({accepted_file.FILE_NAME})",
+                             "reason": f"{why}; no accepted finding was checked"}]
+    items = [match_accepted(f"a{n}", entry, kinds, outcomes)
+             for n, entry in enumerate(loaded["entries"], 1)]
+    counts = Counter(item["state"] for item in items)
+    return items, {state: counts[state] for state in ACCEPTED_STATES}, []
+
+
 # --- command line -----------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     datadir.add_arguments(parser)
     parser.add_argument("--detail", metavar="ID",
                         help="print one item (a child h1, h2, ..., a firewall item w1, "
-                             "w2, ..., a driver update link y1, y2, ... or a decision j1, "
-                             "j2, ...) of the newest "
+                             "w2, ..., a driver update link y1, y2, ..., a decision j1, "
+                             "j2, ... or an accepted finding a1, a2, ...) of the newest "
                              "detail file and exit; no child is run")
     parser.add_argument("--detail-file", metavar="PATH",
                         help="with --detail: read this detail file (the summary's "
@@ -922,6 +1056,8 @@ def main(argv=None, run_child=None, now=None) -> int:
     not_checked.extend(link_notes)
     decision_items, decision_notes = check_decisions(outcomes, data_dir)
     not_checked.extend(decision_notes)
+    accepted_items, accepted_counts, accepted_notes = check_accepted(outcomes, data_dir)
+    not_checked.extend(accepted_notes)
     all_ports = firewall["firewall_ports"]
     listed_ports = all_ports[:FIREWALL_PORTS_MAX] if all_ports is not None else None
     cut_ports = len(all_ports) - len(listed_ports) if all_ports is not None else 0
@@ -942,6 +1078,8 @@ def main(argv=None, run_child=None, now=None) -> int:
         "driver_update_links": links["driver_update_links"],
         "link_counts": links["link_counts"],
         "decisions": decision_items,
+        "accepted": accepted_items,
+        "accepted_counts": accepted_counts,
     }
     detail_file.write_text(dump(detail) + "\n", encoding="utf-8")
 
@@ -963,6 +1101,8 @@ def main(argv=None, run_child=None, now=None) -> int:
         "driver_update_links": links["driver_update_links"],
         "link_counts": links["link_counts"],
         "decisions": decision_items,
+        "accepted": accepted_items,
+        "accepted_counts": accepted_counts,
     }
     text_out = dump(summary)
     summary_file.write_text(text_out + "\n", encoding="utf-8")

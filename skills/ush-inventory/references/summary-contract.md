@@ -27,7 +27,8 @@ contract):
   that are part of Windows, the entries with `own: null`, the components
   that are not listed, the changes of own items, the fields the summary
   drops (a program's `install_location`, `source` and `own`; an autostart
-  entry's `approved_raw` and `display_name`, a fact's `company`, and a
+  entry's `approved_raw` and `display_name`, a fact's `company`, `sha256` and
+  `sha256_error`, and a
   fact's `expanded_path` when it equals `path`; a driver's `inf_name`,
   `third_party` and `own`; the other fields of a firewall rule and a
   certificate), and the whole certificate subject. The baseline also keeps
@@ -121,7 +122,7 @@ the summary goes out over the limit and `not_checked` gets the item
 | `startup_approved` | `Explorer\StartupApproved\Run`, `Run32` and `StartupFolder` in `HKCU` and `HKLM` | no items: the `approved` and `enabled` fields of `run_keys` and `startup_folders` entries |
 | `scheduled_tasks` | `Get-ScheduledTask`; only tasks with a logon (`MSFT_TaskLogonTrigger`) or boot (`MSFT_TaskBootTrigger`) trigger | autostart entries |
 | `services` | `Win32_Service` with `StartMode` `Auto`, with `Type`, `DelayedAutostart` and `ServiceDll` from the service's registry key | autostart entries |
-| `file_facts` | for every target file of the autostart entries: the expanded path, whether it exists, its Authenticode status, signer and company | no items: the `facts` of the entries |
+| `file_facts` | for every target file of the autostart entries: the expanded path, whether it exists, its Authenticode status, signer and company, and the SHA-256 of its bytes (`Get-FileHash`, read-only) | no items: the `facts` of the entries |
 | `optional_features` | `Win32_OptionalFeature` (no administrator rights needed) | components (`feature`) |
 | `capabilities` | `Get-WindowsCapability -Online`, only with administrator rights; without them the job is not run and the source is `unreadable` with the reason `requires administrator rights (not read in this run, which is not elevated); this is not an empty list` | components (`capability`) |
 | `drivers` | `Win32_PnPSignedDriver`, one row per device; a row without `InfName` is no item: `drivers_without_inf` counts the `Win32_PnPSignedDriver` rows without an INF file (for example software devices, or a device without a driver), not device state; device state is measured by `ush-health` | drivers |
@@ -286,7 +287,7 @@ checked", not "no pairs".
 | `state` | `task` and `service`: as read (`Ready`, `Disabled`, `Running`, `Stopped`, ...). For a per-user service `Running` when any instance runs, else the state of the first instance by name. Not compared |
 | `display_name`, `delayed`, `user_service`, `template_start` | `service` only: the display name (only in the detail file); `delayed` `true` when `DelayedAutostart` = 1; `user_service` `true` for a per-user service; `template_start` the `Start` value of the template key (per-user services only; `null` when not read). A service whose registry values could not be read and that the previous baseline does not have names in `unread_fields` only the fields whose values were not read before the error: `delayed` (then `null`) when `DelayedAutostart` was not read, `user_service` when `Type` was not read; when it runs in `svchost.exe` (its target is a registry value) and its `ServiceDll` is unknown also `targets` and `facts`, and `own` `null`: then it is counted in `own_counts.unknown` and listed only in the detail file (see "Values not read") |
 | `targets` | the target files as text, in action order, as taken from `command` before variables are expanded; `null` for a target that cannot be named. Only in the detail file: in the summary each target is the `path` of its fact |
-| `facts` | one fact per target, in the same order: `{path, expanded_path, exists, signature_status, signer, company, program}`. A fact of a file that could not be checked also has `check_error`, the reason. In the summary a fact has no `company` and no `check_error`, and no `expanded_path` when it equals `path`; the detail file has every field |
+| `facts` | one fact per target, in the same order: `{path, expanded_path, exists, signature_status, signer, company, sha256, sha256_error, program}`. `sha256` is the lower-case SHA-256 of the file's bytes, or `null` with `sha256_error` saying why (the file does not exist, its existence is not confirmed, the read failed, the job gave no row or no valid hash for it, or the fact was carried from a baseline that holds no hash); it is not compared between runs and is carried from the baseline like the other facts. A fact of a file that could not be checked also has `check_error`, the reason. In the summary a fact has no `company`, `check_error`, `sha256` or `sha256_error`, and no `expanded_path` when it equals `path`; the detail file has every field |
 | `facts_from_baseline` | `true` when facts are the previous baseline's, because `file_facts` (or one file) could not be read |
 | `own` | see "own and windows-own.json"; always `false` in the summary list |
 | `unread_fields` | the fields whose value is unknown in this run (`["approved", "enabled"]`, `["enabled"]` for an `unknown` `approved`, `["facts"]`); they are never compared |

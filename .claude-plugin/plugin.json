@@ -1,6 +1,6 @@
 {
   "name": "ubershipshape",
-  "version": "1.0.28",
+  "version": "1.0.29",
   "description": "Read-only health, events, settings, inventory, processes and files checks for a Windows machine, with Markdown reports and paste-ready repair blocks the user runs by hand.",
   "author": {
     "name": "etobod"

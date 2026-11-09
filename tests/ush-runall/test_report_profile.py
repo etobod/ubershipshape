@@ -232,7 +232,8 @@ class TestReportProfile(RunallTestCase):
             self.assertEqual(len(path_keys), 3, path_keys)
 
         with self.subTest("id_letters"):
-            self.assertEqual(data.get("id_letters"), "hjwy")
+            # "a" since plan 060, M2 (accepted findings a1, a2, ...).
+            self.assertEqual(data.get("id_letters"), "ahjwy")
 
         with self.subTest("id_keys"):
             self.assertIn("id_keys", data)
@@ -592,6 +593,63 @@ class TestDecisionsProfile(unittest.TestCase):
             self.assertEqual(code, 1, f"output:\n{output}")
             self.assertNotIn("OK", output)
             self.assertIn("not named in the report: j1", output)
+
+
+# --- plan 060, M2, K5 ----------------------------------------------------------------------
+
+# An accepted update that failed again (back) and an accepted rule that is gone; ids a1, a2.
+ACCEPTED_ITEMS = [
+    {"id": "a1", "kind": "update", "key": ["Invented Cumulative Update", "0x80070005"],
+     "state": "back",
+     "changed": [{"field": "last", "accepted": "2026-09-01T08:00:00Z",
+                  "now": "2026-09-19T08:00:00Z"}],
+     "evidence": "ush-health u4", "accepted_on": "2026-09-02", "reason": None},
+    {"id": "a2", "kind": "firewall_rule", "key": "fw:{invented-rule}", "state": "gone",
+     "changed": [], "evidence": None, "accepted_on": "2026-09-03", "reason": None},
+]
+ACCEPTED_COUNTS = {"quiet": 0, "back": 1, "gone": 1, "not_checked": 0}
+
+
+class TestAcceptedProfile(TestDecisionsProfile):
+    """A summary with ``accepted`` items and ``accepted_counts`` still passes the runall
+    profile with a report in the current format, which names no ``a`` item (plan 060, M2,
+    K5); an ``a`` item named in ``ush:detail`` backs its numbers."""
+
+    def _write_data(self):
+        super()._write_data()
+        for path in (self.summary_file, self.detail_file):
+            data = json.loads(path.read_text(encoding="utf-8"))
+            data["accepted"] = json.loads(json.dumps(ACCEPTED_ITEMS))
+            data["accepted_counts"] = dict(ACCEPTED_COUNTS)
+            path.write_text(json.dumps(data), encoding="utf-8")
+
+    def test_current_format_passes(self):
+        self._write_data()
+        with self.subTest("no a item named"):
+            code, output = self._run(self._write_report([J1_LINE],
+                                                        "runall-2026-09-20-1300.md"))
+            self.assertEqual(code, 0, f"output:\n{output}")
+            self.assertIn("OK", output)
+
+        with self.subTest("a1 named through ush:detail"):
+            line = ("- a1: zaakceptowana aktualizacja znów zawiodła "
+                    "(ostatnio 2026-09-19, zaakceptowana 2026-09-02).")
+            path = self._write_report([J1_LINE, line], "runall-2026-09-20-1301.md")
+            text = path.read_text(encoding="utf-8").replace(
+                "## Nie sprawdzono", "<!-- ush:detail a1 -->\n## Nie sprawdzono")
+            path.write_text(text, encoding="utf-8")
+            code, output = self._run(path)
+            self.assertEqual(code, 0, f"output:\n{output}")
+            self.assertIn("OK", output)
+
+        with self.subTest("control: an unbacked number fails"):
+            line = "- a1: zaakceptowana aktualizacja zawiodła 4711 razy."
+            code, output = self._run(self._write_report([J1_LINE, line],
+                                                        "runall-2026-09-20-1302.md"))
+            self.assertEqual(code, 1, f"output:\n{output}")
+            self.assertIn("4711", output)
+
+    test_decision_must_be_named = None
 
 
 if __name__ == "__main__":
