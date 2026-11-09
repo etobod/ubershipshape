@@ -94,6 +94,18 @@ that is `null` requires nothing. Failure groups cut from the summary
 
 ## Layout
 
+The summary section of rule 15 "Summary first" in `report-style.md` comes
+first, directly after the header (the `ush:summary` line, the title and its
+line) and before the dashboard, which follows it with its legend under a `##`
+heading of its own (item 3; the section runs to the next `##` heading, so
+nothing without a heading may stand below it). The `<!-- ush:attention -->` line stands
+directly above its `##` heading. Part 1
+names each high or medium recommendation of this report by its main source
+(the first id of its `Dowód`). Part 2 says „nie dotyczy: decyzje sprawdza
+ush-runall”: this skill checks no decisions. Part 3 names the open plans of
+`<data dir>/plans/` (not `done/`) in a fenced code block. The last line gives
+the count of low recommendations the section does not name.
+
 1. First line, exactly:
 
    ```
@@ -107,7 +119,9 @@ that is `null` requires nothing. Failure groups cut from the summary
    whether the run was elevated (`elevated`). Without elevation say that the
    sources which need administrator rights are in "Not checked".
 
-3. Dashboard: a table with one row per area, in the order of the sections
+3. Dashboard, directly after the summary section, under its own `## Overview`
+   heading (in a Polish report `## Przegląd`), with the legend (item 4) below
+   it: a table with one row per area, in the order of the sections
    below.
 
    | # | Area | State | Action |

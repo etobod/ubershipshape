@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tests.report_summary import with_summary
 from tests.skill_loader import load_script
 
 # All data below is invented. The heading number of the report ("## 1.") is
@@ -45,6 +46,7 @@ def _valid_body_lines():
     return [
         "# Event log report",
         "",
+        "## Overview",
         "Bugcheck 0x19C was recorded on 18.09.2026.",
         "Events in total: 1 234.",
         "Average per day: 3,5.",
@@ -80,7 +82,7 @@ class TestReportCheck(unittest.TestCase):
 
     def _write_report(self, lines, name="report.md"):
         path = self.reports_dir / name
-        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        path.write_text("\n".join(with_summary(lines, "ush-events")) + "\n", encoding="utf-8")
         return path
 
     def _run(self, report_path):
@@ -101,6 +103,11 @@ class TestReportCheck(unittest.TestCase):
         code, output = self._run(self._write_report(lines, "control.md"))
         self.assertEqual(code, 0, f"control report should pass; output:\n{output}")
         self.assertIn("OK", output)
+
+    @staticmethod
+    def _line_of(report, text):
+        """1-based line of ``text`` in the written report (after the summary section)."""
+        return report.read_text(encoding="utf-8").splitlines().index(text) + 1
 
     def _assert_reports_number_on_line(self, output, number, line_no):
         pattern = re.compile(rf"\b{line_no}\b")
@@ -127,11 +134,13 @@ class TestReportCheck(unittest.TestCase):
             number = "98765"
             self._assert_not_in_temp_path(number)
             lines = list(valid)
-            insert_at = 5  # 0-based index; becomes line 6 of the report
-            lines.insert(insert_at, f"There were also {number} warnings.")
-            code, output = self._run(self._write_report(lines, "invented.md"))
+            insert_at = 5  # 0-based index in the body, before the summary section goes in
+            inserted = f"There were also {number} warnings."
+            lines.insert(insert_at, inserted)
+            report = self._write_report(lines, "invented.md")
+            code, output = self._run(report)
             self.assertNotEqual(code, 0, f"output:\n{output}")
-            self._assert_reports_number_on_line(output, number, insert_at + 1)
+            self._assert_reports_number_on_line(output, number, self._line_of(report, inserted))
 
         with self.subTest("number only in a detail item not named in ush:detail"):
             # 5555 is the count of anomaly a1; only g1 is named in the marker.
@@ -139,11 +148,12 @@ class TestReportCheck(unittest.TestCase):
             self._assert_not_in_temp_path(number)
             lines = list(valid)
             marker_index = lines.index("<!-- ush:detail g1 -->")
-            insert_at = marker_index + 2
-            lines.insert(insert_at, f"One anomaly counted {number} events.")
-            code, output = self._run(self._write_report(lines, "unnamed-detail.md"))
+            inserted = f"One anomaly counted {number} events."
+            lines.insert(marker_index + 2, inserted)
+            report = self._write_report(lines, "unnamed-detail.md")
+            code, output = self._run(report)
             self.assertNotEqual(code, 0, f"output:\n{output}")
-            self._assert_reports_number_on_line(output, number, insert_at + 1)
+            self._assert_reports_number_on_line(output, number, self._line_of(report, inserted))
 
     def test_missing_markers_fail(self):
         body = _valid_body_lines()

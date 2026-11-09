@@ -10,5 +10,6 @@
   ],
   "required_keys": ["children", "firewall_ports", "firewall_ports_counts",
                     "driver_update_links", "link_counts", "decisions"],
-  "report_prefix": "runall-"
+  "report_prefix": "runall-",
+  "summary_section": true
 }

@@ -19,6 +19,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from tests.report_summary import with_summary
 from tests.skill_loader import load_script
 
 
@@ -294,9 +295,10 @@ class TestIds(ReliabilityTestCase):
         summary_file.write_text(json.dumps(data), encoding="utf-8")
 
         report = root / "reports" / "events-2026-09-28-1200.md"
-        report.write_text("\n".join([f"<!-- ush:summary {summary_file} -->",
+        report.write_text("\n".join(with_summary([f"<!-- ush:summary {summary_file} -->",
                                      "Reliability record group r7: Invented-Golf.",
-                                     *NOT_CHECKED]) + "\n", encoding="utf-8")
+                                     *NOT_CHECKED], "ush-events")) + "\n",
+                          encoding="utf-8")
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
             code = check.main([str(report)])

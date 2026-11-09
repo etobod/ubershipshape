@@ -91,7 +91,11 @@ def _items(text):
 # - A forbidden total names "total", "sum" or "add(ing) up" together with a negation.
 # - SKILL.md step 5 is the text from the line "5." to the line "6." of "## Steps".
 
-VERDICT_NAMES = ("Werdykt", "Wniosek", "Verdict")
+# Plan 055 M2: the summary section of rule 15 of report-style.md replaced the verdict;
+# what the verdict tests guarded is now checked in the summary section ("Summary" or
+# "Podsumowanie") and, for the memory line, at the start of the details (the run state).
+SUMMARY_NAMES = ("Summary", "Podsumowanie")
+RUN_STATE_NAMES = ("Run state", "Stan przebiegu")
 RECOMMENDATION_NAMES = ("Recommendations", "Rekomendacje", "Zalecenia")
 ACTIONS_NAMES = ("Co możesz zrobić", "What you can do")
 NOT_CHECKED_NAMES = ("Nie sprawdzono", "Not checked")
@@ -242,15 +246,15 @@ class TestDocs(unittest.TestCase):
             words = importlib.import_module("tests.ush-common.test_check_report_words")
             self.assertIn("ush-runall", words.SKILLS)
 
-    def test_verdict_and_actions_sections(self):
+    def test_summary_and_actions_sections(self):
         report_format = _read(REPORT_FORMAT)
         headings = _headings(report_format)
 
-        verdict = _find_heading(report_format, VERDICT_NAMES)
+        summary = _find_heading(report_format, SUMMARY_NAMES)
         recommendations = _find_heading(report_format, RECOMMENDATION_NAMES)
-        with self.subTest("the verdict section comes before the recommendations"):
-            self.assertLess(verdict[0], recommendations[0],
-                            f"verdict {verdict[2]!r} after {recommendations[2]!r}")
+        with self.subTest("the summary section comes before the recommendations"):
+            self.assertLess(summary[0], recommendations[0],
+                            f"summary {summary[2]!r} after {recommendations[2]!r}")
 
         not_checked = _find_heading(report_format, NOT_CHECKED_NAMES)
         with self.subTest("'Co możesz zrobić' is the section directly before 'Nie sprawdzono'"):
@@ -297,10 +301,11 @@ class TestDocs(unittest.TestCase):
                 self.assertIsNone(match, f"{label}: {match.group(0) if match else ''!r}")
 
     def test_recommendation_named_by_source(self):
-        # Plan 017 M2 (012 #1): a recommendation has no id of the report's own; the verdict
-        # and "Co możesz zrobić" name it by its main source, `ush-<skill> <id>`.
+        # Plan 017 M2 (012 #1): a recommendation has no id of the report's own; the summary
+        # (once the verdict) and "Co możesz zrobić" name it by its main source,
+        # `ush-<skill> <id>`.
         report_format = _read(REPORT_FORMAT)
-        for names in (VERDICT_NAMES, ACTIONS_NAMES):
+        for names in (SUMMARY_NAMES, ACTIONS_NAMES):
             section = " ".join(_layout_section(report_format, *names).split())
             with self.subTest(section=names[0]):
                 self.assertIn("`ush-<skill> <id>`", section)
@@ -392,26 +397,27 @@ class TestDocs(unittest.TestCase):
             self.assertRegex(step, re.compile(r"\bwrit(e|es|ing)\b", re.IGNORECASE))
             self.assertRegex(step, REPAIR_PLAN)
 
-    def test_open_repair_plans_in_verdict(self):
+    def test_open_repair_plans_in_summary(self):
         # K3: the runall report format names the open repair plans of <data dir>/plans/
-        # in the verdict.
-        verdict = _layout_section(_read(REPORT_FORMAT), *VERDICT_NAMES)
-        found = [item for item in _items(verdict)
+        # in the summary section (once the verdict).
+        summary = _layout_section(_read(REPORT_FORMAT), *SUMMARY_NAMES)
+        found = [item for item in _items(summary)
                  if OPEN_PLANS_DIR.search(item)
                  and re.search(r"\bopen\b", item, re.IGNORECASE)
                  and REPAIR_PLAN.search(item)]
-        self.assertTrue(found, f"no verdict item naming open repair plans in plans/:\n{verdict}")
+        self.assertTrue(found, f"no summary item naming open repair plans in plans/:\n{summary}")
 
     def test_open_plans_fenced_and_unlisted(self):
         # Review round 1, fix 5: the open plans' file names go into a fenced code block
         # (check_report checks the digits of inline code); a plans/ that cannot be
-        # listed is said in the verdict, with the reason under "Not checked".
-        verdict = _layout_section(_read(REPORT_FORMAT), *VERDICT_NAMES)
-        items = _items(verdict)
+        # listed is said in the summary section (once the verdict), with the reason under
+        # "Not checked".
+        summary = _layout_section(_read(REPORT_FORMAT), *SUMMARY_NAMES)
+        items = _items(summary)
         plans = [item for item in items
                  if OPEN_PLANS_DIR.search(item) and REPAIR_PLAN.search(item)
                  and re.search(r"\bopen\b", item, re.IGNORECASE)]
-        self.assertTrue(plans, verdict)
+        self.assertTrue(plans, summary)
 
         with self.subTest("the file names go into a fenced code block, not inline code"):
             self.assertTrue(any(re.search(r"\bfenced code block\b", item)
@@ -425,7 +431,7 @@ class TestDocs(unittest.TestCase):
                      if OPEN_PLANS_DIR.search(item) and "cannot be listed" in item
                      and any(name in item for name in NOT_CHECKED_NAMES)
                      and re.search(r"\bnever\b[^.]*\bno open plans\b", item)]
-            self.assertTrue(found, verdict)
+            self.assertTrue(found, summary)
 
     def test_block_printers_split(self):
         # Review round 1, fixes 1 and 2: step 5 says how each printer's output splits
@@ -453,28 +459,64 @@ class TestDocs(unittest.TestCase):
             self.assertIn("<!-- ush:block ush-files <id> -->", step)
             self.assertIn("<!-- ush:noundo ush-files <id> -->", step)
 
-    def test_chat_answer_verdict_first(self):
-        # Plan 004 final review (D-01): step 8, the chat answer, opens with the
-        # verdict and gives each point's problem and what to do, with no block.
-        step = " ".join(_step(_section(_read(SKILL_MD), "Steps"), 8).split())
-        self.assertRegex(step, re.compile(r"\bverdict\b", re.IGNORECASE))
-        self.assertRegex(step, re.compile(r"part one of rule 4", re.IGNORECASE))
-        self.assertRegex(step, re.compile(r"\bno block\b", re.IGNORECASE))
+    def test_summary_replaces_verdict(self):
+        # Plan 055 M2 K5 (loc/inbox/055-plan-1-hard-report-summary.md): the summary
+        # section replaces the "Werdykt" section. Assumptions beyond the plan:
+        # - the memory line is the item naming `used_percent` and `available_gb` of the
+        #   processes summary; "in the details" means that item names "details";
+        # - part 3 is named "part 3" or by its label "Otwarte plany naprawcze";
+        # - the broken-decision recommendation is the item naming `ush-runall j<n>`,
+        #   "broken" and its evidence ("evidence" or "Dowód").
+        report_format = _read(REPORT_FORMAT)
+        items = _items(report_format)
+
+        with self.subTest("no Werdykt section"):
+            titles = [title for _, _, title in _headings(report_format)]
+            bad = [title for title in titles
+                   if re.search(r"\bWerdykt\b|\bVerdict\b", title, re.IGNORECASE)]
+            self.assertEqual(bad, [], f"headings: {titles}")
+
+        with self.subTest("the memory line stands in the details"):
+            found = [item for item in items
+                     if "used_percent" in item and "available_gb" in item
+                     and re.search(r"\bdetails\b", item, re.IGNORECASE)]
+            self.assertTrue(found, "no item puts the memory line into the details")
+
+        with self.subTest("the open repair plans go into part 3"):
+            found = [item for item in items
+                     if OPEN_PLANS_DIR.search(item) and REPAIR_PLAN.search(item)
+                     and re.search(r"\bopen\b", item, re.IGNORECASE)
+                     and re.search(r"\bpart 3\b|Otwarte plany naprawcze", item)]
+            self.assertTrue(found, "no item puts the open repair plans into part 3")
+
+        with self.subTest("the broken-decision evidence starts with ush-runall j<n>"):
+            found = [item for item in items
+                     if "`ush-runall j<n>`" in item
+                     and re.search(r"\bbroken\b", item, re.IGNORECASE)
+                     and re.search(r"\bevidence\b|Dowód", item, re.IGNORECASE)
+                     and re.search(r"\bstarts? with\b|\bfirst\b", item, re.IGNORECASE)]
+            self.assertTrue(found, "no item starts the broken-decision evidence with "
+                                   "`ush-runall j<n>`")
+
+        with self.subTest("step 8 no longer says part one of rule 4"):
+            step = " ".join(_step(_section(_read(SKILL_MD), "Steps"), 8).split())
+            self.assertNotRegex(step, re.compile(r"part one of rule 4", re.IGNORECASE))
 
     def test_memory_line_and_firewall_counts(self):
         report_format = _read(REPORT_FORMAT)
-        verdict = _layout_section(report_format, *VERDICT_NAMES)
+        summary = _layout_section(report_format, *SUMMARY_NAMES)
+        run_state = _layout_section(report_format, *RUN_STATE_NAMES)
 
-        with self.subTest("the verdict asks for the memory line of the processes summary"):
-            found = [item for item in _items(verdict)
+        with self.subTest("the details ask for the memory line of the processes summary"):
+            found = [item for item in _items(run_state)
                      if "used_percent" in item and "available_gb" in item
                      and "processes" in item.lower()]
-            self.assertTrue(found, f"no memory line from ush-processes:\n{verdict}")
+            self.assertTrue(found, f"no memory line from ush-processes:\n{run_state}")
 
-        with self.subTest("the verdict gives no count of its own"):
-            found = [item for item in _items(verdict)
+        with self.subTest("the summary gives no count of its own"):
+            found = [item for item in _items(summary)
                      if re.search(r"\bcount", item, re.IGNORECASE) and NEGATION.search(item)]
-            self.assertTrue(found, f"no item saying the verdict gives no count:\n{verdict}")
+            self.assertTrue(found, f"no item saying the summary gives no count:\n{summary}")
 
         firewall = _layout_section(report_format, *FIREWALL_NAMES)
         with self.subTest("the firewall section explains why the two port counts differ"):

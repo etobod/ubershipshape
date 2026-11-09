@@ -362,5 +362,57 @@ class TestRunMe(unittest.TestCase):
                                      "still offers a new run of the skill as the recovery")
 
 
+# loc/inbox/055-plan-1-hard-report-summary.md, M2: the chat answer is the summary
+# section check_report.py printed after its OK line, plus the report path, nothing added.
+# Assumptions beyond the plan: the step names "chat", `check_report.py`, "print",
+# "OK", "path", and "nothing added" or "nothing else".
+REPORT_SKILLS = ("advice", "events", "files", "health", "inventory", "processes",
+                 "runall", "settings")
+
+
+class TestPlugin(unittest.TestCase):
+    def test_chat_answer_is_printed_summary(self):
+        for name in REPORT_SKILLS:
+            doc = SKILLS / f"ush-{name}" / "SKILL.md"
+            with self.subTest(skill=f"ush-{name}"):
+                self.assertTrue(doc.is_file(), f"ush-{name} has no SKILL.md")
+                steps = re.findall(
+                    r"(?ms)^\d+\. Tell the user where the report is.*?(?=^\d+\. |^## |\Z)",
+                    read(doc))
+                self.assertEqual(len(steps), 1, "one step tells where the report is")
+                step = flat(steps[0])
+                checks = (
+                    ("names the chat answer", r"(?i)\bchat\b"),
+                    ("names check_report.py", r"check_report\.py"),
+                    ("the text the checker printed", r"(?i)\bprint(?:s|ed)?\b"),
+                    ("printed after OK", r"after (?:the |its )?`?OK`?"),
+                    ("plus the report path", r"(?i)\bpath\b"),
+                    ("nothing added", r"(?i)\bnothing (?:added|else)\b"),
+                )
+                for label, pattern in checks:
+                    self.assertRegex(step, pattern, f"{label}: {step}")
+
+    def test_check_step_sets_utf8_output_in_powershell(self):
+        # Final review 055 round 2: Windows PowerShell 5.1 decodes a native program's
+        # stdout with [Console]::OutputEncoding, so the check step sets it to UTF-8
+        # first (as psrun.py does) and the printed section reaches the chat unchanged.
+        for name in REPORT_SKILLS:
+            with self.subTest(skill=f"ush-{name}"):
+                steps = [flat(step) for step in re.findall(
+                    r"(?ms)^\d+\. .*?(?=^\d+\. |^## |\Z)",
+                    read(SKILLS / f"ush-{name}" / "SKILL.md"))
+                    if "--latest --skill" in step and "check_report.py" in step]
+                self.assertEqual(len(steps), 1, "one step runs check_report.py")
+                self.assertIn(UTF8_CHECK_SENTENCE, steps[0])
+
+
+# The same sentence in the check step of every report skill.
+UTF8_CHECK_SENTENCE = (
+    "In Windows PowerShell, the same command first sets "
+    "`[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false);` so the "
+    "Polish letters of the printed section reach the chat unchanged; in a POSIX shell "
+    "the command runs as it is.")
+
+
 if __name__ == "__main__":
     unittest.main()

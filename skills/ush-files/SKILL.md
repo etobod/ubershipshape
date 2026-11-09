@@ -230,6 +230,11 @@ files, file contents or cloud storage. Say so if the user asks for these.
    python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-common/scripts/check_report.py" "<absolute data dir>/reports/files-<YYYY-MM-DD-HHMM>.md"
    ```
 
+   In Windows PowerShell, the same command first sets
+   `[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false);` so the
+   Polish letters of the printed section reach the chat unchanged; in a POSIX shell
+   the command runs as it is.
+
    (`python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-common/scripts/check_report.py" --default-data-dir "${CLAUDE_PLUGIN_DATA}" --latest --skill ush-files`
    checks the newest `files-*.md` instead.) It
    fails on a number not backed by the JSON and on a change, large file or
@@ -239,8 +244,9 @@ files, file contents or cloud storage. Say so if the user asks for these.
    the rules above still bind you. Do not hand the report to the user before
    it prints `OK`.
 
-7. Tell the user where the report is (the absolute path of the report file, in the chat answer only) and give the main findings in a few
-   lines.
+7. Tell the user where the report is (the absolute path of the report file, in the chat answer
+   only): the chat answer is the summary section that `check_report.py` printed after `OK` when
+   it checked the report, word for word, followed by that path, with nothing added.
 
 8. After the user says a cleanup block ran, run step 1 again and report
    the sizes of those cleanup items from the new summary. Never take the

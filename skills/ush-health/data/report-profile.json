@@ -9,5 +9,6 @@
                      "changes"],
   "required_keys": ["baseline", "changes", "pending_updates"],
   "truncated": {"list": "updates.failures", "prefix": "u"},
-  "report_prefix": "health-"
+  "report_prefix": "health-",
+  "summary_section": true
 }

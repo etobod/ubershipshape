@@ -3,6 +3,8 @@
 import importlib
 import unittest
 
+from tests.report_summary import report_line
+
 # The shared base class; the package name has a hyphen, so import it by string.
 CheckerTestCase = importlib.import_module("tests.ush-events.test_checker_edges").CheckerTestCase
 
@@ -36,10 +38,13 @@ class TestCodeBlockInListItem(CheckerTestCase):
     def test_block_cannot_outlive_its_list_item(self):
         # A renderer ends the block with its list item, so the 412 is visible text.
         self.summary({"count": 3})
-        code, output = self.run_check(["- Fix:", "  " + B3, "  reg add 4096",
-                                       "- There were 412 events.", "  " + B3, *NOT_CHECKED])
+        body = ["- Fix:", "  " + B3, "  reg add 4096", "- There were 412 events.",
+                "  " + B3, *NOT_CHECKED]
+        code, output = self.run_check(body)
         self.assertEqual(code, 2, output)
-        self.assertIn("line 5", output)
+        # The 412 line, moved down by the summary section above the intro (plan 055).
+        line = report_line(["<!-- ush:summary -->", *body], 4, "ush-events")
+        self.assertIn(f"line {line}", output)
 
     def test_block_indented_with_its_item_passes(self):
         self.summary({"count": 3})

@@ -169,6 +169,11 @@ anything automatically. Say so if the user asks for these.
    python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-common/scripts/check_report.py" "<absolute data dir>/reports/health-<YYYY-MM-DD-HHMM>.md"
    ```
 
+   In Windows PowerShell, the same command first sets
+   `[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false);` so the
+   Polish letters of the printed section reach the chat unchanged; in a POSIX shell
+   the command runs as it is.
+
    (`python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-common/scripts/check_report.py" --default-data-dir "${CLAUDE_PLUGIN_DATA}" --latest --skill ush-health`
    checks the newest `health-*.md` instead.) The checker is shared by all
    skills; it reads the ush-health rules from `data/report-profile.json`.
@@ -184,8 +189,9 @@ anything automatically. Say so if the user asks for these.
    item: name it in its section, save, and run the check again. Do not hand
    the report to the user before it prints `OK`.
 
-7. Tell the user where the report is (the absolute path of the report file, in the chat answer only) and give the dashboard and the main
-   findings in a few lines.
+7. Tell the user where the report is (the absolute path of the report file, in the chat answer
+   only): the chat answer is the summary section that `check_report.py` printed after `OK` when
+   it checked the report, word for word, followed by that path, with nothing added.
 
 8. Only when `elevated` is `false` and some sources were not read because
    they need administrator rights (`needs administrator` in `not_checked`):

@@ -346,6 +346,11 @@ or running anything on a schedule. Say so if the user asks for these.
    python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-common/scripts/check_report.py" "<absolute data dir>/reports/runall-<YYYY-MM-DD-HHMM>.md"
    ```
 
+   In Windows PowerShell, the same command first sets
+   `[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false);` so the
+   Polish letters of the printed section reach the chat unchanged; in a POSIX shell
+   the command runs as it is.
+
    (`python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-common/scripts/check_report.py" --default-data-dir "${CLAUDE_PLUGIN_DATA}" --latest --skill ush-runall`
    checks the newest `runall-*.md` instead.)
    It fails on a number backed neither by the `runall` summary nor by an `h`
@@ -356,11 +361,10 @@ or running anything on a schedule. Say so if the user asks for these.
    made-up number), so the rules above still bind you. Do not hand the
    report to the user before it prints `OK`.
 
-8. Tell the user where the report is (the absolute path of the report file, in the chat answer only), then give the verdict of the report
-   (as in "Verdict" of `references/report-format.md`, the memory line
-   included), then for each point its problem in plain words and what to do
-   now (part one of rule 4 of `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/report-style.md`),
-   with no block: a block comes only after the user decides (step 5).
+8. Tell the user where the report is (the absolute path of the report file, in the chat answer
+   only): the chat answer is the summary section that `check_report.py` printed after `OK` when
+   it checked the report, word for word, followed by that path, with nothing added. It holds no
+   block: a block comes only after the user decides (step 5).
 
 9. Only when a child has `elevated` `false` and `not_checked` entries that
    need administrator rights: give one block for an elevated PowerShell that

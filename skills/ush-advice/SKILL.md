@@ -243,7 +243,14 @@ Not for: installing updates or a BIOS, running Windows Update, Office, Edge,
    the update months, in `kev_other`), `f..` firmware, `i..` known issues,
    `w..` the findings as written. Remember every id you fetched and used.
 
-5. Write the report in the language the user addressed you in, following
+5. Before writing, list `<data dir>/plans/` (not `done/`): its open repair plans,
+   by file name, are part 3 of the report's summary section (rule 15 "Summary
+   first" of `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/report-style.md`).
+   This skill writes no plans of its own, so it reads nothing back. If
+   `plans/` cannot be listed, say so in part 3, give the reason under "Not
+   checked", and never write "nic" there. A missing `plans/` folder is read
+   and empty: "nic".
+   Write the report in the language the user addressed you in, following
    `references/report-format.md`, and save it as
    `<data dir>/reports/advice-<YYYY-MM-DD-HHMM>.md` (local time of the run).
    The first line is `<!-- ush:summary <summary_file> -->` with the absolute
@@ -253,6 +260,11 @@ Not for: installing updates or a BIOS, running Windows Update, Office, Edge,
    python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-common/scripts/check_report.py" "<absolute data dir>/reports/advice-<YYYY-MM-DD-HHMM>.md"
    ```
 
+   In Windows PowerShell, the same command first sets
+   `[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false);` so the
+   Polish letters of the printed section reach the chat unchanged; in a POSIX shell
+   the command runs as it is.
+
    (`python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-common/scripts/check_report.py" --default-data-dir "${CLAUDE_PLUGIN_DATA}" --latest --skill ush-advice`
    checks the newest `advice-*.md` instead.)
    Correct the report and run the check again until it prints `OK`. `OK`
@@ -260,8 +272,9 @@ Not for: installing updates or a BIOS, running Windows Update, Office, Edge,
    the right thing, so the rules above still bind you. Do not hand the
    report to the user before it prints `OK`.
 
-6. Tell the user where the report is (the absolute path of the report file, in the chat answer only) and give the main findings in a few
-   lines.
+6. Tell the user where the report is (the absolute path of the report file, in the chat answer
+   only): the chat answer is the summary section that `check_report.py` printed after `OK` when
+   it checked the report, word for word, followed by that path, with nothing added.
 
 7. After the user says they installed an update or a BIOS, repeat steps 1-6
    with a new findings file. The read-back is the new summary: the month

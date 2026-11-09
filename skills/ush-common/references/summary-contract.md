@@ -202,7 +202,7 @@ only name the parts of the layout.
 | `weight` | `high`, `medium` or `low` — one scale shared by all skills | Waga: wysoka, średnia, niska |
 | `kind` | `change` (the user changes something), `observe` (watch it, run again later), `consult_service` (needs a hardware service or the vendor) | Rodzaj: zmiana, obserwacja, serwis |
 | `risk` | what can go wrong when acting on it | Ryzyko |
-| `evidence` | the numbers and ids from the summary or detail items it rests on | Dowód |
+| `evidence` | its main source first (an item id, `ush-<skill> <id>` or a summary key path in inline code; rule 15 of `report-style.md`), then the numbers and ids from the summary or detail items it rests on | Dowód |
 | `permissions` | what it needs (e.g. none, administrator) | Uprawnienia |
 | `rollback` | how to undo it (or "nothing to undo" for `observe`) | Cofnięcie |
 

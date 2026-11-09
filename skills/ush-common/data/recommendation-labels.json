@@ -1,0 +1,15 @@
+{
+  "_comment": "Labels of a rule-4 recommendation block (report-style.md) per report language, read by check_report.py: the Problem, weight and evidence item labels, and the weight value of each of high, medium and low.",
+  "pl": {
+    "problem": "Problem",
+    "weight": "Waga",
+    "evidence": "Dow\u00f3d",
+    "weights": {"high": "wysoka", "medium": "\u015brednia", "low": "niska"}
+  },
+  "en": {
+    "problem": "Problem",
+    "weight": "Weight",
+    "evidence": "Evidence",
+    "weights": {"high": "high", "medium": "medium", "low": "low"}
+  }
+}

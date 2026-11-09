@@ -36,6 +36,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tests.report_summary import with_summary
 from tests.skill_loader import REPO_ROOT, load_script
 
 from .test_firewall_ports import (
@@ -211,7 +212,7 @@ class TestReportProfile(RunallTestCase):
 
     def _write_report(self, lines, name):
         path = self.reports / name
-        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        path.write_text("\n".join(with_summary(lines, SKILL)) + "\n", encoding="utf-8")
         return path
 
     def _assert_real_profile(self):
@@ -453,7 +454,7 @@ class TestDriverUpdateLinksProfile(unittest.TestCase):
             "Nic.",
         ]
         path = self.reports_dir / name
-        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        path.write_text("\n".join(with_summary(lines, SKILL)) + "\n", encoding="utf-8")
         return path
 
     def _run(self, report_path):
@@ -565,7 +566,7 @@ class TestDecisionsProfile(unittest.TestCase):
             "Nic.",
         ]
         path = self.reports_dir / name
-        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        path.write_text("\n".join(with_summary(lines, SKILL)) + "\n", encoding="utf-8")
         return path
 
     def _run(self, report_path):

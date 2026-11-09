@@ -13,6 +13,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tests.report_summary import with_summary
 from tests.skill_loader import load_script
 
 SKILL = "ush-inventory"
@@ -165,6 +166,7 @@ def _clean_report_lines(summary_file):
         f"<!-- ush:summary {summary_file} -->",
         "# Inventory report, 2026-09-30 08:10",
         "",
+        "## Overview",
         "| # | Area | State | Action |",
         "|---|------|-------|--------|",
         "| 1 | Programs | one listed | none |",
@@ -351,7 +353,7 @@ class TestProfile(unittest.TestCase):
 
     def _write_report(self, lines, name):
         path = self.reports / name
-        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        path.write_text("\n".join(with_summary(lines, SKILL)) + "\n", encoding="utf-8")
         return path
 
     def _run(self, report):

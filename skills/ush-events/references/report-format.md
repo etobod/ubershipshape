@@ -124,6 +124,18 @@ that is not a finding goes on the "Other groups" line (layout, item 5).
 
 ## Layout
 
+The summary section of rule 15 "Summary first" in `report-style.md` comes
+first, directly after the header (the `ush:summary` line, the title and its
+line) and before the dashboard, which follows it with its legend under a `##`
+heading of its own (item 3; the section runs to the next `##` heading, so
+nothing without a heading may stand below it). The `<!-- ush:attention -->` line stands
+directly above its `##` heading. Part 1
+names each high or medium recommendation of this report by its main source
+(the first id of its `Dowód`). Part 2 says „nie dotyczy: decyzje sprawdza
+ush-runall”: this skill checks no decisions. Part 3 names the open plans of
+`<data dir>/plans/` (not `done/`) in a fenced code block. The last line gives
+the count of low recommendations the section does not name.
+
 1. First line, exactly:
 
    ```
@@ -135,7 +147,9 @@ that is not a finding goes on the "Other groups" line (layout, item 5).
 2. Title and one line: the window (`window.start` to `window.end`) and when
    the summary was made (`generated_at`).
 
-3. Dashboard: a table with one row per finding, in the order of the sections
+3. Dashboard, directly after the summary section, under its own `## Overview`
+   heading (in a Polish report `## Przegląd`), with the legend (item 4) below
+   it: a table with one row per finding, in the order of the sections
    below.
 
    | # | Finding | Count | Trend | Action |
@@ -196,8 +210,7 @@ that is not a finding goes on the "Other groups" line (layout, item 5).
    finding section, written in the report language, each with its id, a
    short name and `count` (rule 7 of `report-style.md`): „Pozostałe grupy:
    g29 Service Control Manager (2), g22 Kernel-Power (1), …”. With no findings, put
-   that line in a section of its own right after the dashboard and its
-   legend.
+   that line in a section of its own right after the dashboard and its legend.
 
 6. Known noise, a separate section: one line per noise item with its
    provider, Id, `count` and `reason`. Noise is not a finding and is not

@@ -13,5 +13,6 @@
   ],
   "required_keys": ["drives", "folders", "large_files", "changes", "cleanup", "sources",
                     "baseline"],
-  "report_prefix": "files-"
+  "report_prefix": "files-",
+  "summary_section": true
 }

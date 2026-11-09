@@ -5,5 +5,6 @@
   "id_keys": ["id", "group"],
   "required_lists": ["groups", "ports"],
   "truncated": {"list": "groups", "prefix": "g"},
-  "report_prefix": "processes-"
+  "report_prefix": "processes-",
+  "summary_section": true
 }

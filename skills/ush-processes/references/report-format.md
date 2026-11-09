@@ -81,6 +81,18 @@ and the `udp_bound` items (they have no id) are not required.
 
 ## Layout
 
+The summary section of rule 15 "Summary first" in `report-style.md` comes
+first, directly after the header (the `ush:summary` line, the title and its
+line) and before the dashboard, which follows it with the lines under its
+table under a `##` heading of its own (item 2; the section runs to the next
+`##` heading, so nothing without a heading may stand below it). The `<!-- ush:attention -->` line stands
+directly above its `##` heading. Part 1
+names each high or medium recommendation of this report by its main source
+(the first id of its `Dowód`). Part 2 says „nie dotyczy: decyzje sprawdza
+ush-runall”: this skill checks no decisions. Part 3 names the open plans of
+`<data dir>/plans/` (not `done/`) in a fenced code block. The last line gives
+the count of low recommendations the section does not name.
+
 1. First line, exactly:
 
    ```
@@ -96,7 +108,9 @@ and the `udp_bound` items (they have no id) are not required.
    `counts.path_unread`, `counts.command_line_unread` and
    `counts.owner_unread`.
 
-2. Dashboard: a table of the machine at that moment, one row per item, in
+2. Dashboard, directly after the summary section, under its own `## Overview`
+   heading (in a Polish report `## Przegląd`), with the lines under the table
+   below it: a table of the machine at that moment, one row per item, in
    this order:
 
    | Item | Value |

@@ -143,39 +143,61 @@ cut `w` item) whose numbers or ids the report cites:
 
 A named id that is not in the detail file fails the check.
 
-### 2. Verdict (Werdykt)
+### 2. Summary (Podsumowanie)
 
-Right after the header, so the user reads the answer first:
+The summary section of rule 15 "Summary first" in `report-style.md` comes
+first, right after the header (the `ush:summary` line, the title and the
+`ush:detail` line) and before every other section: the
+`<!-- ush:attention -->` line stands directly above its `##` heading. The
+sections after it are the details. Its parts:
 
-- When a recommendation is worth a look: its name and its one-line title
-  (the `Problem` of rule 4 of `report-style.md`, shortened), one line each,
-  in the order of the recommendations. A recommendation is named by its main
-  source, `ush-<skill> <id>` (the first source of its evidence, see
-  "Recommendations"); a report never makes up an id of its own (such as
-  "Z1"): its digits would be backed by no number of the JSON. With none: "wszystko w porządku"
-  (in the report language).
-- The verdict gives no count of its own ("3 rzeczy warte uwagi" is not
-  written): every number in a report comes from the script's JSON, and the
-  listed names already show how many there are. Only the memory line below
-  carries numbers.
-- The memory line: one line with the memory assessment of `ush-processes`,
-  with `used_percent` and `available_gb` of the processes summary
-  (`memory` in its `h` item, named in `ush:detail`). The judgement is
-  yours, in plain words; the script sets no threshold. When `memory` is not
-  `read` (its values `null`), the line says that memory was not read and
-  its reason goes to "Not checked".
-- Open repair plans: every open repair plan in `<data dir>/plans/` (not
-  the ones in `plans/done/`), by file name, one per line in a fenced code
-  block, never in inline code, with a note that they are not confirmed by a
-  read-back yet (the last result, if any, is under its `Notatki`) (see `<plugin root>/skills/ush-common/references/repair-plan.md`). The
-  report checker checks the digits in inline code (the date in a plan's
-  name) against the summary JSON and skips a fenced code block. The chat
-  answer names them the same way. With none, the line is left out.
-- When `<data dir>/plans/` cannot be listed, the verdict says that the
-  open repair plans could not be listed, and the reason goes to "Not
-  checked"; it is never "no open plans".
+- Part 1 (`Do decyzji`): each `high` or `medium` recommendation of section 5,
+  one line each, in the order of the recommendations, with its shortened
+  `Problem` and `Co zrobić` (rule 4 of `report-style.md`). A recommendation is
+  named by its main source, `ush-<skill> <id>` (the first source of its
+  evidence, see "Recommendations"); a report never makes up an id of its own
+  (such as "Z1"): its digits would be backed by no number of the JSON. A
+  `low` recommendation is not named here.
+- Part 2 (`Złamane decyzje`): each `broken` decision of section 4, by its
+  main source `ush-runall j<n>`, with the shortened `Problem` and `Co
+  zrobić` of its recommendation; a broken decision stands here, never in
+  part 1. With none: „nic”.
+- Part 3 (`Otwarte plany naprawcze`): every open repair plan in
+  `<data dir>/plans/` (not the ones in `plans/done/`), by file name, one per
+  line in a fenced code block, never in inline code, with a note that they
+  are not confirmed by a read-back yet (the last result, if any, is under
+  its `Notatki`) (see `<plugin root>/skills/ush-common/references/repair-plan.md`).
+  The report checker checks the digits in inline code (the date in a plan's
+  name) against the summary JSON and skips a fenced code block. With none:
+  „nic”.
+- When `<data dir>/plans/` cannot be listed, part 3 says that the open
+  repair plans could not be listed, and the reason goes to "Not checked";
+  it is never „nic” and never "no open plans".
+- The last line: „Nic więcej nie wymaga uwagi: N niskich.”, N the count of
+  `low` recommendations the section does not name, which the checker
+  counts in the report itself (interim answer A of question 054). Beyond
+  that line the summary gives no count of its own ("3 rzeczy warte uwagi"
+  is not written): every other number in a report comes from the script's
+  JSON, and the listed names already show how many there are.
 
-### 3. Decisions (Decyzje)
+### 3. Run state
+
+The details start here, with the memory line: one line with the memory
+assessment of `ush-processes`, with `used_percent` and `available_gb` of the
+processes summary (`memory` in its `h` item, named in `ush:detail`). The
+judgement is yours, in plain words; the script sets no threshold. When
+`memory` is not `read` (its values `null`), the line says that memory was
+not read and its reason goes to "Not checked".
+
+Then one line per item of `children`, in order: id, skill, `status` in words,
+`duration_s`, and for an `ok` child its `not_checked_count`, its own
+`truncated` and its `elevated` (`null`: the child does not report it, as
+`ush-events`). Every `h1`…`h7` stands here in the text. A child other than
+`ok` gives its status in words (failed, timed out, gave no valid summary)
+and that its findings are not in this report; its reason goes to "Not
+checked". Then `counts` in one line.
+
+### 4. Decisions (Decyzje)
 
 The user's decisions of `<data dir>/decisions.json`, one line per item of
 `decisions` (`j1`…), each with its id, the decision's id (`D<n>`), its
@@ -187,8 +209,9 @@ The user's decisions of `<data dir>/decisions.json`, one line per item of
   say in plain words what was not searched (a folder root not read) and
   list it under "Not checked" as well; and say that nothing was
   changed: the pass only reports, the user decides what to do. A broken
-  decision is also a recommendation of section 5, with the evidence as its
-  sources.
+  decision is also a recommendation of section 5: its evidence (`Dowód`)
+  starts with `ush-runall j<n>`, its main source, followed by the
+  `evidence` entries.
 - `not_checked` next, with its `reason` in plain words: the decision was
   not checked in this pass, never "kept".
 - `kept` last, in one line per item.
@@ -196,16 +219,6 @@ The user's decisions of `<data dir>/decisions.json`, one line per item of
 `decisions` `[]` (no file): one line saying that no decisions are recorded.
 `decisions` `null`: the file could not be used; say so, and its
 `not_checked` item goes to "Not checked", never "no decisions".
-
-### 4. Run state
-
-One line per item of `children`, in order: id, skill, `status` in words,
-`duration_s`, and for an `ok` child its `not_checked_count`, its own
-`truncated` and its `elevated` (`null`: the child does not report it, as
-`ush-events`). Every `h1`…`h7` stands here in the text. A child other than
-`ok` gives its status in words (failed, timed out, gave no valid summary)
-and that its findings are not in this report; its reason goes to "Not
-checked". Then `counts` in one line.
 
 ### 5. Recommendations
 
@@ -217,7 +230,7 @@ to do now (`Co zrobić`) and `weight`, then `Szczegóły` with `kind`, `risk`,
 `<plugin root>/skills/ush-common/references/summary-contract.md`, "Recommendations"), and
 its source as `ush-<skill> <id>` in the evidence (several sources when it
 rests on linked findings). The first source is its main source: it names the
-recommendation in the verdict and in "Co możesz zrobić". A weight that comes from the strongest linked
+recommendation in the summary and in "Co możesz zrobić". A weight that comes from the strongest linked
 finding says so and why. With no recommendation, write the sentence of rule
 14 there.
 

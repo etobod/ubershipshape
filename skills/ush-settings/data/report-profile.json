@@ -5,5 +5,6 @@
   "id_keys": ["id"],
   "required_lists": ["settings", "changes", "usage"],
   "truncated": {"list": "usage", "prefix": "u"},
-  "report_prefix": "settings-"
+  "report_prefix": "settings-",
+  "summary_section": true
 }

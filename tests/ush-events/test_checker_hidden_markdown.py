@@ -6,6 +6,8 @@ Invented data only.
 import importlib
 import unittest
 
+from tests.report_summary import report_line
+
 # The shared base class; the package name has a hyphen, so import it by string.
 _edges = importlib.import_module("tests.ush-events.test_checker_edges")
 CheckerTestCase, NOT_CHECKED = _edges.CheckerTestCase, _edges.NOT_CHECKED
@@ -26,8 +28,10 @@ SUMMARY = {
     "first_minute": 0,
 }
 INTRO = ["# Event log review", "There were 3 events.", "Groups g1 and g2."]
-# Line 1 is the summary marker; INTRO fills lines 2-4; the case is line 5.
-CASE_LINE = 1 + len(INTRO) + 1
+# Line 1 is the summary marker and INTRO follows; the case is the line after INTRO,
+# moved down by the summary section that stands above the intro (plan 055).
+CASE_LINE = report_line(["<!-- ush:summary -->", *INTRO, "case", "", *NOT_CHECKED],
+                        1 + len(INTRO), "ush-events")
 
 
 class HiddenMarkdownTestCase(CheckerTestCase):
@@ -108,11 +112,13 @@ class TestLinkReferenceDefinition(HiddenMarkdownTestCase):
                 self.assertIn(f"line {CASE_LINE} has ']:'", output)
 
         with self.subTest(case="label split over lines 5-7 after a blank line 4"):
-            # Lines 2-3 are text, line 4 is blank, the label spans lines 5-7.
-            code, output = self.run_check([*INTRO[:2], "", "[", "g2", "]: /x", "",
-                                           *NOT_CHECKED])
+            # Lines 2-3 are text, line 4 is blank, the label spans lines 5-7 (before
+            # the summary section moves them down).
+            body = [*INTRO[:2], "", "[", "g2", "]: /x", "", *NOT_CHECKED]
+            code, output = self.run_check(body)
             self.assertEqual(code, 2, output)
-            self.assertIn("line 7 has ']:'", output)
+            line = report_line(["<!-- ush:summary -->", *body], 6, "ush-events")
+            self.assertIn(f"line {line} has ']:'", output)
 
 
 class TestLink(HiddenMarkdownTestCase):

@@ -168,6 +168,11 @@ for these.
    python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-common/scripts/check_report.py" "<absolute data dir>/reports/events-<YYYY-MM-DD-HHMM>.md"
    ```
 
+   In Windows PowerShell, the same command first sets
+   `[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false);` so the
+   Polish letters of the printed section reach the chat unchanged; in a POSIX shell
+   the command runs as it is.
+
    (`python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-common/scripts/check_report.py" --default-data-dir "${CLAUDE_PLUGIN_DATA}" --latest --skill ush-events`
    checks the newest `events-*.md` instead.) The checker is shared by all
    skills; it reads the ush-events rules from `data/report-profile.json`.
@@ -184,8 +189,9 @@ for these.
    `references/report-format.md`), save, and run the check again. Do not
    hand the report to the user before it prints `OK`.
 
-7. Tell the user where the report is (the absolute path of the report file, in the chat answer only) and give the dashboard and the main
-   findings in a few lines.
+7. Tell the user where the report is (the absolute path of the report file, in the chat answer
+   only): the chat answer is the summary section that `check_report.py` printed after `OK` when
+   it checked the report, word for word, followed by that path, with nothing added.
 
 8. Memory dumps, only when `dumps.files` holds a dump worth keeping (for
    example one linked to a bugcheck) or the user asks to archive dumps.

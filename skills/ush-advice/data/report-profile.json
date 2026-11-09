@@ -9,5 +9,6 @@
     {"list": "exploited", "prefix": "k", "count_key": "truncated_exploited"}
   ],
   "required_keys": ["machine", "updates", "exploited", "firmware"],
-  "report_prefix": "advice-"
+  "report_prefix": "advice-",
+  "summary_section": true
 }

@@ -3,6 +3,8 @@
 import importlib
 import unittest
 
+from tests.report_summary import summary_section
+
 # The shared base class; the package name has a hyphen, so import it by string.
 _edges = importlib.import_module("tests.ush-events.test_checker_edges")
 CheckerTestCase, NOT_CHECKED = _edges.CheckerTestCase, _edges.NOT_CHECKED
@@ -34,12 +36,13 @@ class TestNarrowFormat(CheckerTestCase):
             self.assertIn(": 412 is not", output)
 
         with self.subTest(body="1, 3, 3"):
-            # The marker is line 1, so "## 3. B" is line 3; "## 3. C" is the third
-            # numbered heading and keeps its exemption.
+            # The marker is line 1 and the summary section (plan 055) stands before
+            # "## 1. A", so "## 3. B" is its line 3 shifted by the section; "## 3. C" is
+            # the third numbered heading and keeps its exemption.
             code, output = self.run_check(["## 1. A", "## 3. B", "## 3. C", *NOT_CHECKED])
             self.assertEqual(code, 1, output)
             self.assertEqual(output.count(": 3 is not"), 1, output)
-            self.assertIn("line 3: 3 is not", output)
+            self.assertIn(f"line {3 + len(summary_section('ush-events'))}: 3 is not", output)
 
     def test_quoted_heading_number_is_checked(self):
         self.summary({"count": 7})

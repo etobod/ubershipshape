@@ -21,6 +21,7 @@ import unittest
 from datetime import timedelta, timezone
 from pathlib import Path
 
+from tests.report_summary import with_summary
 from tests.skill_loader import REPO_ROOT, load_script
 
 SKILLS = REPO_ROOT / "skills"
@@ -355,13 +356,17 @@ class TestReportStyleDocs(unittest.TestCase):
         summary_file.write_text(json.dumps(summary), encoding="utf-8")
         return summary_file
 
-    def _run_example(self, check, reports_dir, summary_file, name, content, with_groups):
+    def _run_example(self, check, reports_dir, summary_file, name, content, with_groups,
+                     decide=()):
+        # The real ush-events profile asks for the summary section (plan 055); ``decide``
+        # names the example's high or medium recommendations in its part 1.
         body = [f"<!-- ush:summary {summary_file} -->", "# Raport", *content]
         if with_groups:
             body.append(GROUPS_LINE)
         body += ["## Nie sprawdzono", "<!-- ush:not-checked -->", "Nic."]
         report = reports_dir / name
-        report.write_text("\n".join(body) + "\n", encoding="utf-8")
+        report.write_text("\n".join(with_summary(body, "ush-events", decide)) + "\n",
+                          encoding="utf-8")
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             try:
@@ -447,7 +452,8 @@ class TestReportStyleDocs(unittest.TestCase):
         reports_dir.mkdir()
         summary_file = self._write_summary(root)
         code, output = self._run_example(
-            check, reports_dir, summary_file, "example-rule-4-good.md", example, True
+            check, reports_dir, summary_file, "example-rule-4-good.md", example, True,
+            decide=["- g7 Invented-Sync — usługa staje przy starcie; opóźnij jej start."]
         )
         self.assertEqual(code, 0, "Good example of rule 4:\n" + example_text
                          + f"\noutput:\n{output}")
@@ -710,6 +716,205 @@ class TestReportStyleDocs(unittest.TestCase):
                     bad = [s.strip() for s in _sentences(joined)
                            if phrase in s and not DECISION_WORD.search(s)]
                     self.assertEqual(bad, [])
+
+
+# Plan 055 M2 (loc/inbox/055-plan-1-hard-report-summary.md): the shared rule "Summary
+# first" in report-style.md and the summary section in every report format. Assumptions
+# beyond the plan, which gives the content, not the English words:
+# - the rule is the text from the line holding "Summary first" to the next numbered rule
+#   or heading (or, when that line is a heading, to the next heading of the same or a
+#   higher level), fenced lines skipped when looking for the end;
+# - "nic" for an empty part is the lowercase word "nic" standing on its own;
+# - a sentence is cut at ". " with wrapped lines joined;
+# - a report format points to the rule in one paragraph naming "Summary first" and
+#   report-style.md, and says the section comes first after the header (the word
+#   "first" outside "Summary first", and "header", "title" or "ush:summary").
+SUMMARY_SKILLS = ("ush-advice", "ush-events", "ush-files", "ush-health", "ush-inventory",
+                  "ush-processes", "ush-runall", "ush-settings")
+SUMMARY_RULE_TITLE = "Summary first"
+SUMMARY_MARKER = "<!-- ush:attention -->"
+SUMMARY_PARTS = ("Do decyzji", "Złamane decyzje", "Otwarte plany naprawcze",
+                 "Nic więcej nie wymaga uwagi")
+NO_DECISIONS = "nie dotyczy: decyzje sprawdza ush-runall"
+OLD_CHAT_PART_ONE = "chat answer gives part one only"
+NIC_WORD = re.compile(r"(?<![\wąćęłńóśźż])nic(?![\wąćęłńóśźż])")
+HEADING = re.compile(r"^(#{1,6})\s")
+ADVICE_SKILL = SKILLS / "ush-advice" / "SKILL.md"
+
+
+def _summary_rule(lines):
+    """Lines of the "Summary first" rule; None if no line names it."""
+    for start, line in enumerate(lines):
+        if SUMMARY_RULE_TITLE in line:
+            break
+    else:
+        return None
+    opening = HEADING.match(lines[start])
+    level = len(opening.group(1)) if opening else None
+    in_fence = False
+    for index in range(start + 1, len(lines)):
+        line = lines[index]
+        if FENCE_OPEN.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        heading = HEADING.match(line)
+        if level is not None:
+            if heading and len(heading.group(1)) <= level:
+                return lines[start:index]
+        elif heading or NEXT_RULE.match(line):
+            return lines[start:index]
+    return lines[start:]
+
+
+def _paragraphs(text):
+    return [_join(part) for part in re.split(r"\n\s*\n", text) if part.strip()]
+
+
+class TestSummaryRule(unittest.TestCase):
+    def test_summary_rule(self):
+        # K2: report-style.md holds the "Summary first" rule with all its parts, and the
+        # old sentence giving part one of rule 4 as the chat answer is gone.
+        self.assertTrue(STYLE_DOC.is_file(), f"missing {STYLE_DOC}")
+        text = STYLE_DOC.read_text(encoding="utf-8")
+        section = _summary_rule(text.splitlines())
+        self.assertIsNotNone(section, f"report-style.md has no rule {SUMMARY_RULE_TITLE!r}")
+        rule = _join("\n".join(section))
+        sentences = _sentences(rule)
+
+        with self.subTest(check="names the marker"):
+            self.assertIn(SUMMARY_MARKER, rule)
+
+        with self.subTest(check="the 4 part labels in order"):
+            for label in SUMMARY_PARTS:
+                self.assertIn(label, rule)
+            if all(label in rule for label in SUMMARY_PARTS):
+                positions = [rule.index(label) for label in SUMMARY_PARTS]
+                self.assertEqual(positions, sorted(positions),
+                                 f"the part labels are not in order: {rule}")
+
+        with self.subTest(check="the last part carries the low count"):
+            self.assertIn("Nic więcej nie wymaga uwagi: N niskich", rule)
+
+        with self.subTest(check="the section comes directly after the header"):
+            # Plan 055 Goal: "first the ush:summary header, then this section"; no part
+            # without a `##` heading (a dashboard) stands between them.
+            found = [s for s in sentences
+                     if re.search(r"\b(?:right|directly) after\b", s) and "ush:summary" in s]
+            self.assertTrue(found, rule)
+            self.assertNotRegex(rule, r"no `##`\s+heading of its own")
+
+        with self.subTest(check="an empty part says nic"):
+            self.assertRegex(rule, NIC_WORD)
+
+        with self.subTest(check="open plans by file name in a fenced block"):
+            found = [s for s in sentences
+                     if re.search(r"open plans?|Otwarte plany", s, re.IGNORECASE)
+                     and re.search(r"\bfenced\b", s, re.IGNORECASE)]
+            self.assertTrue(found, rule)
+
+        with self.subTest(check="a part-1 line names the id, Problem and Co zrobić"):
+            found = [s for s in sentences
+                     if re.search(r"\bid\b", s) and "Problem" in s and "Co zrobić" in s]
+            self.assertTrue(found, rule)
+
+        with self.subTest(check="a part-2 line has the same shape as a part-1 line"):
+            # M2 review: the plan asks for the id, Problem and Co zrobić on every line
+            # of parts 1 and 2, not only part 1.
+            found = [s for s in sentences
+                     if re.search(r"part-2|parts 1 and 2|Złamane decyzje", s)
+                     and re.search(r"\bid\b", s) and "Problem" in s and "Co zrobić" in s]
+            self.assertTrue(found, rule)
+
+        with self.subTest(check="the labels are translated in a report in another language"):
+            # M2 review: CLAUDE.md, reports in the language the user addressed the skill in.
+            found = [s for s in sentences
+                     if re.search(r"another language", s, re.IGNORECASE)
+                     and re.search(r"translated", s, re.IGNORECASE)]
+            self.assertTrue(found, rule)
+
+        with self.subTest(check="the evidence starts with the main source"):
+            found = [s for s in sentences
+                     if "Dowód" in s and re.search(r"main source", s, re.IGNORECASE)
+                     and re.search(r"\bid\b", s)
+                     and re.search(r"key path", s, re.IGNORECASE)]
+            self.assertTrue(found, rule)
+
+        with self.subTest(check="the chat answer is the printed section plus the path"):
+            found = [s for s in sentences
+                     if re.search(r"\bchat\b", s, re.IGNORECASE)
+                     and "check_report.py" in s
+                     and re.search(r"\bprint", s, re.IGNORECASE)
+                     and re.search(r"\bpath\b", s, re.IGNORECASE)]
+            self.assertTrue(found, rule)
+
+        with self.subTest(check="the old part-one chat sentence is gone"):
+            self.assertNotIn(OLD_CHAT_PART_ONE, _join(text).lower())
+
+    def test_every_format_has_summary(self):
+        # K3: each report format puts the summary section directly after the header (before
+        # a dashboard, which has a `##` heading of its own) and
+        # points to the rule; the 7 skills without decisions say so in part 2; the
+        # ush-advice SKILL.md lists the open plans for part 3.
+        for skill in SUMMARY_SKILLS:
+            path = SKILLS / skill / "references" / "report-format.md"
+            with self.subTest(format=skill, check="exists"):
+                self.assertTrue(path.is_file(), f"missing {path}")
+            if not path.is_file():
+                continue
+            text = path.read_text(encoding="utf-8")
+
+            with self.subTest(format=skill, check="summary section first, pointing to the rule"):
+                found = [p for p in _paragraphs(text)
+                         if SUMMARY_RULE_TITLE in p and "report-style.md" in p
+                         and re.search(r"\bfirst\b", p.replace(SUMMARY_RULE_TITLE, ""))
+                         and re.search(r"\bheader\b|\btitle\b|ush:summary", p)]
+                self.assertTrue(found, f"no paragraph puts the summary first and names "
+                                       f"{SUMMARY_RULE_TITLE!r} in report-style.md")
+
+            summary_paragraphs = [p for p in _paragraphs(text) if SUMMARY_RULE_TITLE in p]
+            dashboard_items = [p for p in _paragraphs(text) if re.match(r"\d+\.\s+Dashboard\b", p)]
+
+            with self.subTest(format=skill, check="the section comes directly after the header"):
+                # Plan 055 Goal: "first the ush:summary header, then this section"; nothing
+                # (no dashboard, no legend) stands between the header and the section.
+                joined = " ".join(summary_paragraphs)
+                self.assertRegex(joined, r"\b(?:right|directly) after the header\b")
+                self.assertNotRegex(joined, r"after the dashboard")
+                if dashboard_items:
+                    self.assertRegex(joined, r"before the dashboard")
+
+            with self.subTest(format=skill, check="the dashboard has a ## heading of its own"):
+                # The section runs to the next `##` heading, so the dashboard below it (with its
+                # legend or the lines under its table) needs a `##` heading of its own, placed
+                # right after the summary section.
+                for item in dashboard_items:
+                    self.assertRegex(item, r"`## [^`\d][^`]*` heading")
+                    self.assertRegex(item, r"(?:right|directly) after the summary section")
+                self.assertNotRegex(_join(text), r"no `##`\s+heading of (?:its|their) own")
+
+            with self.subTest(format=skill, check="nothing else goes to the top of the report"):
+                # Final review 055 round 2: the summary section stands directly after the
+                # header, so only the "Summary first" paragraph may place text at the top.
+                at_top = [p for p in _paragraphs(text)
+                          if SUMMARY_RULE_TITLE not in p
+                          and re.search(r"(?i)\bat the top of the report\b", p)]
+                self.assertEqual(at_top, [], "text placed at the top of the report outside "
+                                             "the summary section rule")
+
+            if skill != "ush-runall":
+                with self.subTest(format=skill, check="part 2 is not applicable"):
+                    self.assertIn(NO_DECISIONS, _join(text))
+
+        with self.subTest(check="ush-advice SKILL.md lists <data dir>/plans/"):
+            self.assertTrue(ADVICE_SKILL.is_file(), f"missing {ADVICE_SKILL}")
+            text = ADVICE_SKILL.read_text(encoding="utf-8")
+            steps = re.split(r"(?m)^(?=\d+\.\s)", text.split("## Steps", 1)[-1])
+            found = [_join(step) for step in steps
+                     if re.match(r"\d+\.\s", step) and "`<data dir>/plans/`" in step
+                     and re.search(r"\blist", step, re.IGNORECASE)]
+            self.assertTrue(found, "no step of ush-advice lists `<data dir>/plans/`")
 
 
 if __name__ == "__main__":

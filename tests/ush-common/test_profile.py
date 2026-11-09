@@ -10,9 +10,13 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from tests.skill_loader import load_script
+from tests.report_summary import with_summary
+from tests.skill_loader import REPO_ROOT, load_script
 
 NOT_CHECKED = ["## Not checked", "<!-- ush:not-checked -->", "Nothing."]
+# The 8 report-writing skills (plan 055).
+REPORT_SKILLS = ("ush-advice", "ush-events", "ush-files", "ush-health", "ush-inventory",
+                 "ush-processes", "ush-runall", "ush-settings")
 
 
 def _profile(**overrides):
@@ -343,6 +347,37 @@ class TestProfile(CheckerTestCase):
             self.assertEqual(code, 0, output)
             self.assertIn("OK", output)
 
+    def test_summary_section_field(self):
+        for label, value in (("true", True), ("false", False)):
+            with self.subTest(label):
+                self.write_profile(_profile(summary_section=value))
+                self.assertIs(self.check.load_profile("ush-test").summary_section, value)
+
+        with self.subTest("missing means false"):
+            self.write_profile(_profile())
+            self.assertIs(self.check.load_profile("ush-test").summary_section, False)
+
+        for value in ("true", 1, 0, None, [], {}):
+            with self.subTest(f"non-bool {value!r}"):
+                self.write_profile(_profile(summary_section=value))
+                with self.assertRaises(self.check.CheckError) as raised:
+                    self.check.load_profile("ush-test")
+                self.assertIn("summary_section", str(raised.exception))
+
+    def test_every_skill_requires_summary(self):
+        # Plan 055 M2 K1: every real report profile turns the summary section on.
+        # Read from the repository, not from the patched SKILLS_DIR of this class.
+        profiles = sorted((REPO_ROOT / "skills").glob("ush-*/data/report-profile.json"))
+        found = {path.parent.parent.name for path in profiles}
+        self.assertTrue(set(REPORT_SKILLS) <= found,
+                        f"report profiles missing for {sorted(set(REPORT_SKILLS) - found)}")
+        for path in profiles:
+            with self.subTest(skill=path.parent.parent.name):
+                profile = json.loads(path.read_text(encoding="utf-8"))
+                self.assertIs(profile.get("summary_section"), True,
+                              f"{path.parent.parent.name}: summary_section is "
+                              f"{profile.get('summary_section')!r}")
+
 
 def _events_summary(detail_file, skill="ush-events"):
     return {
@@ -369,8 +404,8 @@ def _events_detail():
 
 
 def _events_body():
-    """A valid ush-events report after the ush:summary line."""
-    return [
+    """A valid ush-events report after the ush:summary line, with its summary section."""
+    return with_summary([
         "# Event log report",
         "",
         "Bugcheck 0x19C was recorded on 18.09.2026.",
@@ -384,7 +419,7 @@ def _events_body():
         "## Not checked",
         "<!-- ush:not-checked -->",
         "Nothing.",
-    ]
+    ], "ush-events")
 
 
 class TestLatest(CheckerTestCase):

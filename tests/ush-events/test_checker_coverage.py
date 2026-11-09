@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tests.report_summary import with_summary
 from tests.skill_loader import load_script
 
 
@@ -31,7 +32,8 @@ class CheckerTestCase(unittest.TestCase):
 
     def run_check(self, body, name="events-2026-09-28-1200.md"):
         path = self.root / "reports" / name
-        path.write_text("\n".join([f"<!-- ush:summary {self.summary_file} -->", *body]) + "\n",
+        path.write_text("\n".join(with_summary([f"<!-- ush:summary {self.summary_file} -->", *body], "ush-events"))
+                        + "\n",
                         encoding="utf-8")
         return self.run_argv([str(path)])
 

@@ -4,6 +4,8 @@ import importlib
 import json
 import unittest
 
+from tests.report_summary import report_line, with_summary
+
 # The shared base class; the package name has a hyphen, so import it by string.
 _edges = importlib.import_module("tests.ush-events.test_checker_edges")
 CheckerTestCase, NOT_CHECKED = _edges.CheckerTestCase, _edges.NOT_CHECKED
@@ -58,8 +60,10 @@ class TestCommentOutsideMarkers(MarkerTestCase):
             "- <!-- ush:detail g2 -->",
             "> <!-- ush:not-checked -->",
         ]
-        # Line 1 is the summary marker; INTRO fills lines 2-4; the case is line 5.
-        line_no = 1 + len(INTRO) + 1
+        # Line 1 is the summary marker and INTRO follows; the case is the line after
+        # INTRO, moved down by the summary section above the intro (plan 055).
+        line_no = report_line(["<!-- ush:summary -->", *INTRO, "case", "", *NOT_CHECKED],
+                              1 + len(INTRO), "ush-events")
         for line in cases:
             with self.subTest(line=line):
                 code, output = self.run_check([*INTRO, line, "", *NOT_CHECKED])
@@ -68,7 +72,8 @@ class TestCommentOutsideMarkers(MarkerTestCase):
         with self.subTest(line="summary marker followed by another comment on line 1"):
             path = self.root / "reports" / "events-2026-09-28-1300.md"
             first = f"<!-- ush:summary {self.summary_file} --> <!-- x -->"
-            path.write_text("\n".join([first, *INTRO, *NOT_CHECKED]) + "\n", encoding="utf-8")
+            path.write_text("\n".join(with_summary([first, *INTRO, *NOT_CHECKED], "ush-events"))
+                            + "\n", encoding="utf-8")
             code, output = self.run_argv([str(path)])
             self.assert_comment_rejected(code, output, 1)
 

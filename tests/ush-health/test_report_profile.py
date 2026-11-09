@@ -13,6 +13,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tests.report_summary import with_summary
 from tests.skill_loader import REPO_ROOT, load_script
 
 HEALTH_DIR = REPO_ROOT / "skills" / "ush-health"
@@ -85,6 +86,7 @@ def _body_lines(volume_line=VOLUME_LINE, device_lines=(DEVICE_LINE,),
     return [
         "# Health report",
         "",
+        "## Overview",
         "| # | Area | State | Action |",
         "|---|---|---|---|",
         "| 1 | Disks | Healthy | None |",
@@ -152,7 +154,7 @@ class TestProfile(unittest.TestCase):
     def _write_report(self, body, name):
         path = self.reports_dir / name
         first = f"<!-- ush:summary {self.summary_file} -->"
-        path.write_text("\n".join([first, *body]) + "\n", encoding="utf-8")
+        path.write_text("\n".join(with_summary([first, *body], "ush-health")) + "\n", encoding="utf-8")
         return path
 
     def _run(self, report_path):
@@ -474,7 +476,7 @@ class TestPendingUpdatesProfile(unittest.TestCase):
                                          *pending_lines))
         path = self.reports_dir / name
         first = f"<!-- ush:summary {self.summary_file} -->"
-        path.write_text("\n".join([first, *body]) + "\n", encoding="utf-8")
+        path.write_text("\n".join(with_summary([first, *body], "ush-health")) + "\n", encoding="utf-8")
         return path
 
     def _run(self, report_path):

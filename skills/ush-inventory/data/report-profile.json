@@ -21,5 +21,6 @@
   ],
   "required_keys": ["components", "component_counts", "drivers", "driver_packages",
                     "additions", "hosts_file", "vendor_folders", "package_managers"],
-  "report_prefix": "inventory-"
+  "report_prefix": "inventory-",
+  "summary_section": true
 }

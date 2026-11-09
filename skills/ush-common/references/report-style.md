@@ -84,14 +84,15 @@ the other rules.
    |---|---|---|
    | `kind` | Rodzaj | zmiana, obserwacja, serwis |
    | `risk` | Ryzyko | what can go wrong |
-   | `evidence` | Dowód | the numbers and ids it rests on |
+   | `evidence` | Dowód | its main source first (rule 15), then the numbers and ids it rests on |
    | `permissions` | Uprawnienia | e.g. brak, administrator |
    | `rollback` | Cofnięcie | how to undo it |
 
    `Problem` and `Co zrobić` are written by the model from the evidence; they
    carry no number the evidence does not back. `Co zrobić` proposes a change
-   in words and gives no block (rule 8). The chat answer gives part one only;
-   the report keeps both parts.
+   in words and gives no block (rule 8). The report keeps both parts; the
+   summary section of rule 15 names each high or medium recommendation with
+   a shortened `Problem` and `Co zrobić`.
 
    Good:
 
@@ -311,4 +312,67 @@ the other rules.
 
     ```markdown
     Brak zaleceń (wszystko wygląda dobrze, ale warto sprawdzić później).
+    ```
+
+15. **Summary first.** Every report opens with a summary section, directly
+    after the header (the `ush:summary` line, the title and its line): the
+    line `<!-- ush:attention -->` stands directly before the report's first
+    `##` heading, and the section `## Podsumowanie` runs to the next `##`
+    heading. Nothing stands between the header and the section: a dashboard
+    comes after it, under a `##` heading of its own (with its legend or the
+    lines under its table below that heading). It has 4 parts, in this order, each under
+    its own `###` heading; an empty part says „nic”. A Polish report uses the
+    labels and sentences below; a report in another language uses the same
+    parts with the labels and sentences translated, as in rule 4:
+    - `Do decyzji` — one line for each high or medium recommendation (rule 4).
+      A part-1 line names the id of its main source, then a shortened
+      `Problem` and a shortened `Co zrobić`, in that order.
+    - `Złamane decyzje` — a decision of the user that a later reading broke.
+      Only `ush-runall` checks decisions; every other skill writes „nie
+      dotyczy: decyzje sprawdza ush-runall”. A broken decision stands here,
+      never in part 1. A part-2 line has the shape of a part-1 line: the id of
+      its main source, then a shortened `Problem` and a shortened `Co zrobić`.
+    - `Otwarte plany naprawcze` — open plans of the plans folder
+      (`<data dir>/plans/`, not `done/`), each by its file name in a fenced
+      code block, never in inline code. A folder that cannot be listed goes
+      to „Nie sprawdzono” and this part then never says „nic”.
+    - The last line: „Nic więcej nie wymaga uwagi: N niskich.”, where N is the
+      count of low recommendations the section does not name.
+
+    The `Dowód` item of every recommendation starts with its main source: an
+    item id, `ush-<skill> <id>` or a summary key path in inline code. The
+    checker (`check_report.py`) checks that every id the section names is
+    such a main source, that each high or medium recommendation is named
+    exactly once, and that N equals the count of low recommendation blocks.
+    N is a count of the report's own items, checked by code, not a number of
+    the JSON: an interim exception (question 054, option A) to the rule that
+    every number comes from the script's JSON, until the user answers it.
+
+    The chat answer is the section that `check_report.py` printed after its
+    `OK` line, word for word, followed by the absolute path of the report, with
+    nothing added.
+
+    Good:
+
+    ```markdown
+    <!-- ush:attention -->
+    ## Podsumowanie
+
+    ### Do decyzji
+    - g7 Invented-Sync — usługa staje przy starcie; opóźnij jej start.
+
+    ### Złamane decyzje
+    nie dotyczy: decyzje sprawdza ush-runall
+
+    ### Otwarte plany naprawcze
+    nic
+
+    Nic więcej nie wymaga uwagi: 0 niskich.
+    ```
+
+    Bad:
+
+    ```markdown
+    ## Podsumowanie
+    Wszystko w porządku, 3 rzeczy warte uwagi.
     ```

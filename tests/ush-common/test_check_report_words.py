@@ -375,6 +375,7 @@ def _events_body():
     return [
         "# Raport dziennika zdarzeń",
         "",
+        "## Przegląd",
         "Błąd krytyczny 0x19C zapisano 18.09.2026.",
         "Zdarzeń łącznie: 1 234.",
         "Średnio na dzień: 3,5.",
@@ -425,6 +426,7 @@ def _health_body():
     return [
         "# Raport stanu",
         "",
+        "## Przegląd",
         "| # | Obszar | Stan | Działanie |",
         "|---|---|---|---|",
         "| 1 | Dyski | Sprawne | Brak |",
@@ -454,6 +456,7 @@ def _inventory_body():
     return [
         "# Raport inwentarza, 2026-09-30 08:10",
         "",
+        "## Przegląd",
         "| # | Obszar | Stan | Działanie |",
         "|---|------|-------|--------|",
         "| 1 | Programy | jeden na liście | brak |",
@@ -550,6 +553,7 @@ def _settings_body(block_lines):
     return [
         "# Raport ustawień, 2026-09-30 08:10",
         "",
+        "## Przegląd",
         "| # | Obszar | Stan | Działanie |",
         "|---|------|-------|--------|",
         "| 1 | Ustawienia | jedno się różni | przejrzeć |",
@@ -580,6 +584,48 @@ def _settings_body(block_lines):
     ]
 
 
+SUMMARY_MARKER = "<!-- ush:attention -->"
+NO_DECISIONS = "nie dotyczy: decyzje sprawdza ush-runall"
+
+
+def _summary_section(skill):
+    """A clean summary section (plan 055, M2): every part empty, no low recommendation.
+
+    Only ush-runall checks decisions; the other skills say so in part 2.
+    """
+    return [
+        SUMMARY_MARKER,
+        "## Podsumowanie",
+        "",
+        "### Do decyzji",
+        "nic",
+        "",
+        "### Złamane decyzje",
+        "nic" if skill == "ush-runall" else NO_DECISIONS,
+        "",
+        "### Otwarte plany naprawcze",
+        "nic",
+        "",
+        "Nic więcej nie wymaga uwagi: 0 niskich.",
+        "",
+    ]
+
+
+def _with_summary(skill, body):
+    """The body with the summary section directly before its first ## heading: right
+    after the header, above a dashboard under its own ## heading."""
+    first = next(index for index, line in enumerate(body) if line.startswith("## "))
+    return [*body[:first], *_summary_section(skill), *body[first:]]
+
+
+def _printed_section(skill):
+    """The section as the checker prints it: from its heading, no marker, no trailing blank."""
+    lines = [line for line in _summary_section(skill) if not line.startswith("<!-- ush:")]
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return lines
+
+
 class TestPolishSkillReports(_CheckerCase):
     """Real profiles (SKILLS_DIR not patched), real word list, invented summaries."""
 
@@ -599,6 +645,8 @@ class TestPolishSkillReports(_CheckerCase):
         }
 
     def test_polish_clean_report_of_each_skill(self):
+        # Plan 055 M2 K6: each clean report opens with its summary section, passes with
+        # the real profile, and the checker prints that section after the OK line.
         cases = self._cases()
         self.assertEqual(set(cases), set(SKILLS))
         for skill, (builder, body) in cases.items():
@@ -610,10 +658,18 @@ class TestPolishSkillReports(_CheckerCase):
                 self.assertEqual(summary.get("skill"), skill)
                 detail_file.write_text(json.dumps(detail), encoding="utf-8")
                 summary_file.write_text(json.dumps(summary), encoding="utf-8")
-                report = self.write_report(body, f"{name}-2026-09-30-0900.md",
+                report = self.write_report(_with_summary(skill, body),
+                                           f"{name}-2026-09-30-0900.md",
                                            summary_file=summary_file)
                 code, output = self.run_path(report)
                 self.assert_ok(code, output)
+                lines = output.splitlines()
+                ok = next(index for index, line in enumerate(lines) if line.startswith("OK:"))
+                printed = lines[ok + 1:]
+                while printed and not printed[-1].strip():
+                    printed.pop()
+                self.assertEqual(printed, _printed_section(skill),
+                                 f"the output after OK is not the section; output:\n{output}")
 
 
 class TestNumberWordDocs(unittest.TestCase):

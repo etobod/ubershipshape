@@ -82,6 +82,18 @@ requires nothing. Exploited items cut from the summary
 
 ## Layout
 
+The summary section of rule 15 "Summary first" in `report-style.md` comes
+first, directly after the header (the `ush:summary` line, the title and its
+line) and before the dashboard, which follows it under a `##` heading of its
+own (item 3; the section runs to the next `##` heading, so nothing without a
+heading may stand below it). The `<!-- ush:attention -->` line stands
+directly above its `##` heading. Part 1
+names each high or medium recommendation of this report by its main source
+(the first id of its `Dowód`). Part 2 says „nie dotyczy: decyzje sprawdza
+ush-runall”: this skill checks no decisions. Part 3 names the open plans of
+`<data dir>/plans/` (not `done/`) in a fenced code block. The last line gives
+the count of low recommendations the section does not name.
+
 1. First line, exactly:
 
    ```
@@ -95,7 +107,8 @@ requires nothing. Exploited items cut from the summary
    in the product map, or a version that could not be read; never one for
    the other).
 
-3. Dashboard: a table with one row per area, in this order: updates,
+3. Dashboard, directly after the summary section, under its own `## Overview`
+   heading (in a Polish report `## Przegląd`): a table with one row per area, in this order: updates,
    exploited vulnerabilities, firmware, known issues, then the changes row.
    `State` is a few words
    with the ids and values from the JSON; `Action` a few words, no numbers
@@ -131,7 +144,7 @@ requires nothing. Exploited items cut from the summary
 
 ## Sections
 
-After the dashboard the report has these sections, in this order, each with its
+After the summary section and the dashboard the report has these sections, in this order, each with its
 heading translated into the report language.
 
 ### Update state
@@ -312,8 +325,9 @@ Never report missing data as „up to date”, „none” or „no changes”:
   facts are `null`; `applied`, `kb_installed` or `newer` are then „not
   known”.
 - `query_warnings` not empty: a query or address held a fact of this
-  machine; say so at the top of the report, with the finding ids and the
-  reasons (`device_id`: a device instance id; never repeat the id itself).
+  machine; say so in the dashboard section (`## Przegląd`, item 3), below
+  the summary section, with the finding ids and the reasons (`device_id`: a
+  device instance id; never repeat the id itself).
 - First run (`baseline.status` `none`): „no comparison: this is the first
   run; the next run compares with this one”.
 - A baseline that could not be read (`baseline.status` `unreadable`):

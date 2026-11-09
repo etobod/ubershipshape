@@ -29,7 +29,9 @@ without a profile cannot be checked. The profile gives:
   one such object without the list brackets works as a one-item list;
 - ``required_keys`` (optional): top-level keys the summary must have; a key
   whose value is ``null`` is present;
-- ``report_prefix``: the file name prefix of the skill's reports (``events-``).
+- ``report_prefix``: the file name prefix of the skill's reports (``events-``);
+- ``summary_section`` (optional, default false): the report opens with the
+  summary section (see ``summary_section``).
 
 The shared contract is described in ``skills/ush-common/references/summary-contract.md``.
 
@@ -38,6 +40,16 @@ Rules:
 - The first line of the report is exactly ``<!-- ush:summary <absolute path> -->``;
   the file must exist and parse as JSON.
 - The report contains the line ``<!-- ush:not-checked -->``.
+- With ``summary_section`` in the profile, the line ``<!-- ush:attention -->``
+  stands directly before the first ``##`` heading, whose section runs to the
+  next heading of level 2 or higher. The rule-4 recommendation blocks (labels
+  from ``data/recommendation-labels.json``) each need a weight item and an id
+  first in their evidence item (an item id, ``ush-<skill> <id>`` or a dotted
+  summary key path in inline code): their main source. Every id a section line
+  names is a main source; every high or medium block is named by exactly one
+  section line; the numbers on the section's last non-blank line equal the
+  count of low blocks it does not name, and are then not checked against the
+  JSON. On OK the section is printed after the OK line, marker lines left out.
 - Allowed numbers are the tokens of the summary plus the tokens of those items of
   the detail file (``detail_file`` in the summary, items in the profile's
   ``detail_sections``) whose ids are named in
@@ -159,6 +171,8 @@ SKILLS_DIR = Path(__file__).absolute().parents[2]
 PROFILE_FILE = Path("data") / "report-profile.json"
 # The number words a report may not use outside code (an input, never an output path).
 NUMBER_WORDS_FILE = Path(__file__).absolute().parents[1] / "data" / "number-words.json"
+# The labels of a recommendation block per report language (an input, never an output path).
+LABELS_FILE = Path(__file__).absolute().parents[1] / "data" / "recommendation-labels.json"
 SKILL_NAME = re.compile(r"^ush-[a-z]+$")
 ID_LETTERS = re.compile(r"^[a-z]+$")
 REPORT_PREFIX = re.compile(r"^[a-z]+-$")
@@ -166,6 +180,16 @@ REPORT_PREFIX = re.compile(r"^[a-z]+-$")
 SUMMARY_LINE = re.compile(r"^<!-- ush:summary (?P<path>\S.*?) -->\s*$")
 NOT_CHECKED_LINE = re.compile(r"^\s*<!--\s*ush:not-checked\s*-->\s*$")
 DETAIL_LINE = re.compile(r"^\s*<!--\s*ush:detail\b(?P<ids>.*?)-->\s*$")
+ATTENTION_LINE = re.compile(r"^\s*<!--\s*ush:attention\s*-->\s*$")
+# Any one whole ush: marker line ("<!-- ush:detail c1 -->").
+USH_MARKER_LINE = re.compile(r"^\s*<!--\s*ush:[^<>]*-->\s*$")
+# An item id named with its skill: "ush-health u8".
+SKILL_ITEM_ID = re.compile(
+    r"(?<![0-9A-Za-z_-])ush-(?P<skill>[a-z]+)[ \t]+(?P<id>[a-z]+[0-9]+)(?![0-9A-Za-z_])"
+)
+# Inline code that may be a dotted key path of the summary: "memory.used_percent";
+# a bare top-level key ("status") is no id.
+KEY_PATH = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+$")
 
 # A hex literal that is not part of a longer word, or a run of ASCII digits.
 TOKEN = re.compile(
@@ -232,6 +256,7 @@ class Profile:
     truncated: tuple[dict, ...]  # ({"list": dotted path, "prefix": letters, "count_key": key}, ...)
     required_keys: tuple[str, ...]  # top-level summary keys that must be present
     report_prefix: str
+    summary_section: bool = False  # the report opens with the ush:attention section
 
 
 def check_skill_name(skill) -> str:
@@ -272,6 +297,9 @@ def load_profile(skill) -> Profile:
     prefix = data.get("report_prefix")
     if not isinstance(prefix, str) or not REPORT_PREFIX.match(prefix):
         raise CheckError(f"report profile {path}: report_prefix must be like 'events-'")
+    summary_section = data.get("summary_section", False)
+    if not isinstance(summary_section, bool):
+        raise CheckError(f"report profile {path}: summary_section must be true or false")
     return Profile(
         skill=skill,
         detail_sections=names("detail_sections"),
@@ -281,6 +309,7 @@ def load_profile(skill) -> Profile:
         truncated=truncated,
         required_keys=required_keys,
         report_prefix=prefix,
+        summary_section=summary_section,
     )
 
 
@@ -670,7 +699,7 @@ def check(report: Path, skill: str | None = None, to_local=None
 
     style = command_problems(lines, blocks)
     visible = [("" if index in fenced else line) for index, line in enumerate(lines)]
-    lines = visible
+    raw, lines = lines, visible
 
     if not any(NOT_CHECKED_LINE.match(line) for line in lines):
         raise CheckError(
@@ -706,6 +735,8 @@ def check(report: Path, skill: str | None = None, to_local=None
     texts = frozenset(text for text in texts if "UTC)" in text)
 
     known_ids = item_ids(summary, profile) | set(ids)
+    attention = (summary_section(lines, raw, summary, profile) if profile.summary_section
+                 else Attention([], None, None, None))
 
     in_order = _heading_numbers(lines)
     problems, checked, words = [], 0, []
@@ -738,6 +769,8 @@ def check(report: Path, skill: str | None = None, to_local=None
         mentioned.update(profile.item_id.findall(line))
         line = profile.item_id.sub(lambda m: " " if m.group() in known_ids else m.group(), line)
         for written, value in tokens(line):
+            if number - 1 == attention.count_line and value == ("dec", attention.low):
+                continue  # the low count: checked against the report's own blocks
             checked += 1
             if value not in allowed:
                 problems.append(
@@ -749,7 +782,273 @@ def check(report: Path, skill: str | None = None, to_local=None
     missing += [f"not named in the report: {item_id} ({where})"
                 for item_id, where in required_ids(summary, profile)
                 if item_id not in mentioned]
-    return problems, checked, missing, words, style
+    return problems, checked, missing, words, style, attention
+
+
+@dataclass(frozen=True)
+class Attention:
+    """The result of the summary section check.
+
+    ``problems``: messages; ``text``: the section's lines to print on OK (None
+    when the profile does not ask for the section or it was not found);
+    ``count_line``: index of the line with the low count and ``low`` the count
+    of low recommendations the section does not name (None when not checked).
+    """
+
+    problems: list[str]
+    text: list[str] | None
+    count_line: int | None
+    low: int | None
+
+
+@dataclass(frozen=True)
+class Recommendation:
+    """A rule-4 recommendation block: its Problem line index, weight and main source."""
+
+    index: int
+    weight: str | None  # high, medium or low
+    source: str | None
+
+
+def load_labels() -> tuple[re.Pattern, re.Pattern, re.Pattern, dict[str, str]]:
+    """(Problem item, weight item, evidence item, {weight value: high|medium|low}).
+
+    ``LABELS_FILE`` maps each language to ``{"problem", "weight", "evidence":
+    <label>, "weights": {"high", "medium", "low": <value>}}`` (JSON keys stay
+    ASCII; a non-ASCII label is written as a ``\\u`` escape). A missing file or another
+    shape is a CheckError: an empty table would find no recommendation.
+    """
+    path = LABELS_FILE
+    if not path.is_file():
+        raise CheckError(f"recommendation label list {path} does not exist")
+    data = read_json(path, "recommendation label list")
+    languages = {key: value for key, value in data.items() if not key.startswith("_")} \
+        if isinstance(data, dict) else {}
+    if not languages:
+        raise CheckError(f"recommendation label list {path}: no language")
+    labels = {"problem": set(), "weight": set(), "evidence": set()}
+    weights: dict[str, str] = {}
+    for language, entry in languages.items():
+        if not isinstance(entry, dict):
+            raise CheckError(f"recommendation label list {path}: {language} is not an object")
+        for key, found in labels.items():
+            label = entry.get(key)
+            if not isinstance(label, str) or not label.strip():
+                raise CheckError(f"recommendation label list {path}: {language}.{key} "
+                                 f"must be a label")
+            found.add(label)
+        values = entry.get("weights")
+        if not (isinstance(values, dict) and set(values) == {"high", "medium", "low"}
+                and all(isinstance(v, str) and v.strip() for v in values.values())):
+            raise CheckError(f"recommendation label list {path}: {language}.weights must give "
+                             f"the weight value of each of high, medium and low")
+        weights.update({value.lower(): weight for weight, value in values.items()})
+
+    def item(key: str, indent: str) -> re.Pattern:
+        names = "|".join(re.escape(label) for label in sorted(labels[key]))
+        return re.compile(rf"^{indent}[-*+][ \t]+\*\*(?:{names}):\*\*[ \t]*(?P<text>.*?)\s*$")
+
+    return item("problem", ""), item("weight", "[ \t]*"), item("evidence", "[ \t]*"), weights
+
+
+def has_key_path(summary, path: str) -> bool:
+    """True when the dotted ``path`` names a key of the summary (its value may be null)."""
+    for part in path.split("."):
+        if not isinstance(summary, dict) or part not in summary:
+            return False
+        summary = summary[part]
+    return True
+
+
+def _code_spans(line: str) -> list[tuple[int, int, str]]:
+    """(start, end, text) of the inline code spans of a line (see strip_inline_code)."""
+    spans, at = [], 0
+    while (opening := BACKTICKS.search(line, at)):
+        closing = next((m for m in BACKTICKS.finditer(line, opening.end())
+                        if len(m.group()) == len(opening.group())), None)
+        if closing is None:
+            at = opening.end()
+            continue
+        spans.append((opening.start(), closing.end(), line[opening.end():closing.start()]))
+        at = closing.end()
+    return spans
+
+
+def source_ids(line: str, summary, profile: Profile) -> list[str]:
+    """The ids a line names, in order: ``ush-<skill> <id>`` (bare for this skill),
+    a profile item id, or a dotted key path of the summary in inline code
+    (``memory.used_percent``; a bare top-level key is no id)."""
+    found: list[tuple[int, int, str]] = []
+    for start, end, text in _code_spans(line):
+        if KEY_PATH.match(text.strip()) and has_key_path(summary, text.strip()):
+            found.append((start, end, text.strip()))
+    for match in SKILL_ITEM_ID.finditer(line):
+        ident = match["id"] if match["skill"] == profile.skill[len("ush-"):] \
+            else f"ush-{match['skill']} {match['id']}"
+        found.append((match.start(), match.end(), ident))
+    for match in profile.item_id.finditer(line):
+        found.append((match.start(), match.end(), match.group()))
+    kept: list[tuple[int, int, str]] = []
+    for start, end, ident in sorted(found, key=lambda f: (f[0], -f[1])):
+        if not any(start < k_end and k_start < end for k_start, k_end, _ in kept):
+            kept.append((start, end, ident))
+    return [ident for _, _, ident in kept]
+
+
+def recommendations(lines: list[str], summary, profile: Profile
+                    ) -> tuple[list[Recommendation], list[str]]:
+    """The rule-4 recommendation blocks of the report, and messages for a block
+    without a weight item, with an unknown weight or without an id in its
+    evidence item.
+
+    A block runs from a top-level Problem item to the next one or the next
+    heading. Its main source is the first id of its evidence item.
+    """
+    problem_item, weight_item, evidence_item, weights = load_labels()
+    starts = [index for index, line in enumerate(lines) if problem_item.match(line)]
+    found, problems = [], []
+    for start in starts:
+        end = start + 1
+        while end < len(lines) and not (problem_item.match(lines[end])
+                                        or HEADING.match(lines[end])):
+            end += 1
+        weight = source = None
+        weight_text = evidence = None
+        for line in lines[start + 1:end]:
+            if weight_text is None and (match := weight_item.match(line)):
+                weight_text = match["text"]
+            elif evidence is None and (match := evidence_item.match(line)):
+                evidence = match["text"]
+        if weight_text is None:
+            problems.append(f"line {start + 1}: the recommendation has no weight item")
+        else:
+            weight = weights.get(weight_text.strip().rstrip(".").lower())
+            if weight is None:
+                problems.append(f"line {start + 1}: the recommendation's weight "
+                                f"{weight_text!r} is not one of {', '.join(sorted(weights))}")
+        ids = source_ids(evidence, summary, profile) if evidence is not None else []
+        if ids:
+            source = ids[0]
+        else:
+            problems.append(
+                f"line {start + 1}: the evidence item of the recommendation names no id "
+                f"(an item id, ush-<skill> <id> or a dotted summary key path in inline code "
+                f"such as `memory.used_percent`; a bare top-level key is no id)")
+        found.append(Recommendation(start, weight, source))
+    return found, problems
+
+
+def summary_section(lines: list[str], raw: list[str], summary, profile: Profile) -> Attention:
+    """Check the summary section of a report whose profile asks for it.
+
+    ``lines`` are the report lines with fenced lines blanked, ``raw`` the
+    report lines as written. The ``<!-- ush:attention -->`` line stands
+    directly before the first ``##`` heading; the section runs to the next
+    heading of level 2 or higher; only the header stands above it. Every id a
+    section line names is the main source of a recommendation, every high or
+    medium recommendation is named by exactly one section line, and the
+    numbers on the last non-blank line equal the count of low recommendations
+    the section does not name. Lines naming a main source beyond its high and
+    medium blocks name its low blocks, up to their number.
+    """
+    markers = [index for index, line in enumerate(lines) if ATTENTION_LINE.match(line)]
+    if not markers:
+        missing = ("the report has no '<!-- ush:attention -->' line before its "
+                   "summary section")
+        return Attention([missing], None, None, None)
+    levels = {index: len(match["level"]) for index, line in enumerate(lines)
+              if index and (match := HEADING_NUMBER.match(line))}
+    first = next((index for index, level in levels.items() if level == 2), None)
+    misplaced = [index for index in markers if first is None or index != first - 1]
+    if misplaced:
+        where = f"line {first + 1}" if first is not None else "none in the report"
+        return Attention([f"line {index + 1}: the '<!-- ush:attention -->' line must stand "
+                          f"directly before the report's first ## heading ({where})"
+                          for index in misplaced], None, None, None)
+    end = next((index for index, level in levels.items() if index > first and level <= 2),
+               len(lines))
+
+    blocks, problems = recommendations(lines, summary, profile)
+    problems += _above_section(lines, raw, levels, first - 1)
+    sources = {block.source for block in blocks if block.source is not None}
+    named: dict[str, int] = {}
+    for index in range(first + 1, end):
+        line = lines[index]
+        if NOT_CHECKED_LINE.match(line) or DETAIL_LINE.match(line):
+            continue
+        for ident in dict.fromkeys(source_ids(line, summary, profile)):
+            named[ident] = named.get(ident, 0) + 1
+            if ident not in sources:
+                problems.append(f"line {index + 1}: {ident} is not the main source (first "
+                                f"evidence id) of a recommendation")
+    # Each high or medium block gets a line of its own, so a main source shared by
+    # several such blocks is named once per block. Lines naming a source beyond
+    # those name its low blocks, up to their number; its other low blocks count.
+    expected: dict[str, int] = {}
+    lows: dict[str, int] = {}
+    for block in blocks:
+        if block.source is not None and block.weight in ("high", "medium"):
+            expected[block.source] = expected.get(block.source, 0) + 1
+        elif block.source is not None and block.weight == "low":
+            lows[block.source] = lows.get(block.source, 0) + 1
+    for block in blocks:
+        if block.source is not None and block.weight in ("high", "medium"):
+            count = named.get(block.source, 0)
+            need, extra = expected[block.source], lows.get(block.source, 0)
+            if not need <= count <= need + extra:
+                allowed = f"{need}" if not extra else f"{need} to {need + extra}"
+                problems.append(
+                    f"line {block.index + 1}: the {block.weight} recommendation {block.source} "
+                    f"is named by {count} lines of the summary section; name each high or "
+                    f"medium recommendation exactly once ({allowed} with this main source, "
+                    f"low ones included)")
+    low = sum(max(0, number - max(0, named.get(src, 0) - expected.get(src, 0)))
+              for src, number in lows.items())
+    count_line = next((index for index in range(end - 1, first, -1)
+                       if lines[index].strip()
+                       and not (NOT_CHECKED_LINE.match(lines[index])
+                                or DETAIL_LINE.match(lines[index]))), None)
+    if count_line is None:
+        problems.append(f"line {first + 1}: the summary section has no last line with the "
+                        f"count of low recommendations")
+    else:
+        line = profile.item_id.sub(" ", lines[count_line])
+        written = [value for _, value in tokens(line)]
+        if not written or any(value != ("dec", low) for value in written):
+            problems.append(
+                f"line {count_line + 1}: the last line of the summary section must give "
+                f"{low}, the count of low recommendations it does not name")
+    # Fenced lines are blank in ``lines``: a marker-like line in a fence is printed.
+    text = [line for index, line in enumerate(raw[first:end], start=first)
+            if not _is_marker(lines[index], index)]
+    while text and not text[-1].strip():
+        text.pop()
+    return Attention(problems, text, count_line, low)
+
+
+def _above_section(lines: list[str], raw: list[str], levels: dict[int, int],
+                   marker: int) -> list[str]:
+    """Problems with lines between the header and the ``<!-- ush:attention -->`` line.
+
+    The header is the ush:summary line (line 1), the ``#`` title and the one
+    line under the title; blank lines and ``<!-- ush:... -->`` marker lines
+    may stand there too. Every other non-blank line before the marker is named,
+    the lines of a code block included (``lines`` has them blanked, ``raw`` not).
+    """
+    title = next((index for index in range(1, marker) if levels.get(index) == 1), None)
+    under_title = title is not None
+    problems = []
+    for index in range(1, marker):
+        if (index == title or not raw[index].strip()
+                or USH_MARKER_LINE.match(lines[index])):
+            continue
+        if under_title and index > title:
+            under_title = False
+            continue
+        problems.append(f"line {index + 1}: the summary section must come directly after "
+                        f"the header (the ush:summary line, the # title and its line); move "
+                        f"this line below the section, under a ## heading of its own")
+    return problems
 
 
 def required_ids(summary, profile: Profile) -> list[tuple[str, str]]:
@@ -946,7 +1245,8 @@ def _is_marker(line: str, index: int) -> bool:
         return False
     if index == 0 and SUMMARY_LINE.match(line):
         return True
-    return bool(NOT_CHECKED_LINE.match(line) or DETAIL_LINE.match(line))
+    return bool(NOT_CHECKED_LINE.match(line) or DETAIL_LINE.match(line)
+                or ATTENTION_LINE.match(line))
 
 
 def _next_to_heading(lines: list[str], index: int, fenced: set[int] = frozenset()) -> bool:
@@ -997,6 +1297,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None, to_local=None) -> int:
+    # The summary section printed on OK is copied word for word into the chat, so it
+    # goes out as UTF-8 whatever the code page of the pipe is.
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:
+        reconfigure(encoding="utf-8")
     parser = build_parser()
     args = parser.parse_args(argv)
     if bool(args.report) == bool(args.latest):
@@ -1016,14 +1321,16 @@ def main(argv=None, to_local=None) -> int:
             report = latest_report(data_dir, args.skill)
         else:
             report = Path(args.report).absolute()
-        problems, checked, missing, words, style = check(report, args.skill, to_local)
+        problems, checked, missing, words, style, attention = check(
+            report, args.skill, to_local)
         text = read_text(report, "report")
     except CheckError as exc:
         print(f"FAILED: {exc}", file=sys.stderr)
         return EXIT_ERROR
     absent = [f"text not in the report: {wanted!r}" for wanted in args.contains
               if wanted not in text]
-    for line in problems + words + missing + style + absent:
+    section = attention.problems
+    for line in problems + words + missing + style + section + absent:
         print(line)
     if problems:
         print(f"FAILED: {report}: {len(problems)} of {checked} numbers are not backed by the JSON")
@@ -1037,11 +1344,15 @@ def main(argv=None, to_local=None) -> int:
               f"in the report")
     if style:
         print(f"FAILED: {report}: {len(style)} style problems")
+    if section:
+        print(f"FAILED: {report}: {len(section)} summary section problems")
     if absent:
         print(f"FAILED: {report}: {len(absent)} required texts missing")
-    if problems or words or missing or style or absent:
+    if problems or words or missing or style or section or absent:
         return EXIT_NUMBERS
     print(f"OK: {report}: {checked} numbers checked")
+    for line in attention.text or []:
+        print(line)
     return EXIT_OK
 
 

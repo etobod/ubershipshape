@@ -176,6 +176,11 @@ these.
    python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-common/scripts/check_report.py" "<absolute data dir>/reports/processes-<YYYY-MM-DD-HHMM>.md"
    ```
 
+   In Windows PowerShell, the same command first sets
+   `[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false);` so the
+   Polish letters of the printed section reach the chat unchanged; in a POSIX shell
+   the command runs as it is.
+
    (`python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-common/scripts/check_report.py" --default-data-dir "${CLAUDE_PLUGIN_DATA}" --latest --skill ush-processes`
    checks the newest `processes-*.md`
    instead.) The checker is shared by all skills; it reads the ush-processes
@@ -186,8 +191,9 @@ these.
    the right thing, so the rules above still bind you. Do not hand the
    report to the user before it prints `OK`.
 
-6. Tell the user where the report is (the absolute path of the report file, in the chat answer only) and give the main findings in a few
-   lines.
+6. Tell the user where the report is (the absolute path of the report file, in the chat answer
+   only): the chat answer is the summary section that `check_report.py` printed after `OK` when
+   it checked the report, word for word, followed by that path, with nothing added.
 
 7. Only when `elevated` is `false`: you may say that a run with
    administrator rights reads more (paths, command lines and owners of the

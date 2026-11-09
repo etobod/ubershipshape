@@ -15,6 +15,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tests.report_summary import with_summary
 from tests.skill_loader import load_script
 
 SKILL = "ush-advice"
@@ -102,6 +103,7 @@ def _clean_body(issue_title=ISSUE_TITLE):
     return [
         "# Raport porad, 2026-09-20",
         "",
+        "## Przegląd",
         "| Obszar | Stan | Działanie |",
         "|---|---|---|",
         "| Poprawki | zainstalowane | brak |",
@@ -174,7 +176,7 @@ class TestReportProfile(unittest.TestCase):
     def _write_report(self, summary_file, body, name):
         path = self.reports / name
         lines = [f"<!-- ush:summary {summary_file} -->", *body]
-        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        path.write_text("\n".join(with_summary(lines, SKILL)) + "\n", encoding="utf-8")
         return path
 
     def _run(self, argv):

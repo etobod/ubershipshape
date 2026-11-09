@@ -27,6 +27,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.report_summary import with_summary
 from tests.skill_loader import REPO_ROOT, load_script
 
 
@@ -209,8 +210,9 @@ def events_detail():
 
 
 def events_body():
-    """A valid ush-events report after the ush:summary line; every number is in the JSON."""
-    return [
+    """A valid ush-events report after the ush:summary line, with its summary section;
+    every number is in the JSON."""
+    return with_summary([
         "# Event log report",
         "",
         "Bugcheck 0x19C was recorded on 18.09.2026.",
@@ -224,7 +226,7 @@ def events_body():
         "## Not checked",
         "<!-- ush:not-checked -->",
         "Nothing.",
-    ]
+    ], "ush-events")
 
 
 class TestScripts(unittest.TestCase):

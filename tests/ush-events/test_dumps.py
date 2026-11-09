@@ -38,6 +38,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
+from tests.report_summary import with_summary
 from tests.skill_loader import load_script
 
 NOW = datetime(2026, 9, 28, 12, 0, 0, tzinfo=timezone.utc)
@@ -766,8 +767,9 @@ class TestIds(EventsTestCase):
                     "detail_file": str(root / "detail.json")}
             summary_file.write_text(json.dumps(data), encoding="utf-8")
             report = root / "reports" / "events-2026-09-28-1200.md"
-            report.write_text("\n".join([f"<!-- ush:summary {summary_file} -->", line,
-                                         *NOT_CHECKED]) + "\n", encoding="utf-8")
+            report.write_text("\n".join(with_summary([f"<!-- ush:summary {summary_file} -->", line,
+                                                      *NOT_CHECKED], "ush-events"))
+                              + "\n", encoding="utf-8")
             output = io.StringIO()
             with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
                 result = check.main([str(report)])
