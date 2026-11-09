@@ -1,5 +1,6 @@
-"""Links between pending driver updates and orphan driver packages in
-skills/ush-runall/scripts/runall.py (plan 028, M2, criteria K1-K4 and K6).
+"""Links between pending driver updates and driver packages no present device uses in
+skills/ush-runall/scripts/runall.py (plan 028, M2, criteria K1-K4 and K6; migrated to the
+device states of plan 051, M3).
 
 Interface under test (from the plan and the contracts):
 
@@ -8,15 +9,16 @@ Interface under test (from the plan and the contracts):
   ``software``/``driver``, ``driver_provider``, ``driver_class``, ``driver_date``,
   ``downloaded``; source ``pending_updates``) and the ``ush-inventory`` detail file's
   ``driver_packages`` (every third-party package, items ``o<n>`` with ``provider``,
-  ``original_name`` and ``present_device`` true/false/null; source ``driver_packages``).
-  The inventory source ``drivers`` must be read too.
-- Only updates of ``type`` ``driver`` and packages with ``present_device`` ``false`` take
-  part. A pair links when ``driver_provider.casefold() == provider.casefold()``; a
+  ``original_name`` and ``device_state`` ``present`` / ``non_present`` /
+  ``no_device_found`` / null; source ``driver_packages``).
+  The inventory source ``devices`` must be read too (the package states come from it).
+- Only updates of ``type`` ``driver`` and packages with ``device_state`` ``non_present``
+  or ``no_device_found`` take part. A pair links when ``driver_provider.casefold() == provider.casefold()``; a
   provider that only contains the other (``Contoso`` / ``Contoso Ltd``) does not.
 - The runall summary and detail file get ``driver_update_links``: a list of ``y<n>``
   items, ``[]`` when nothing links, ``null`` when a side was not read (the health child
   not ``ok``, ``pending_updates`` ``null``, ``driver_packages`` ``null``, or the inventory
-  ``drivers`` source not read); then ``not_checked`` gets an entry naming the side.
+  ``devices`` source not read); then ``not_checked`` gets an entry naming the side.
 - The summary gets ``link_counts`` ``{linked, updates_without_package,
   packages_without_update}``.
 
@@ -28,13 +30,13 @@ Assumptions added by these tests beyond the plan text:
   ``original_name`` (the package's ``original_name``).
 - ``link_counts``: ``linked`` is the number of ``y`` items; ``updates_without_package``
   the pending driver updates that link to no package; ``packages_without_update`` the
-  packages with ``present_device`` ``false`` that link to no update. Packages with
-  ``present_device`` ``true`` or ``null`` count nowhere. ``link_counts`` is not asserted
+  packages with ``device_state`` ``non_present`` or ``no_device_found`` that link to no
+  update. Packages with ``device_state`` ``present`` or null count nowhere. ``link_counts`` is not asserted
   when ``driver_update_links`` is ``null``.
 - The ``not_checked`` entry about the links mentions "driver update" (or
   ``driver_update_links``; underscores read as spaces, any case) in its JSON text and
   names the side that was not read (``ush-health`` or ``ush-inventory``; for an unread
-  inventory ``drivers`` source also the word ``drivers``).
+  inventory ``devices`` source also the word ``devices``).
 - The fake child summaries carry the same ``sources`` as their detail files (as in
   ``test_firewall_ports.py``); the inventory detail keeps ``firewall_rules`` read with no
   ``additions``, so the firewall comparison adds no entry.
@@ -81,8 +83,10 @@ def driver_update(n, provider, title=CONTOSO_TITLE, driver_class="Display"):
             "driver_date": "2026-08-15T00:00:00Z", "downloaded": False}
 
 
-def driver_package(n, provider, original_name, present_device, class_name="Display",
+def driver_package(n, provider, original_name, device_state, class_name="Display",
                    version="1.0.0.0"):
+    # Plan 051 M3: migrated from ``present_device`` (False -> "no_device_found",
+    # True -> "present", None -> null); the fields of M1/M2 come with it.
     item = {
         "id": f"o{n}",
         "key": f"driver_package:{original_name}|{provider}|{version}".casefold(),
@@ -93,10 +97,13 @@ def driver_package(n, provider, original_name, present_device, class_name="Displ
         "version": version,
         "date": "2026-03-14",
         "signer": "Invented Driver Signer",
-        "present_device": present_device,
+        "device_state": device_state,
+        "group": "graphics" if class_name == "Display" else "other",
+        "owner": provider,
+        "no_device_by_nature": False,
     }
-    if present_device is None:
-        item["present_device_reason"] = "invented reason: not judged"
+    if device_state is None:
+        item["device_state_reason"] = "invented reason: not judged"
     return item
 
 
@@ -113,23 +120,27 @@ def health_child(updates, status=None, reason=None):
 
 
 def inventory_child(packages, packages_status="read", drivers_status="read",
-                    drivers_reason=None, packages_reason=None):
+                    drivers_reason=None, packages_reason=None, devices_status="read",
+                    devices_reason=None):
     """(detail content, summary extra) of an ``ush-inventory`` child.
 
     The detail holds every package; the summary list only those with
-    ``present_device`` false, or ``null`` when the packages or drivers were not read."""
+    ``device_state`` ``non_present`` or ``no_device_found``, or ``null`` when the packages
+    or the devices were not read (as the real inventory does)."""
     sources = [
         {"name": "firewall_rules", "status": "read", "reason": None},
         {"name": "drivers", "status": drivers_status, "reason": drivers_reason},
+        {"name": "devices", "status": devices_status, "reason": devices_reason},
         {"name": "driver_packages", "status": packages_status, "reason": packages_reason},
     ]
     detail = {"sources": sources, "additions": [],
               "drivers": [] if drivers_status in ("read", "empty") else None,
               "driver_packages": packages}
-    if packages is None or drivers_status not in ("read", "empty"):
+    if packages is None or devices_status not in ("read", "empty"):
         listed = None
     else:
-        listed = [item for item in packages if item.get("present_device") is False]
+        listed = [item for item in packages
+                  if item.get("device_state") in ("non_present", "no_device_found")]
     return detail, {"driver_packages": listed}
 
 
@@ -203,8 +214,8 @@ class TestDriverUpdateLinks(RunallTestCase):
             self.temp(),
             health=health_child([software_update(1), driver_update(3, "Contoso")]),
             inventory=inventory_child([
-                driver_package(7, "contoso", "contosodisplay.inf", False),
-                driver_package(8, "Fabrikam", "fabrikamaudio.inf", False,
+                driver_package(7, "contoso", "contosodisplay.inf", "no_device_found"),
+                driver_package(8, "Fabrikam", "fabrikamaudio.inf", "no_device_found",
                                class_name="MEDIA"),
             ]))
         summary = self.collect(self.data_dir(), fake)
@@ -227,9 +238,9 @@ class TestDriverUpdateLinks(RunallTestCase):
             self.temp(),
             health=health_child([driver_update(3, "Contoso")]),
             inventory=inventory_child([
-                driver_package(7, "Contoso", "contosobt.inf", False,
+                driver_package(7, "Contoso", "contosobt.inf", "no_device_found",
                                class_name="Bluetooth"),
-                driver_package(8, "Contoso", "contosodisplay.inf", False,
+                driver_package(8, "Contoso", "contosodisplay.inf", "no_device_found",
                                class_name="display"),
             ]))
         summary = self.collect(self.data_dir(), fake)
@@ -253,7 +264,7 @@ class TestDriverUpdateLinks(RunallTestCase):
                     health=health_child([driver_update(3, "Contoso",
                                                        driver_class=update_class)]),
                     inventory=inventory_child([
-                        driver_package(7, "Contoso", "contosodisplay.inf", False,
+                        driver_package(7, "Contoso", "contosodisplay.inf", "no_device_found",
                                        class_name=package_class),
                     ]))
                 summary = self.collect(self.data_dir(), fake)
@@ -263,7 +274,7 @@ class TestDriverUpdateLinks(RunallTestCase):
     # --- K2 ----------------------------------------------------------------------------
 
     def test_nothing_pending_no_links(self):
-        orphan = driver_package(7, "Contoso", "contosodisplay.inf", False)
+        unused = driver_package(7, "Contoso", "contosodisplay.inf", "no_device_found")
         cases = (
             ("no update pending", []),
             ("only a software update pending", [software_update(1)]),
@@ -271,7 +282,7 @@ class TestDriverUpdateLinks(RunallTestCase):
         for label, updates in cases:
             with self.subTest(label):
                 fake = LinkChildren(self.temp(), health=health_child(updates),
-                                    inventory=inventory_child([orphan]))
+                                    inventory=inventory_child([unused]))
                 summary = self.collect(self.data_dir(), fake)
                 self.assertEqual(self.links(summary), [])
                 self.assertEqual(summary.get("link_counts"), counts(0, 0, 1))
@@ -290,7 +301,7 @@ class TestDriverUpdateLinks(RunallTestCase):
                     self.temp(),
                     health=health_child([driver_update(3, update_provider)]),
                     inventory=inventory_child([
-                        driver_package(7, package_provider, "contosodisplay.inf", False)]))
+                        driver_package(7, package_provider, "contosodisplay.inf", "no_device_found")]))
                 summary = self.collect(self.data_dir(), fake)
                 self.assertEqual(self.links(summary), [])
                 self.assertEqual(summary.get("link_counts"), counts(0, 1, 1))
@@ -299,12 +310,12 @@ class TestDriverUpdateLinks(RunallTestCase):
 
     def test_side_not_read(self):
         updates = [driver_update(3, "Contoso")]
-        orphan = driver_package(7, "contoso", "contosodisplay.inf", False)
+        unused = driver_package(7, "contoso", "contosodisplay.inf", "no_device_found")
 
         with self.subTest("the ush-health child failed"):
             fake = LinkChildren(self.temp(), {"ush-health": exits(1)},
                                 health=health_child(updates),
-                                inventory=inventory_child([orphan]))
+                                inventory=inventory_child([unused]))
             summary = self.collect(self.data_dir(), fake)
             self.assertEqual(self.child(summary, "ush-health").get("status"), "failed")
             self.assert_not_linked(summary, "ush-health")
@@ -314,7 +325,7 @@ class TestDriverUpdateLinks(RunallTestCase):
                 self.temp(),
                 health=health_child(None, status="unreadable",
                                     reason="Invented COM failure, HRESULT 0x8024402C."),
-                inventory=inventory_child([orphan]))
+                inventory=inventory_child([unused]))
             summary = self.collect(self.data_dir(), fake)
             self.assertEqual(self.child(summary, "ush-health").get("status"), "ok")
             self.assert_not_linked(summary, "ush-health")
@@ -322,7 +333,7 @@ class TestDriverUpdateLinks(RunallTestCase):
         with self.subTest("the ush-inventory child failed"):
             fake = LinkChildren(self.temp(), {"ush-inventory": exits(1)},
                                 health=health_child(updates),
-                                inventory=inventory_child([orphan]))
+                                inventory=inventory_child([unused]))
             summary = self.collect(self.data_dir(), fake)
             self.assertEqual(self.child(summary, "ush-inventory").get("status"), "failed")
             self.assert_not_linked(summary, "ush-inventory")
@@ -336,21 +347,32 @@ class TestDriverUpdateLinks(RunallTestCase):
             self.assertEqual(self.child(summary, "ush-inventory").get("status"), "ok")
             self.assert_not_linked(summary, "ush-inventory")
 
-        with self.subTest("the ush-inventory drivers source is not read"):
+        with self.subTest("the ush-inventory devices source is not read"):
+            # Fixed after M3 code review (judge): the states come from the devices
+            # source, so an unread one is "not read", never "nothing linked".
             unjudged = driver_package(7, "contoso", "contosodisplay.inf", None)
             fake = LinkChildren(
                 self.temp(), health=health_child(updates),
-                inventory=inventory_child([unjudged], drivers_status="unreadable",
-                                          drivers_reason="Invented CIM failure"))
+                inventory=inventory_child([unjudged], devices_status="unreadable",
+                                          devices_reason="Invented pnputil failure"))
             summary = self.collect(self.data_dir(), fake)
             self.assertEqual(self.child(summary, "ush-inventory").get("status"), "ok")
-            self.assert_not_linked(summary, "ush-inventory", also="drivers")
+            self.assert_not_linked(summary, "ush-inventory", also="devices")
 
-        with self.subTest("present_device true or null is never linked"):
+        with self.subTest("an unread drivers source does not stop the links"):
+            fake = LinkChildren(
+                self.temp(), health=health_child(updates),
+                inventory=inventory_child([unused], drivers_status="unreadable",
+                                          drivers_reason="Invented CIM failure"))
+            summary = self.collect(self.data_dir(), fake)
+            self.assertEqual(len(self.links(summary)), 1, summary.get("driver_update_links"))
+            self.assertEqual(summary.get("link_counts"), counts(1, 0, 0))
+
+        with self.subTest("device_state present or null is never linked"):
             fake = LinkChildren(
                 self.temp(), health=health_child(updates),
                 inventory=inventory_child([
-                    driver_package(7, "contoso", "contosodisplay.inf", True),
+                    driver_package(7, "contoso", "contosodisplay.inf", "present"),
                     driver_package(9, "Contoso", "contosodisplayext.inf", None,
                                    class_name="Extension"),
                 ]))
@@ -394,6 +416,10 @@ class TestDriverUpdateLinks(RunallTestCase):
                 "driver_packages": _inv_packages.store([contoso, fabrikam]),
                 "drivers": _inv_fakes.ok([_inv_components.driver(
                     "PCI\\VEN_1AAA&DEV_0050\\0050", "oem99.inf")]),
+                # Plan 051 M3: the package states come from the ``devices`` source; one
+                # started device names another package, so both stay no_device_found.
+                "devices": _inv_packages.devices_answer([_inv_packages.device(
+                    "PCI\\VEN_1AAA&DEV_0050\\0050", "oem99.inf", "Started")]),
             }),
             _inv_fakes.NOW)
 
@@ -424,6 +450,129 @@ class TestDriverUpdateLinks(RunallTestCase):
         self.assertEqual(summary.get("link_counts"), counts(1, 0, 1))
         self.assertEqual(self.link_notes(summary), [], summary.get("not_checked"))
         self.assertEqual(self.detail(summary).get("driver_update_links"), links)
+
+
+# --- plan 051, M3: links follow the device states ------------------------------------------
+#
+# Interface under test (plan 051, M1-M3): an ``ush-inventory`` package carries
+# ``device_state`` (``present`` / ``non_present`` / ``no_device_found`` / null), ``devices``
+# for ``non_present``, ``group``, ``owner`` and ``no_device_by_nature``; ``present_device``
+# is gone. The summary list ``driver_packages`` holds the ``non_present`` and
+# ``no_device_found`` packages. ``link_driver_updates`` keeps only those two states and
+# each ``y`` item adds ``package_state`` (the package's ``device_state``),
+# ``package_group`` (the package's ``group``) and ``package_no_device_by_nature``.
+#
+# Assumptions added by these tests: the order of the ``y`` items is not asserted; the
+# inventory child also reports a read ``devices`` source next to ``drivers`` and
+# ``driver_packages``.
+
+def stated_package(n, provider, original_name, device_state, class_name="Display",
+                   group="graphics", version="1.0.0.0"):
+    item = {
+        "id": f"o{n}",
+        "key": f"driver_package:{original_name}|{provider}|{version}".casefold(),
+        "published_name": f"oem{n + 40}.inf",
+        "original_name": original_name,
+        "provider": provider,
+        "class": class_name,
+        "version": version,
+        "date": "2026-03-14",
+        "signer": "Invented Driver Signer",
+        "device_state": device_state,
+        "group": group,
+        "owner": provider,
+        "no_device_by_nature": False,
+    }
+    if device_state == "non_present":
+        item["devices"] = [{"device_name": "Invented External Display Adapter",
+                            "class": class_name, "status": "Disconnected",
+                            "last_removal": "2026-07-02"}]
+    if device_state is None:
+        item["device_state_reason"] = "invented reason: device state not judged"
+    return item
+
+
+def stated_inventory_child(packages):
+    """(detail content, summary extra) of an ``ush-inventory`` child with device states.
+
+    The detail holds every package; the summary list those ``non_present`` or
+    ``no_device_found``."""
+    sources = [
+        {"name": "firewall_rules", "status": "read", "reason": None},
+        {"name": "drivers", "status": "read", "reason": None},
+        {"name": "devices", "status": "read", "reason": None},
+        {"name": "driver_packages", "status": "read", "reason": None},
+    ]
+    detail = {"sources": sources, "additions": [], "drivers": [],
+              "driver_packages": packages}
+    listed = [item for item in packages
+              if item.get("device_state") in ("non_present", "no_device_found")]
+    return detail, {"driver_packages": listed}
+
+
+class TestDeviceStates(RunallTestCase):
+    def links(self, summary):
+        self.assertIn("driver_update_links", summary, sorted(summary))
+        value = summary["driver_update_links"]
+        self.assertIsInstance(value, list, value)
+        return value
+
+    # --- K1 ----------------------------------------------------------------------------
+
+    def test_links_follow_states(self):
+        fake = LinkChildren(
+            self.temp(),
+            health=health_child([driver_update(3, "Contoso")]),
+            inventory=stated_inventory_child([
+                stated_package(7, "Contoso", "contosodisplayold.inf", "non_present"),
+                stated_package(8, "contoso", "contosodisplayext.inf", "no_device_found"),
+                stated_package(9, "Contoso", "contosodisplay.inf", "present"),
+            ]))
+        summary = self.collect(self.data_dir(), fake)
+
+        links = self.links(summary)
+        by_package = {link.get("package"): link for link in links}
+        self.assertEqual(len(by_package), len(links), links)
+        self.assertEqual(set(by_package), {"ush-inventory o7", "ush-inventory o8"}, links)
+        self.assertNotIn("ush-inventory o9", by_package, links)
+
+        expected = {
+            "ush-inventory o7": ("contosodisplayold.inf", "non_present"),
+            "ush-inventory o8": ("contosodisplayext.inf", "no_device_found"),
+        }
+        for package, (original_name, state) in expected.items():
+            with self.subTest(package=package):
+                item = by_package[package]
+                self.assertEqual(item.get("update"), "ush-health q3", item)
+                self.assertEqual(item.get("title"), CONTOSO_TITLE, item)
+                self.assertEqual(item.get("original_name"), original_name, item)
+                self.assertIsInstance(item.get("provider"), str, item)
+                self.assertEqual(item["provider"].casefold(), "contoso", item)
+                self.assertIn("package_state", item, sorted(item))
+                self.assertEqual(item["package_state"], state, item)
+                self.assertIn("package_group", item, sorted(item))
+                self.assertEqual(item["package_group"], "graphics", item)
+        self.assertEqual(sorted(link.get("id") for link in links), ["y1", "y2"], links)
+
+    # --- K2 ----------------------------------------------------------------------------
+
+    def test_null_state_not_linked(self):
+        # A package whose device state is not known (null) is never linked and is not
+        # counted as a package without a device; a no_device_found package of another
+        # provider and class is the control that is counted.
+        fake = LinkChildren(
+            self.temp(),
+            health=health_child([driver_update(3, "Contoso")]),
+            inventory=stated_inventory_child([
+                stated_package(7, "Contoso", "contosodisplayold.inf", None),
+                stated_package(8, "Fabrikam", "fabrikamaudio.inf", "no_device_found",
+                               class_name="MEDIA", group="peripherals"),
+            ]))
+        summary = self.collect(self.data_dir(), fake)
+
+        links = self.links(summary)
+        self.assertEqual(links, [], links)
+        self.assertEqual(summary.get("link_counts"), counts(0, 1, 1))
 
 
 if __name__ == "__main__":

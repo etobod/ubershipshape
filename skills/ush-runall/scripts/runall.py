@@ -39,11 +39,12 @@ and ``not_checked`` says why.
 
 ``driver_update_links`` links a pending driver update of the ``ush-health`` detail file
 (``pending_updates``, type ``driver``) to a driver package of the ``ush-inventory`` detail
-file that no present device uses (``driver_packages``, ``present_device`` false) when their
-providers and driver classes are equal after case-folding or paired by
-``data/driver-link-aliases.json``: an item ``y...`` per pair, naming both ids, both sides'
-provider and class and, per side, whether equal names or a table line matched them, with
-``link_counts``. When either list or the inventory source ``drivers`` was not read, both
+file that no present device uses (``driver_packages``, ``device_state`` ``non_present`` or
+``no_device_found``; never ``present`` or null) when their providers and driver classes
+are equal after case-folding or paired by ``data/driver-link-aliases.json``: an item
+``y...`` per pair, naming both ids, both sides' provider and class, per side whether equal
+names or a table line matched them, and the package's state, group and
+``no_device_by_nature``, with ``link_counts``. When either list or the inventory source ``devices`` (the source of the package states) was not read, both
 are null and ``not_checked`` names the side.
 
 ``decisions`` checks the user's decisions of ``<data dir>/decisions.json`` (read by the
@@ -605,19 +606,26 @@ def read_link_aliases() -> tuple:
     return classes, groups, None
 
 
+# The device states of an ush-inventory driver package that no present device uses; a
+# package in another state (present, or null when not judged) is never linked.
+LINKED_PACKAGE_STATES = ("non_present", "no_device_found")
+
+
 def link_driver_updates(outcomes: dict) -> tuple:
     """``(result, notes)``: one item ``y...`` per pair of a pending driver update of
-    ``ush-health`` and a driver package of ``ush-inventory`` that no present device uses,
-    whose providers are equal after case-folding or in one group of ``ALIASES_FILE``, and
+    ``ush-health`` and a driver package of ``ush-inventory`` whose ``device_state`` is
+    ``non_present`` or ``no_device_found`` (never ``present`` or null), whose providers are equal after case-folding or in one group of ``ALIASES_FILE``, and
     whose driver classes are equal after case-folding or the package's class is listed for
     the update's class there (an update or package without either is linked to nothing),
     and ``link_counts``. Each item names both sides' provider and class and, in
-    ``provider_via`` and ``class_via``, how that side matched: ``equal`` or ``table``.
+    ``provider_via`` and ``class_via``, how that side matched: ``equal`` or ``table``; and
+    the package's ``device_state``, ``group`` and ``no_device_by_nature`` as
+    ``package_state``, ``package_group`` and ``package_no_device_by_nature``.
     When a side was not read, both are null and one not_checked entry
     names why; when the table cannot be used, only equal names link and one entry says so."""
     inputs = ((SKILL_HEALTH, "pending_updates", ("pending_updates",)),
               (SKILL_INVENTORY, "driver_packages", ("driver_packages",)),
-              (SKILL_INVENTORY, "drivers", ()))
+              (SKILL_INVENTORY, "devices", ()))
     details, reasons = [], []
     for skill, source, sections in inputs:
         detail, reason = read_child_detail(skill, outcomes.get(skill), source, sections)
@@ -626,13 +634,14 @@ def link_driver_updates(outcomes: dict) -> tuple:
             reasons.append(reason)
     if reasons:
         note = {"what": f"driver update links (pending_updates of {SKILL_HEALTH}, "
-                        f"driver_packages and drivers of {SKILL_INVENTORY})",
+                        f"driver_packages and devices of {SKILL_INVENTORY})",
                 "reason": "; ".join(reasons) + "; the updates were not linked"}
         return {"driver_update_links": None, "link_counts": None}, [note]
     updates = [item for item in details[0]["pending_updates"]
                if isinstance(item, dict) and item.get("type") == "driver"]
     packages = [item for item in details[1]["driver_packages"]
-                if isinstance(item, dict) and item.get("present_device") is False]
+                if isinstance(item, dict)
+                and item.get("device_state") in LINKED_PACKAGE_STATES]
     classes, groups, reason = read_link_aliases()
     notes = []
     if reason is not None:
@@ -679,7 +688,11 @@ def link_driver_updates(outcomes: dict) -> tuple:
                           "package_provider": other, "package_class": other_cls,
                           "provider_via": provider_via, "class_via": class_via,
                           "title": update.get("title"),
-                          "original_name": package.get("original_name")})
+                          "original_name": package.get("original_name"),
+                          "package_state": package.get("device_state"),
+                          "package_group": package.get("group"),
+                          "package_no_device_by_nature":
+                              package.get("no_device_by_nature")})
             linked_updates.add(u)
             linked_packages.add(p)
     counts = {"linked": len(links),

@@ -1483,7 +1483,7 @@ LONG_PACKAGES = 50
 
 
 def package_items(count):
-    """``count`` invented orphan driver packages with every summary field."""
+    """``count`` invented driver packages with no device found, with every summary field."""
     return [{
         "id": f"o{i}",
         "key": f"package:inventedpkg{i:03d}.inf:1.{i}.0.0",
@@ -1494,7 +1494,7 @@ def package_items(count):
         "version": f"1.{i}.0.0",
         "date": "2024-03-04",
         "signer": "Invented Hardware Compatibility Publisher",
-        "present_device": False,
+        "device_state": "no_device_found",
     } for i in range(count)]
 
 

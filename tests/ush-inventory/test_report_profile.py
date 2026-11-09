@@ -689,17 +689,19 @@ PACKAGE_ITEM = {
     "version": "1.2.3.4",
     "date": "2024-03-14",
     "signer": "Invented Driver Signer",
-    "present_device": False,
+    "device_state": "no_device_found",
 }
 
 
 def _summary_packages(summary_file, detail_file):
-    """The 052 summary plus one driver package with no present device, of 3 in the store."""
+    """The 052 summary plus one driver package with no device found, of 3 in the store."""
     summary = _summary_052(summary_file, detail_file)
     summary["sources"].append({"name": "driver_packages", "status": "read", "reason": None})
     summary["comparison"]["driver_packages"] = "compared"
     summary["component_counts"].update({"driver_packages": 3,
-                                        "driver_packages_without_device": 1})
+                                        "driver_packages_by_state": {
+                                            "present": 2, "non_present": 0,
+                                            "no_device_found": 1, "unread": 0}})
     summary["driver_packages"] = [dict(PACKAGE_ITEM)]
     return summary
 
@@ -711,8 +713,8 @@ def _report_packages_lines(summary_file):
     lines[at:at] = [
         "## Driver packages",
         ("- o1: inventedpad.inf from Invented Peripherals Corp (Mouse), version 1.2.3.4 "
-         "of 2024-03-14, signed by Invented Driver Signer; no present device uses it."),
-        "- Third-party driver packages: 3, with no present device: 1.",
+         "of 2024-03-14, signed by Invented Driver Signer; no device found that uses it."),
+        "- Third-party driver packages: 3: present 2, no device found 1.",
         "",
     ]
     return lines

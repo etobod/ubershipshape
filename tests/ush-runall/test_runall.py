@@ -177,6 +177,7 @@ class FakeChildren:
         elif skill == "ush-inventory":
             sources = [{"name": "firewall_rules", "status": "read"},
                        {"name": "drivers", "status": "empty"},
+                       {"name": "devices", "status": "empty"},
                        {"name": "driver_packages", "status": "empty"}]
             detail = {"sources": sources, "additions": [], "drivers": [],
                       "driver_packages": []}

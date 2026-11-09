@@ -1,0 +1,43 @@
+[
+  {"provider": "ESET, spol. s r.o.", "group": "antivirus", "no_device_by_nature": true},
+
+  {"class": "AntiVirus", "group": "antivirus", "no_device_by_nature": true},
+  {"class": "ActivityMonitor", "group": "filter", "no_device_by_nature": true},
+  {"class": "Bottom", "group": "filter", "no_device_by_nature": true},
+  {"class": "Compression", "group": "filter", "no_device_by_nature": true},
+  {"class": "ContentScreener", "group": "filter", "no_device_by_nature": true},
+  {"class": "ContinuousBackup", "group": "filter", "no_device_by_nature": true},
+  {"class": "CopyProtection", "group": "filter", "no_device_by_nature": true},
+  {"class": "Encryption", "group": "filter", "no_device_by_nature": true},
+  {"class": "FSFilterSystem", "group": "filter", "no_device_by_nature": true},
+  {"class": "HSM", "group": "filter", "no_device_by_nature": true},
+  {"class": "Infrastructure", "group": "filter", "no_device_by_nature": true},
+  {"class": "OpenFileBackup", "group": "filter", "no_device_by_nature": true},
+  {"class": "PhysicalQuotaManagement", "group": "filter", "no_device_by_nature": true},
+  {"class": "QuotaManagement", "group": "filter", "no_device_by_nature": true},
+  {"class": "Replication", "group": "filter", "no_device_by_nature": true},
+  {"class": "SecurityEnhancer", "group": "filter", "no_device_by_nature": true},
+  {"class": "Top", "group": "filter", "no_device_by_nature": true},
+  {"class": "Undelete", "group": "filter", "no_device_by_nature": true},
+  {"class": "Virtualization", "group": "filter", "no_device_by_nature": true},
+
+  {"class": "Display", "group": "graphics", "no_device_by_nature": false},
+
+  {"class": "Camera", "group": "peripherals", "no_device_by_nature": false},
+  {"class": "Image", "group": "peripherals", "no_device_by_nature": false},
+  {"class": "Mouse", "group": "peripherals", "no_device_by_nature": false},
+  {"class": "Keyboard", "group": "peripherals", "no_device_by_nature": false},
+  {"class": "HIDClass", "group": "peripherals", "no_device_by_nature": false},
+  {"class": "Bluetooth", "group": "peripherals", "no_device_by_nature": false},
+  {"class": "Net", "group": "peripherals", "no_device_by_nature": false},
+  {"class": "MEDIA", "group": "peripherals", "no_device_by_nature": false},
+  {"class": "Monitor", "group": "peripherals", "no_device_by_nature": false},
+  {"class": "USB", "group": "peripherals", "no_device_by_nature": false},
+
+  {"class": "System", "group": "system", "no_device_by_nature": false},
+  {"class": "SCSIAdapter", "group": "system", "no_device_by_nature": false},
+  {"class": "HDC", "group": "system", "no_device_by_nature": false},
+  {"class": "Firmware", "group": "system", "no_device_by_nature": false},
+  {"class": "SoftwareComponent", "group": "system", "no_device_by_nature": false},
+  {"class": "Extension", "group": "system", "no_device_by_nature": false}
+]

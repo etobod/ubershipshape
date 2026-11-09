@@ -164,6 +164,7 @@ def base_ports():
 def inventory_detail(rules, status="read"):
     return {"sources": [{"name": "firewall_rules", "status": status, "reason": None},
                         {"name": "drivers", "status": "empty", "reason": None},
+                        {"name": "devices", "status": "empty", "reason": None},
                         {"name": "driver_packages", "status": "empty", "reason": None}],
             "additions": list(rules), "drivers": [], "driver_packages": []}
 

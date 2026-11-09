@@ -58,9 +58,9 @@ another way (a shell command, another folder).
 Not for: processes running now (`ush-processes`), Windows settings and
 policies (`ush-settings`), the event logs (`ush-events`), the health of
 disks, devices or updates (`ush-health`), uninstalling a program or a
-device driver, fixing anything automatically. A device driver (`d..`) gets no block;
-an orphan driver package (`o..`) has a printer block for an elevated shell,
-printed only after the user decides. Say so if the user asks for these.
+device driver, fixing anything automatically. A device driver (`d..`) gets no block,
+and a driver package (`o..`) gets no block either: no package removal is printed.
+Say so if the user asks for these.
 
 ## Rules
 
@@ -143,21 +143,37 @@ printed only after the user decides. Say so if the user asks for these.
   account); under the source's `method: adsi`, `name` and
   `principal_source` (and `enabled` for an `object_class` `User`) are in
   `unread_fields`.
-- **No block for a device driver.** A device driver (`d..`) gets no block:
-  it is reported and judged, never removed by this skill; the vendor's
-  uninstaller or Device Manager is the way, and the user decides. An
-  orphan driver package (`o..`) has a printer block for an elevated shell
-  (see "Orphan driver package" under "Change blocks").
-- **Driver packages with no present device are facts.** `driver_packages`
-  (`o..`) lists the third-party packages of the driver store that no
-  present device uses (`present_device` `false`); the detail file has every
-  package. Give the facts, then your judgement (a device that is gone, an
-  older version kept next to a newer one, a program's helper). A device
-  unplugged now is not present, so "no present device" is not "safe to
-  remove". A package with `present_device` `null` (an `Extension` package,
-  or every package when the drivers were not read) is never called unused.
-  Only a package with `present_device` `false` read in this run gets a
-  block, and only after the user decides.
+- **No block for a device driver or a driver package.** A device driver
+  (`d..`) gets no block: it is reported and judged, never removed by this
+  skill; the vendor's uninstaller or Device Manager is the way, and the user
+  decides. A driver package (`o..`) gets no block either, whatever its state
+  (see "Driver package" under "Change blocks").
+- **Driver package states are facts.** Each third-party package of the
+  driver store has a `device_state` from the `devices` source (every device
+  Windows knows, present or not): `present` (a present device names it),
+  `non_present` (only devices that are not present name it; `devices` gives
+  each one's name, class, status and `last_removal` date, or `null` when
+  Windows has none), `no_device_found` (no device found without
+  administrator rights names it, which is not "no device": Windows may still
+  hold a record a normal read does not show), or `null` with
+  `device_state_reason` (an `Extension` package, a package whose published
+  name was not read, a device with a status the script does not know, a
+  disconnected device of another class than the package, or every package when `devices` was not read). `driver_packages` (`o..`)
+  lists the `non_present` and `no_device_found` packages; the detail file
+  has every package. Give the facts, then your judgement (a device that is
+  gone, an older version kept next to a newer one, a program's helper).
+  Neither state means "safe to remove", and a package with `device_state`
+  `null` is never called unused.
+- **Driver packages by group.** Each package also has `owner` (its
+  provider, `null` when not read), `group` and `no_device_by_nature` from
+  `data/driver-package-groups.json` (a provider rule wins over a class
+  rule; a package no rule matches is `other`), and the summary has
+  `driver_package_groups` (per group its `count` and `by_state`). The report
+  gives the packages by group with their owner and state; a package with
+  `no_device_by_nature` `true` (a filter or antivirus package) is shown as
+  owned by its program, never as a leftover, even with `no_device_found`.
+  A broken or missing groups file is not checked: `group` and
+  `driver_package_groups` are `null` and "Not checked" names the file.
 - **Leftovers are named, the model judges them.** The report names each of
   these with its evidence and says whether it is worth a look: an autostart
   entry with a target that exists (`exists` `true`) and whose
@@ -165,11 +181,17 @@ printed only after the user decides. Say so if the user asks for these.
   status is a missing or unchecked file, never a signature finding); every
   RunOnce value (`kind` `run_once`): it may be a step that never finished
   or one waiting for the next logon, and the JSON has no time that tells
-  them apart, so give both readings and say that the run cannot tell which; every orphan driver
-  package (`o..`); every unmatched vendor folder (`v..` with `matched`
+  them apart, so give both readings and say that the run cannot tell which; every listed driver
+  package (`o..`, with its state) whose `no_device_by_nature` is `false` (one
+  with `true` is named under its owner, see "Driver packages by group"; one
+  with `null`, the groups file not read, is not judged as a leftover: it stays only
+  in the driver packages list with its state, and "Not checked" names the
+  groups file, not the package, and says that no driver package was judged
+  as a leftover); every unmatched vendor folder (`v..` with `matched`
   `false`; one with `matched` `null` was not judged and is no leftover: name
   it in its own "not judged" group with its `not_judged` cause). A driver package
-  and a vendor folder with `matched` `false` whose names match in the JSON (the package's provider
+  whose `no_device_by_nature` is `false` and a vendor folder with `matched`
+  `false` whose names match in the JSON (the package's provider
   or original name and the folder's name) go into one entry with both ids.
   None of them is a verdict: the script lists facts, the judgement is yours.
 - **Defender exclusions.** Under the source's `method: registry` no Defender
@@ -231,7 +253,7 @@ printed only after the user decides. Say so if the user asks for these.
 
    Ids: `a..` programs, `s..` autostart entries, `f..` components
    (features and capabilities), `d..` drivers, `o..` driver packages with
-   no present device, `x..` additions, `v..` top-level vendor folders no
+   `device_state` `non_present` or `no_device_found`, `x..` additions, `v..` top-level vendor folders no
    rule matches (`matched` `false`, or `null` with `not_judged` when
    something they could belong to was not read; cut to the budget like
    `o..`, `truncated_vendor_folders` counts the cut ones), `l..`
@@ -244,7 +266,8 @@ printed only after the user decides. Say so if the user asks for these.
 3. Judge the findings: which autostart entries the user likely does not
    need, which ones point to a missing or unsigned file, which changes are
    worth a look, and each leftover of the rule "Leftovers are named" (an
-   existing autostart target with a set status other than `Valid`, a RunOnce value, an orphan driver package,
+   existing autostart target with a set status other than `Valid`, a RunOnce value, a listed driver package
+   whose `no_device_by_nature` is `false`,
    an unmatched vendor folder). Weigh them with the scale in the shared contract
    `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/summary-contract.md` (`high`, `medium`,
    `low`). The script sets no threshold: the judgement is yours.
@@ -282,15 +305,15 @@ printed only after the user decides. Say so if the user asks for these.
    and any other `service`), the additions (`x..`: `firewall_rule`,
    `root_certificate`, `hosts_entry`, `administrator`,
    `defender_exclusion`), the components (`f..`: `feature`,
-   `capability`), the orphan driver packages (`o..`, see "Orphan driver
-   package") and the leftovers (`l..`: one block per part, see
+   `capability`), the driver packages (`o..`: always `no block`, see
+   "Driver package") and the leftovers (`l..`: one block per part, see
    "Leftover of a removed program"); each block has its shell, risk, previous value and
    rollback block. Several ids print in the order given, duplicates
-   dropped. A certificate export, a driver package export or a hosts backup
+   dropped. A certificate export or a hosts backup
    goes into `<data dir>\work\`, so give `--data-dir` when the data
    directory is not the default one. An entry for which "Change blocks"
-   allows no block (a device driver `d..`, and a driver package that fails
-   a guard) prints `# <id>: no block: <reason>`: say the reason
+   allows no block (a device driver `d..`, and every driver package `o..`,
+   see "Driver package") prints `# <id>: no block: <reason>`: say the reason
    instead. The printer prints each entry as its `# <id>: ...` comment
    lines, the change, a line `# Rollback, same shell: ...` and then the
    rollback; a blank line separates the entries. Split each entry at its
@@ -576,8 +599,7 @@ read-back lines inside a block are a first look, not the verification.
 Give no block for an item whose source was not read in this run, for a
 field the block needs that is `null` or in `unread_fields`, or for a kind
 this section excludes; say why instead. A device driver (`d..`) gets no
-block; an orphan driver package (`o..`) has a printer block for an
-elevated shell (see "Orphan driver package").
+block, and a driver package (`o..`) gets no block (see "Driver package").
 
 ### Defender exclusion (`defender_exclusion`)
 
@@ -819,26 +841,14 @@ download the package from Windows Update, so it needs the network:
 Add-WindowsCapability -Online -Name 'Invented.Tools~~~~0.0.1.0'
 ```
 
-### Orphan driver package (`o..`)
+### Driver package (`o..`)
 
-An orphan driver package (`o..`) has a printer block for an elevated
-shell: `--block o<n>` prints it, never write it by hand. It is printed only
-when the package has `present_device` `false`, is not `from_baseline`, the
-sources `driver_packages` and `drivers` were read in that run, the
-published name is `oem<digits>.inf` and the original name is an inf name
-of letters, digits, `_`, `.` and `-`; otherwise `# o<n>: no block:
-<reason>`. A device driver (`d..`) gets no block.
-
-The block exports the package with the driver store tool into a stamped
-folder `<data dir>\work\driver-<stamp>-<oem>`, checks the tool's exit code
-and the exported inf, and stops with "nothing removed" when either fails.
-Then it deletes the package from the driver store without force, so a
-package a device uses is not deleted (the block stops with the exit code),
-and reads back whether `%WINDIR%\INF\<oem>.inf` is gone. Risk: a device
-that needs the package (one unplugged now, too) is no longer installed by
-itself until the package is added back. Rollback, same shell: the driver
-store tool adds the exported inf back and installs it; its `oem` number may
-differ. The next run of the skill is the verification.
+A driver package (`o..`) gets no block, whatever its `device_state`:
+`--block o<n>` prints `# o<n>: no block: <reason>` with the reason "Windows
+refused every removal tried on this machine although no device names the
+package without administrator rights; a removal is not offered until a read
+proves Windows will accept it", and nothing else. Report the package's state
+and its devices; propose no removal. A device driver (`d..`) gets no block.
 
 ### Leftover of a removed program (`l..`)
 

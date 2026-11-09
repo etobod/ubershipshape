@@ -120,7 +120,7 @@ is of an older shape and fails with
    | 3 | Autostart | s4 points to a missing file | 🔧 see below |
    | 4 | Components | f1 to f6 enabled features | ✅ nothing to do |
    | 5 | Drivers | d1 to d4 outside Windows | ✅ nothing to do |
-   | 6 | Driver packages | o1, o2 with no present device | 🔍 see below |
+   | 6 | Driver packages | o1 no device found, o2 device not present | 🔍 see below |
    | 7 | Added to the system | x2 hosts entry | 🔍 see below |
    | 8 | Leftovers of removed programs | l1 folder and task | 🔧 see below |
    | 9 | Vendor folders: no installed program, or not judged | v1, v2 | 🔍 see below |
@@ -259,37 +259,60 @@ is of an older shape and fails with
      When `truncated_drivers` > 0: how many were cut, and that the detail file has them (`--cut` lists the cut items, see SKILL.md). A
      `removed` driver change is a device not present now, not an
      uninstalled driver.
-   - Driver packages: the facts first, then your judgement. Every listed
-     package (`o..`, a third-party package of the driver store that no
-     present device uses) on its own line with its id, `original_name`,
-     `published_name`, `provider`, `class`, `version`, `date` and `signer`;
-     the report names every `o..` id the summary holds. When
+   - Driver packages: the heading of a Polish report is "Pakiety sterowników
+     według grup". The facts first, then your judgement. First the groups:
+     one line per entry of `driver_package_groups` with its `group`, `count`
+     and the four counts of `by_state` (`present`, `non_present`,
+     `no_device_found`, `unread`). With `driver_package_groups` `null` say
+     "groups not read" (the groups file could not be used, "Not checked" names
+     `data/driver-package-groups.json` with the reason, every package's
+     `group` is `null`; the states are still facts) or, when the store was
+     not read, "not read". Then every listed
+     package (`o..`, a third-party package of the driver store with
+     `device_state` `non_present` or `no_device_found`), under its `group`, on
+     its own line with
+     its id, `original_name`, `published_name`, `owner`, `class`,
+     `version`, `date`, `signer` and its state in words. A package with
+     `no_device_by_nature` `true` (a filter or antivirus package that never
+     has a device of its own) is shown as owned by its program (`owner`, the
+     provider), never as a leftover, an orphan or "without a device", even
+     with state `no_device_found`. States in words: `non_present`
+     "known device not present", with each of its `devices` (name, class,
+     status and `last_removal`, or "no removal date" when it is `null`);
+     `no_device_found` "no device found without administrator rights",
+     never "no device" or "orphan": Windows may hold a record a normal read
+     does not show. The report names every `o..` id the summary holds. When
      `truncated_driver_packages` > 0 the list is cut to the budget: say how
      many packages were cut (the number from the JSON) and that the detail
      file has them (`--cut` lists the cut items, see SKILL.md); name a cut
      package only after fetching it with `--detail`, in an `ush:detail` line.
-     A `null` list stays `null` (not read, see "Degradation cases"). Then, each
-     on its own line with its number: "Third-party driver packages:
-     <component_counts.driver_packages>" and "With no present device:
-     <component_counts.driver_packages_without_device>". Then your
-     judgement, marked as such, per package or per group: what the package
-     is likely for (a device that is gone, an older version kept next to a
-     newer one in use, a program's helper) and whether it looks worth a
-     look. "No present device" is a fact about this moment (a device
-     unplugged now counts as not present), not proof that the package is
-     unused or safe to remove; say so once. An orphan package (`o..`) has a
-     printer block for an elevated shell (`--block o<n>`), given only after
-     the user decides. An empty list (`[]`) with `truncated_driver_packages`
-     `0` says that every third-party package has a present device (or
-     `present_device` `null`: such a package is not judged, and "Not
-     checked" names those whose published name was not read, as
-     `driver_packages published_name`), or that the store holds none (then
-     `component_counts.driver_packages` is 0); with that "Not checked" entry
-     never call the store clean.
+     A `null` list stays `null` (not read, see "Degradation cases"). Then, on
+     one line with its numbers: "Third-party driver packages:
+     <component_counts.driver_packages>" with the four counts of
+     `component_counts.driver_packages_by_state` (`present`, `non_present`,
+     `no_device_found`, `unread`). Then your judgement, marked as such, per
+     package or per group: what the package is likely for (a device that is
+     gone, an older version kept next to a newer one in use, a program's
+     helper) and whether it looks worth a look. A state is a fact about this
+     moment (a device unplugged now is not present), not proof that the
+     package is unused or safe to remove; say so once. No package gets a
+     removal: `--block o<n>` prints only `no block` with its reason, so
+     propose no removal of a package; a Polish report says exactly once
+     "Raport nie proponuje usuwania pakietów sterowników." An empty list (`[]`) with
+     `truncated_driver_packages` `0` says that every third-party package is
+     `present` (or has `device_state` `null`: such a package is not judged,
+     and "Not checked" names those whose published name was not read, as
+     `driver_packages published_name`, those named by a device of an
+     unknown status, as `driver_packages device_state`, those named only by a
+     disconnected device of another class, as `driver_packages device_class`,
+     and the Extension packages, as `driver_packages device_state (Extension
+     packages)`), or that the store
+     holds none (then `component_counts.driver_packages` is 0); with such a
+     "Not checked" entry never call the store clean.
      With `truncated_driver_packages` above `0` the packages were cut to the
      budget, not absent: give the count, never call the list clean or
      empty. Extension packages and the
-     other packages with `present_device` `null` are never in the list; do
+     other packages with `device_state` `null` are never in the list; do
      not call them unused.
    - Added to the system: first one sentence, translated: "This section
      lists what is outside the Windows lists of the skill's data file, not
@@ -481,9 +504,13 @@ is of an older shape and fails with
    logon; the JSON holds no write or logon time, only `first_seen` and
    `passes_seen`, judged as in the Autostart section), then your judgement,
    marked as such, and whether it is worth a look (for a RunOnce value the
-   judgement keeps both readings and says the run cannot tell which); orphan
-   driver packages and unmatched vendor folders in their own sections above.
-   A driver package and a vendor folder with `matched` `false` whose names
+   judgement keeps both readings and says the run cannot tell which); listed
+   driver packages whose `no_device_by_nature` is `false` and unmatched
+   vendor folders in their own sections above (a package with `true` is
+   named under its owner, never as a leftover; one with `null`, the groups
+   file not read, is not judged as a leftover).
+   A driver package whose `no_device_by_nature` is `false` and a vendor
+   folder with `matched` `false` whose names
    match in the JSON are one entry (a folder with `matched` `null` is never
    merged: it stays in its "not judged" group): the folder's line names the package's id (`o..`) and the
    package's line names the folder's id (`v..`), with the matching name;
@@ -663,12 +690,18 @@ Never report missing data as "no changes" or "clean":
   `component_counts.drivers_without_inf` are `null`. Say "not read".
 - `driver_packages` unreadable (e.g. an older Windows without the XML
   listing): `driver_packages` and both of its counts are `null`; say "not
-  read" with the `reason`, never "no orphan packages". `drivers` unreadable
-  while the store was read: the list `driver_packages` and
-  `component_counts.driver_packages_without_device` are `null` and "Not
-  checked" holds `driver_packages present_device`; say that the packages
-  were read but the present devices were not, so no package can be called
-  unused, and give `component_counts.driver_packages`.
+  read" with the `reason`, never "no packages without a device". `devices`
+  unreadable while the store was read: the list `driver_packages` and
+  `component_counts.driver_packages_by_state` are `null`, every package has
+  `device_state` `null`, and "Not checked" holds `driver_packages
+  device_state`; say that the packages were read but the devices were not,
+  so no package state is known, and give `component_counts.driver_packages`.
+- `data/driver-package-groups.json` broken or missing: every package has
+  `group` and `no_device_by_nature` `null`, `driver_package_groups` is
+  `null`, and "Not checked" holds `data/driver-package-groups.json` with
+  the reason; say the groups were not checked and that no driver package
+  was judged as a leftover, give the packages without a group and keep
+  their states.
 - `vendor_folders` `null` (the data file could not be used, no root could
   be listed, or a program source was not read and the baseline holds none
   of its programs; "Not checked" names which): say "not read" with the

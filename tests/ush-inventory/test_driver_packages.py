@@ -1,5 +1,9 @@
-"""Orphan driver packages: the ``driver_packages`` source of
+"""Driver packages without a present device: the ``driver_packages`` source of
 skills/ush-inventory/scripts/inventory.py (plan 024, milestone M2, criteria K1-K5, K7, K8).
+
+Since plan 051 M1 the state of a package comes from the ``devices`` source
+(``device_state``), no longer from the ``drivers`` rows (``present_device``); these
+tests were moved to that contract.
 
 The interface these tests assume is listed in ``fakes.py``, ``fakes_components.py`` and
 ``fakes_driver_packages.py``. PowerShell never starts; every data dir lives in a
@@ -12,14 +16,16 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import timedelta
 
-from .fakes import NOW, FakePowerShell, failure, ok
-from .fakes_components import WINDOWS_PROVIDER, WINDOWS_SIGNER, driver, windows_driver
+from .fakes import NOW, FakePowerShell, failure
+from .fakes_components import WINDOWS_PROVIDER, WINDOWS_SIGNER
 from .fakes_driver_packages import (
     BROKEN_XML,
     EXTENSION_GUID,
     MONITOR_GUID,
     USAGE_TEXT,
     DriverPackagesTestCase,
+    device,
+    devices_answer,
     package,
     package_key,
     store,
@@ -33,6 +39,14 @@ PAD = package("oem12.inf", "inventedpad.inf", class_name="HIDClass", version="2.
 MONITOR = package("oem40.inf", "inventedmonitor.inf", provider="Invented Display Ltd",
                   class_name="Monitor", class_guid=MONITOR_GUID, version="1.0.0.7",
                   date="06/30/2023", signer="Invented Display Signer")
+
+# A present device whose driver is no package of these tests.
+OTHER_DEVICES = devices_answer([device("PCI\\VEN_0000&DEV_0050\\0050", "oem99.inf",
+                                       "Started")])
+# A present device of PAD.
+PAD_DEVICES = devices_answer([device("HID\\VID_0000&PID_0001\\0001", "oem12.inf",
+                                     "Started", name="Invented Touch Pad",
+                                     class_name="HIDClass")])
 
 
 class TestDriverPackages(DriverPackagesTestCase):
@@ -52,10 +66,10 @@ class TestDriverPackages(DriverPackagesTestCase):
     def test_orphans_listed(self):
         fake = FakePowerShell({
             "driver_packages": store([MOUSE, PAD, MONITOR]),
-            # The device row names the INF in another case than the store.
-            "drivers": ok([driver("HID\\VID_1CCC&PID_0001\\0001", "OEM12.INF",
-                                  device_name="Invented Touch Pad",
-                                  device_class="HIDClass")]),
+            # The device names the INF in another case than the store.
+            "devices": devices_answer([device("HID\\VID_0000&PID_0001\\0001", "OEM12.INF",
+                                              "Started", name="Invented Touch Pad",
+                                              class_name="HIDClass")]),
         })
         summary = self.collect(fake)
         self.assertIn("driver_packages", fake.jobs())
@@ -65,13 +79,15 @@ class TestDriverPackages(DriverPackagesTestCase):
         listed = self.by_key(self.packages(summary))
         self.assertEqual(set(listed), {package_key(MOUSE), package_key(MONITOR)}, listed)
         for pkg in (MOUSE, MONITOR):
-            self.assert_package(listed[package_key(pkg)], pkg, False)
+            self.assert_package(listed[package_key(pkg)], pkg, "no_device_found")
         ids = [item.get("id") for item in listed.values()]
         self.assertEqual(len(set(ids)), 2, ids)
 
         counts = self.component_counts(summary)
         self.assertEqual(counts.get("driver_packages"), 3, counts)
-        self.assertEqual(counts.get("driver_packages_without_device"), 2, counts)
+        self.assertEqual(counts.get("driver_packages_by_state"),
+                         {"present": 1, "non_present": 0, "no_device_found": 2,
+                          "unread": 0}, counts)
 
     def test_clean_store_lists_nothing(self):
         with self.subTest(case="every third-party package has a present device"):
@@ -81,12 +97,13 @@ class TestDriverPackages(DriverPackagesTestCase):
                           version="12.7.3.1", date="02/11/2026")
             summary = self.collect(FakePowerShell({
                 "driver_packages": store([audio, net]),
-                "drivers": ok([
-                    driver("HDAUDIO\\FUNC_01&VEN_1DDD\\0001", "oem5.inf",
-                           device_name="Invented Audio", device_class="MEDIA"),
-                    driver("PCI\\VEN_1DDD&DEV_0002\\0002", "Oem6.inf",
-                           device_name="Invented Network Adapter", device_class="Net"),
-                    windows_driver("ACPI\\INVENTED0003\\0003", "machine.inf"),
+                "devices": devices_answer([
+                    device("HDAUDIO\\FUNC_01&VEN_0000\\0001", "oem5.inf", "Started",
+                           name="Invented Audio", class_name="MEDIA"),
+                    device("PCI\\VEN_0000&DEV_0002\\0002", "Oem6.inf", "Stopped",
+                           name="Invented Network Adapter", class_name="Net"),
+                    device("ACPI\\INVENTED0003\\0003", "machine.inf", "Started",
+                           name="Invented Windows Device", class_name="System"),
                 ]),
             }))
             self.assertEqual(self.source(summary, "driver_packages").get("status"), "read")
@@ -99,8 +116,8 @@ class TestDriverPackages(DriverPackagesTestCase):
                             signer=WINDOWS_SIGNER)
             summary = self.collect(FakePowerShell({
                 "driver_packages": store([inbox]),
-                "drivers": ok([windows_driver("ACPI\\INVENTED0004\\0004",
-                                              "inventedinbox.inf")]),
+                "devices": devices_answer([device("ACPI\\INVENTED0004\\0004",
+                                                  "inventedinbox.inf", "Started")]),
             }))
             self.assertEqual(self.source(summary, "driver_packages").get("status"), "empty",
                              self.source(summary, "driver_packages"))
@@ -119,7 +136,7 @@ class TestDriverPackages(DriverPackagesTestCase):
             with self.subTest(case=case):
                 summary = self.collect(FakePowerShell({
                     "driver_packages": response,
-                    "drivers": ok([driver("PCI\\VEN_1AAA&DEV_0050\\0050", "oem99.inf")]),
+                    "devices": OTHER_DEVICES,
                 }))
                 self.assert_unreadable(summary, "driver_packages")
                 self.assertTrue(self.package_notes(summary), summary.get("not_checked"))
@@ -132,16 +149,15 @@ class TestDriverPackages(DriverPackagesTestCase):
         # nor reported as removed against the baseline, and it is never listed as
         # without a device.
         data_dir = self.data_dir()
-        devices = ok([driver("PCI\\VEN_1AAA&DEV_0050\\0050", "oem99.inf")])
         self.collect(FakePowerShell({"driver_packages": store([MOUSE, PAD]),
-                                     "drivers": devices}),
+                                     "devices": OTHER_DEVICES}),
                      data_dir=data_dir, now=NOW)
         text = store_xml([MOUSE, PAD])
         nameless = text.replace(' DriverName="oem3.inf"', "", 1)
         self.assertNotEqual(nameless, text)
         summary = self.collect(FakePowerShell({
             "driver_packages": store_text(nameless, exit_code=0),
-            "drivers": devices,
+            "devices": OTHER_DEVICES,
         }), data_dir=data_dir, now=NOW + timedelta(days=1))
 
         source = [s for s in summary["sources"] if s["name"] == "driver_packages"]
@@ -151,17 +167,20 @@ class TestDriverPackages(DriverPackagesTestCase):
         mouse = detail[package_key(MOUSE)]
         self.assertIsNone(mouse.get("published_name"), mouse)
         self.assertIn("published_name", mouse.get("unread_fields") or [], mouse)
-        self.assertIsNone(mouse.get("present_device"), mouse)
+        self.assertIn("device_state", mouse, mouse)
+        self.assertIsNone(mouse["device_state"], mouse)
         self.assertEqual(set(self.by_key(self.packages(summary))), {package_key(PAD)})
         changes = self.by_key(self.changes_from(summary, "driver_packages"))
         self.assertNotIn(package_key(MOUSE), changes, changes)
 
     def test_drivers_unread_no_orphans(self):
+        """The devices not read: no package is judged (the ``drivers`` source no longer
+        decides it)."""
         summary = self.collect(FakePowerShell({
             "driver_packages": store([MOUSE, PAD]),
-            "drivers": failure("Invented CIM failure"),
+            "devices": failure("Invented PnP failure"),
         }))
-        self.assert_unreadable(summary, "drivers")
+        self.assert_unreadable(summary, "devices")
         self.assertIn("driver_packages", summary, sorted(summary))
         self.assertIsNone(summary["driver_packages"], summary["driver_packages"])
 
@@ -176,6 +195,17 @@ class TestDriverPackages(DriverPackagesTestCase):
         for pkg in (MOUSE, PAD):
             self.assert_package(detail[package_key(pkg)], pkg, None)
 
+        with self.subTest(case="the drivers source unreadable does not matter"):
+            summary = self.collect(FakePowerShell({
+                "driver_packages": store([MOUSE, PAD]),
+                "drivers": failure("Invented CIM failure"),
+                "devices": PAD_DEVICES,
+            }))
+            self.assert_unreadable(summary, "drivers")
+            detail = self.detail_packages(summary)
+            self.assert_package(detail[package_key(MOUSE)], MOUSE, "no_device_found")
+            self.assert_package(detail[package_key(PAD)], PAD, "present")
+
     def test_versions_and_reinstall(self):
         data_dir = self.data_dir()
         pad_old = package("oem20.inf", "inventedpad.inf", class_name="HIDClass",
@@ -189,18 +219,19 @@ class TestDriverPackages(DriverPackagesTestCase):
         mouse_first = package("oem10.inf", "inventedmouse.inf", version="1.0.0.0",
                               date="02/02/2024")
         mouse_again = dict(mouse_first, published="oem55.inf")
-        devices = ok([driver("HID\\VID_1CCC&PID_0021\\0021", "oem21.inf",
-                             device_name="Invented Touch Pad", device_class="HIDClass")])
+        devices = devices_answer([device("HID\\VID_0000&PID_0021\\0021", "oem21.inf",
+                                         "Started", name="Invented Touch Pad",
+                                         class_name="HIDClass")])
 
         run1 = self.collect(FakePowerShell({
             "driver_packages": store([mouse_first, pad_old, pad_new, cam_old]),
-            "drivers": devices,
+            "devices": devices,
         }), data_dir=data_dir, now=NOW)
 
         # Two versions of one package: both kept, only the unused one listed.
         detail1 = self.detail_packages(run1)
-        self.assert_package(detail1.get(package_key(pad_old)), pad_old, False)
-        self.assert_package(detail1.get(package_key(pad_new)), pad_new, True)
+        self.assert_package(detail1.get(package_key(pad_old)), pad_old, "no_device_found")
+        self.assert_package(detail1.get(package_key(pad_new)), pad_new, "present")
         listed1 = self.by_key(self.packages(run1))
         self.assertEqual(set(listed1),
                          {package_key(mouse_first), package_key(pad_old),
@@ -208,7 +239,7 @@ class TestDriverPackages(DriverPackagesTestCase):
 
         run2 = self.collect(FakePowerShell({
             "driver_packages": store([mouse_again, pad_old, pad_new, cam_new]),
-            "drivers": devices,
+            "devices": devices,
         }), data_dir=data_dir, now=NOW + timedelta(days=1))
 
         self.assertEqual(self.comparison(run2).get("driver_packages"), "compared",
@@ -217,7 +248,7 @@ class TestDriverPackages(DriverPackagesTestCase):
         detail2 = self.detail_packages(run2)
         mouse_key = package_key(mouse_first)
         self.assertEqual(package_key(mouse_again), mouse_key)
-        self.assert_package(detail2.get(mouse_key), mouse_again, False)
+        self.assert_package(detail2.get(mouse_key), mouse_again, "no_device_found")
         self.assertEqual(detail2[mouse_key].get("id"), detail1[mouse_key].get("id"),
                          (detail1[mouse_key], detail2[mouse_key]))
 
@@ -230,52 +261,51 @@ class TestDriverPackages(DriverPackagesTestCase):
                          changes[package_key(cam_old)])
 
     def test_extension_and_idless_rows_not_orphans(self):
+        """An ``Extension`` package is not judged; a package whose device is
+        ``Stopped`` is present (plan 051 replaced the rows without ``DeviceID``)."""
         extension = package("oem60.inf", "inventedmonitorext.inf",
                             provider="Invented Display Ltd", class_name="Extension",
                             class_guid=EXTENSION_GUID, version="1.0.2.0",
                             date="04/04/2025", signer="Invented Display Signer")
-        idless = package("oem61.inf", "inventedhelper.inf", class_name="System",
-                         version="4.4.0.1", date="07/07/2025")
-        device = package("oem62.inf", "inventedmonitor.inf",
-                         provider="Invented Display Ltd", class_name="Monitor",
-                         class_guid=MONITOR_GUID, version="1.0.0.9", date="04/04/2025",
-                         signer="Invented Display Signer")
+        stopped = package("oem61.inf", "inventedhelper.inf", class_name="System",
+                          version="4.4.0.1", date="07/07/2025")
+        monitor = package("oem62.inf", "inventedmonitor.inf",
+                          provider="Invented Display Ltd", class_name="Monitor",
+                          class_guid=MONITOR_GUID, version="1.0.0.9", date="04/04/2025",
+                          signer="Invented Display Signer")
         summary = self.collect(FakePowerShell({
-            "driver_packages": store([extension, idless, device]),
-            "drivers": ok([
-                driver("DISPLAY\\INV0001\\0001", "oem62.inf",
-                       device_name="Invented Monitor", device_class="Monitor"),
-                driver(None, "OEM61.inf", device_name="Invented Helper",
-                       device_class="System"),
+            "driver_packages": store([extension, stopped, monitor]),
+            "devices": devices_answer([
+                device("DISPLAY\\INV0001\\0001", "oem62.inf", "Started",
+                       name="Invented Monitor", class_name="Monitor"),
+                device("ROOT\\INVENTED\\0000", "OEM61.inf", "Stopped",
+                       name="Invented Helper", class_name="System"),
             ]),
         }))
 
         self.assertEqual(self.packages(summary), [])
         detail = self.detail_packages(summary)
         self.assert_package(detail.get(package_key(extension)), extension, None)
-        self.assert_package(detail.get(package_key(idless)), idless, True)
-        self.assert_package(detail.get(package_key(device)), device, True)
+        self.assert_package(detail.get(package_key(stopped)), stopped, "present")
+        self.assert_package(detail.get(package_key(monitor)), monitor, "present")
 
     def test_detail_section_and_block(self):
         data_dir = self.data_dir()
         summary = self.collect(FakePowerShell({
             "driver_packages": store([MOUSE, PAD]),
-            "drivers": ok([driver("HID\\VID_1CCC&PID_0001\\0001", "oem12.inf",
-                                  device_name="Invented Touch Pad",
-                                  device_class="HIDClass")]),
+            "devices": PAD_DEVICES,
         }), data_dir=data_dir)
 
         detail = self.detail_packages(summary)
         self.assertEqual(set(detail), {package_key(MOUSE), package_key(PAD)}, detail)
-        self.assert_package(detail[package_key(MOUSE)], MOUSE, False)
-        self.assert_package(detail[package_key(PAD)], PAD, True)
+        self.assert_package(detail[package_key(MOUSE)], MOUSE, "no_device_found")
+        self.assert_package(detail[package_key(PAD)], PAD, "present")
         self.assertIn("o1", {item.get("id") for item in detail.values()}, detail)
 
-        # Plan 027: an orphan package (present_device false) now has a printer block.
-        code, stdout, stderr = self.block(data_dir, "o1", summary.get("detail_file"))
-        self.assertNotRegex(stdout, r"(?m)^\s*#\s*o1\s*:\s*no block\s*:", stdout)
-        self.assertIn("/delete-driver", stdout, stdout or stderr)
-        self.assertEqual(code, 0, stdout[:300] or stderr[:300])
+        # Plan 051 M1: no package gets a removal block, whatever its state.
+        _code, stdout, stderr = self.block(data_dir, "o1", summary.get("detail_file"))
+        self.assertRegex(stdout, r"(?m)^\s*#\s*o1\s*:\s*no block\s*:", stdout or stderr)
+        self.assertNotIn("/delete-driver", stdout, stdout)
 
 
 class TestDriverPackagesBaseline(DriverPackagesTestCase):
@@ -284,20 +314,18 @@ class TestDriverPackagesBaseline(DriverPackagesTestCase):
     def test_single_package_store(self):
         summary = self.collect(FakePowerShell({
             "driver_packages": store([MOUSE]),
-            "drivers": ok([driver("PCI\\VEN_1AAA&DEV_0050\\0050", "oem99.inf")]),
+            "devices": OTHER_DEVICES,
         }))
         self.assertEqual(self.source(summary, "driver_packages").get("status"), "read")
         listed = self.by_key(self.packages(summary))
         self.assertEqual(set(listed), {package_key(MOUSE)}, listed)
-        self.assert_package(listed[package_key(MOUSE)], MOUSE, False)
+        self.assert_package(listed[package_key(MOUSE)], MOUSE, "no_device_found")
 
     def test_first_run_unreadable_run_and_carry_over(self):
         data_dir = self.data_dir()
-        devices = ok([driver("HID\\VID_1CCC&PID_0001\\0001", "oem12.inf",
-                             device_name="Invented Touch Pad", device_class="HIDClass")])
 
         run1 = self.collect(FakePowerShell({"driver_packages": store([MOUSE, PAD]),
-                                            "drivers": devices}),
+                                            "devices": PAD_DEVICES}),
                             data_dir=data_dir, now=NOW)
         with self.subTest(point="first run: no comparison, no changes"):
             self.assertEqual(self.comparison(run1).get("driver_packages"), "no_baseline",
@@ -308,7 +336,7 @@ class TestDriverPackagesBaseline(DriverPackagesTestCase):
 
         run2 = self.collect(FakePowerShell({
             "driver_packages": failure("Invented job failure 0x80070005"),
-            "drivers": devices,
+            "devices": PAD_DEVICES,
         }), data_dir=data_dir, now=NOW + timedelta(days=1))
         with self.subTest(point="unreadable source: not compared, no changes"):
             self.assert_unreadable(run2, "driver_packages")
@@ -317,7 +345,7 @@ class TestDriverPackagesBaseline(DriverPackagesTestCase):
             self.assertEqual(self.changes_from(run2, "driver_packages"), [])
 
         run3 = self.collect(FakePowerShell({"driver_packages": store([MOUSE, PAD]),
-                                            "drivers": devices}),
+                                            "devices": PAD_DEVICES}),
                             data_dir=data_dir, now=NOW + timedelta(days=2))
         with self.subTest(point="items carried over the unreadable run"):
             self.assertEqual(self.comparison(run3).get("driver_packages"), "compared",
@@ -356,14 +384,14 @@ class TestPublishedNameUnread(DriverPackagesTestCase):
 
     def test_unread_names_give_one_not_checked_entry(self):
         packages = [MOUSE, PAD, MONITOR]
-        devices = ok([driver("DISPLAY\\INV0040\\0040", "oem40.inf",
-                             device_name="Invented Monitor", device_class="Monitor")])
+        devices = devices_answer([device("DISPLAY\\INV0040\\0040", "oem40.inf", "Started",
+                                         name="Invented Monitor", class_name="Monitor")])
         clean = self.collect(FakePowerShell({"driver_packages": store(packages),
-                                             "drivers": devices}))
+                                             "devices": devices}))
         summary = self.collect(FakePowerShell({
             "driver_packages": store_without_published_names(
                 packages, [MOUSE["published"], PAD["published"]]),
-            "drivers": devices,
+            "devices": devices,
         }))
 
         notes = self.unread_notes(summary)
@@ -383,9 +411,7 @@ class TestPublishedNameUnread(DriverPackagesTestCase):
     def test_clean_store_gives_no_entry(self):
         summary = self.collect(FakePowerShell({
             "driver_packages": store([MOUSE, PAD, MONITOR]),
-            "drivers": ok([driver("HID\\VID_1CCC&PID_0001\\0001", "oem12.inf",
-                                  device_name="Invented Touch Pad",
-                                  device_class="HIDClass")]),
+            "devices": PAD_DEVICES,
         }))
         self.assertEqual(self.source(summary, "driver_packages").get("status"), "read")
         self.assertEqual(self.unread_notes(summary), [], summary.get("not_checked"))
@@ -393,8 +419,8 @@ class TestPublishedNameUnread(DriverPackagesTestCase):
     def test_matched_or_unjudged_gives_no_entry(self):
         other_copy = dict(MOUSE, published="oem13.inf")
         self.assertEqual(package_key(other_copy), package_key(MOUSE))
-        devices = ok([driver("HID\\VID_1CCC&PID_0013\\0013", "oem13.inf",
-                             device_name="Invented Mouse", device_class="Mouse")])
+        devices = devices_answer([device("HID\\VID_0000&PID_0013\\0013", "oem13.inf",
+                                         "Started", name="Invented Mouse")])
         orders = {"unread copy first": [MOUSE, other_copy, PAD],
                   "unread copy last": [other_copy, MOUSE, PAD]}
         for case, packages in orders.items():
@@ -402,21 +428,21 @@ class TestPublishedNameUnread(DriverPackagesTestCase):
                 summary = self.collect(FakePowerShell({
                     "driver_packages": store_without_published_names(
                         packages, [MOUSE["published"]]),
-                    "drivers": devices,
+                    "devices": devices,
                 }))
                 detail = self.detail_packages(summary)
-                self.assertIs(detail.get(package_key(MOUSE), {}).get("present_device"),
-                              True, detail)
+                self.assertEqual(detail.get(package_key(MOUSE), {}).get("device_state"),
+                                 "present", detail)
                 self.assertEqual(self.unread_notes(summary), [],
                                  summary.get("not_checked"))
 
-        with self.subTest(case="drivers not read"):
+        with self.subTest(case="devices not read"):
             summary = self.collect(FakePowerShell({
                 "driver_packages": store_without_published_names(
                     [MOUSE, PAD], [MOUSE["published"], PAD["published"]]),
-                "drivers": failure("Invented CIM failure"),
+                "devices": failure("Invented PnP failure"),
             }))
-            self.assert_unreadable(summary, "drivers")
+            self.assert_unreadable(summary, "devices")
             self.assertEqual(self.unread_notes(summary), [], summary.get("not_checked"))
             notes = self.package_notes(summary)
             self.assertTrue(

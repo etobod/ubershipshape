@@ -15,17 +15,32 @@ Interface fixed for M2 (the code does not exist yet):
   holds ``MM/DD/YYYY`` and the version separated by a space; the item gives ``date``
   (ISO ``YYYY-MM-DD``) and ``version``.
 - Item fields (summary and detail): ``id`` (``o<n>``), ``key``, ``published_name``,
-  ``original_name``, ``provider``, ``class``, ``version``, ``date``, ``signer``,
-  ``present_device`` (true/false/null). Key
-  ``driver_package:<original name>|<provider>|<version>``, case-folded.
-- ``present_device`` is true when a ``drivers`` row has the same ``InfName``
-  (case-insensitive), rows without ``DeviceID`` included; class ``Extension`` gives null.
-  When ``drivers`` is unreadable every package is null, summary ``driver_packages`` is
-  null and a not_checked entry says the present devices were not read.
-- Summary list ``driver_packages`` holds only ``present_device`` false;
-  ``component_counts`` has ``driver_packages`` (all third-party packages) and
-  ``driver_packages_without_device``. The detail file section ``driver_packages`` holds
-  every third-party package.
+  ``original_name``, ``provider``, ``class``, ``version``, ``date``, ``signer``. Key
+  ``driver_package:<original name>|<provider>|<version>``, case-folded. (Plan 024's
+  ``present_device`` and ``driver_packages_without_device`` were replaced by plan 051
+  M1, below.)
+- ``component_counts`` has ``driver_packages`` (all third-party packages). The detail
+  file section ``driver_packages`` holds every third-party package.
+
+Plan 051, milestone M1 adds a source ``devices``:
+
+- A job named ``devices`` runs ``pnputil /enum-devices /drivers /format xml`` and answers
+  one JSON object ``{"exit_code": <int>, "text": "<the whole stdout>", "last_removal":
+  {<InstanceId>: "yyyy-MM-dd" | null}}``. The ``last_removal`` key is an assumption of
+  these tests: the plan says the job reads ``DEVPKEY_Device_LastRemovalDate`` for each
+  ``Disconnected`` device with an ``oem<N>.inf`` driver and returns it as a UTC
+  ``yyyy-MM-dd``, but does not name the field; ``devices_answer`` is the one place that
+  builds it. A failed job, an exit code other than 0 or text that is no listing make the
+  source ``unreadable``.
+- The listing: root ``PnpUtil``, one ``Device`` element (attribute ``InstanceId``) per
+  device with children ``DeviceDescription``, ``ClassName``, ``ClassGuid``,
+  ``ManufacturerName``, ``Status``, ``DriverName`` and ``MatchingDrivers``.
+- Each package gets ``device_state`` (``present`` / ``non_present`` /
+  ``no_device_found`` / null with ``device_state_reason``); a ``non_present`` package has
+  ``devices``: ``[{device_name, class, status, last_removal}]``, no instance id. The
+  summary list ``driver_packages`` holds ``non_present`` and ``no_device_found``
+  packages, and is null when ``devices`` was not read; ``component_counts`` has
+  ``driver_packages_by_state`` ``{present, non_present, no_device_found, unread}``.
 
 Every value here is invented; nothing comes from a machine.
 """
@@ -101,6 +116,58 @@ def store_text(text, exit_code):
     return ok({"exit_code": exit_code, "text": text})
 
 
+def device(instance_id, driver_name, status, name="Invented Device", class_name="Mouse",
+           class_guid=MOUSE_GUID, manufacturer="Invented Peripherals Corp"):
+    """One device of ``pnputil /enum-devices /drivers`` (``status`` None: no ``Status``)."""
+    return {
+        "instance_id": instance_id,
+        "name": name,
+        "class": class_name,
+        "class_guid": class_guid,
+        "manufacturer": manufacturer,
+        "status": status,
+        "driver": driver_name,
+    }
+
+
+def devices_xml(devices):
+    """The whole stdout of ``pnputil /enum-devices /drivers /format xml``."""
+    lines = ['<?xml version="1.0" encoding="utf-8"?>',
+             '<PnpUtil Version="1.0" Command="/enum-devices /drivers /format xml">']
+    for dev in devices:
+        lines.append(f"  <Device InstanceId={quoteattr(dev['instance_id'])}>")
+        for tag, value in (("DeviceDescription", dev["name"]),
+                           ("ClassName", dev["class"]),
+                           ("ClassGuid", dev["class_guid"]),
+                           ("ManufacturerName", dev["manufacturer"]),
+                           ("Status", dev["status"]),
+                           ("DriverName", dev["driver"])):
+            if value is not None:
+                lines.append(f"    <{tag}>{escape(value)}</{tag}>")
+        if dev["driver"] is not None:
+            lines.append("    <MatchingDrivers>")
+            lines.append(f"      <Driver DriverName={quoteattr(dev['driver'])}>")
+            lines.append("        <Rank>00FF0000</Rank>")
+            lines.append("        <Status>Best Ranked / Installed</Status>")
+            lines.append("      </Driver>")
+            lines.append("    </MatchingDrivers>")
+        lines.append("  </Device>")
+    lines.append("</PnpUtil>")
+    return "\r\n".join(lines) + "\r\n"
+
+
+def devices_answer(devices, last_removal=None, exit_code=0):
+    """The ``devices`` job answer for ``devices``; ``last_removal`` maps an instance id
+    to ``yyyy-MM-dd`` (or None when the date was not read)."""
+    return ok({"exit_code": exit_code, "text": devices_xml(devices),
+               "last_removal": dict(last_removal or {})})
+
+
+def devices_text(text, exit_code):
+    """The ``devices`` job answer with any stdout and exit code."""
+    return ok({"exit_code": exit_code, "text": text, "last_removal": {}})
+
+
 def package_key(pkg):
     """``driver_package:<original name>|<provider>|<version>``, case-folded."""
     return f"driver_package:{pkg['original']}|{pkg['provider']}|{pkg['version']}".casefold()
@@ -122,8 +189,8 @@ class DriverPackagesTestCase(ComponentsTestCase):
     def package_notes(self, summary):
         return self.notes_about_source(summary, "driver_packages")
 
-    def assert_package(self, item, pkg, present_device):
-        """Every item field of one package, ``present_device`` included."""
+    def assert_package(self, item, pkg, device_state):
+        """Every item field of one package, ``device_state`` included."""
         self.assertIsNotNone(item, pkg)
         id_number(item.get("id"), "o")
         self.assertEqual(item.get("key"), package_key(pkg), item)
@@ -134,8 +201,5 @@ class DriverPackagesTestCase(ComponentsTestCase):
         self.assertEqual(item.get("version"), pkg["version"], item)
         self.assertEqual(item.get("date"), iso_date(pkg["date"]), item)
         self.assertEqual(item.get("signer"), pkg["signer"], item)
-        self.assertIn("present_device", item, item)
-        if present_device is None:
-            self.assertIsNone(item["present_device"], item)
-        else:
-            self.assertIs(item["present_device"], present_device, item)
+        self.assertIn("device_state", item, item)
+        self.assertEqual(item["device_state"], device_state, item)

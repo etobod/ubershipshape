@@ -81,7 +81,7 @@ Besides the shared fields (`schema_version`, `skill` `"ush-runall"`,
 | `firewall_ports` | list or `null` | the matched firewall rules, ids `w1`..., at most 50 (see "Firewall rules and listening ports"); `[]` when no rule matched; `null` when the comparison was not made |
 | `firewall_ports_counts` | object or `null` | the counters of the comparison; `null` when it was not made |
 | `network_categories` | object or `null` | a copy of `network_categories` of the `ush-processes` summary (network profiles counted per category, `{"Private": 1}`); `null` when that child is not `ok` or its summary has no such value |
-| `driver_update_links` | list or `null` | pending driver updates linked to driver packages no present device uses, ids `y1`... (see "Pending driver updates and orphan driver packages"); `[]` when nothing links; `null` when a side was not read |
+| `driver_update_links` | list or `null` | pending driver updates linked to driver packages no present device uses, ids `y1`... (see "Pending driver updates and driver packages no present device uses"); `[]` when nothing links; `null` when a side was not read |
 | `link_counts` | object or `null` | `{linked, updates_without_package, packages_without_update}`; `null` with `driver_update_links` `null` |
 | `decisions` | list or `null` | one item per decision of `<data dir>/decisions.json`, ids `j1`... (see "The user's decisions"); `[]` when there is no file; `null` when the file cannot be used (one `not_checked` item names `decisions.json`) |
 | `truncated` | int | `firewall_ports` items cut from the summary by the limit of 50, from the end of the order; `0` when none. The detail file has them all |
@@ -177,21 +177,22 @@ list):
 The summary lists at most 50 items; `truncated` counts the rest, which are
 in the detail file under the same `w` ids. `--detail w51` prints one.
 
-## Pending driver updates and orphan driver packages (`driver_update_links`, ids `y..`)
+## Pending driver updates and driver packages no present device uses (`driver_update_links`, ids `y..`)
 
 After the children, `runall` reads `pending_updates` of the `ush-health`
 detail file and `driver_packages` of the `ush-inventory` detail file (named
 by the children's `detail_file`); nothing on the machine is read. The links
 are made only when both children are `ok`, both detail files can be read,
 the `ush-health` source `pending_updates` and the `ush-inventory` sources
-`driver_packages` and `drivers` are `read` or `empty` (without `drivers`,
-`present_device` was not judged), and the detail files hold the lists
+`driver_packages` and `devices` (the source of `device_state`) are `read` or `empty`, and the detail files hold the lists
 `pending_updates` and `driver_packages`. Otherwise `driver_update_links` and
 `link_counts` are `null` and `not_checked` has one item naming each side
 that was not read. Nothing linked gives `[]`, never `null`.
 
-Only updates of `type` `driver` and packages whose `present_device` is
-`false` take part (`true` or `null` never links). An update and a package
+Only updates of `type` `driver` and packages whose `device_state` is
+`non_present` (only a disconnected device names the package) or
+`no_device_found` (no device found without administrator rights) take
+part; `present` or `null` (the state was not judged) never links. An update and a package
 link when both hold:
 
 - the update's `driver_provider` and the package's `provider` are equal
@@ -226,11 +227,15 @@ order of the updates, then of the packages:
 | `class_via` | `equal` when the two classes are equal after case-folding, `table` when a class line of `driver-link-aliases.json` paired them |
 | `title` | the update's `title` |
 | `original_name` | the package's `original_name` |
+| `package_state` | the package's `device_state`: `non_present` or `no_device_found` |
+| `package_group` | the package's `group` (from `ush-inventory`'s `data/driver-package-groups.json`), `null` when the groups were not read |
+| `package_no_device_by_nature` | the package's `no_device_by_nature`: `true` for a filter or antivirus package that never has a device of its own, `null` when the groups were not read |
 
 `link_counts`: `linked` the number of `y` items, `updates_without_package`
 the pending driver updates that link to no package, and
-`packages_without_update` the packages with `present_device` `false` that
-link to no update. The detail file holds the same list; `--detail y1`
+`packages_without_update` the packages with `device_state` `non_present` or
+`no_device_found` that link to no update; a package with `device_state`
+`present` or `null` counts nowhere. The detail file holds the same list; `--detail y1`
 prints one item.
 
 ## The user's decisions (`decisions`, ids `j..`)
@@ -302,7 +307,7 @@ Besides the shared cases:
   differ.
 
 - The driver update links not made: `what` "driver update links
-  (pending_updates of ush-health, driver_packages and drivers of
+  (pending_updates of ush-health, driver_packages and devices of
   ush-inventory)", `reason` every side not read joined with "; " (as for
   the firewall comparison: a child not `ok`, a detail file, source or list
   missing or not read, each naming its skill and source), followed by "the

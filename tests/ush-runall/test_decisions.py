@@ -137,15 +137,20 @@ def driver(n, provider, device_name="Invented Display Adapter"):
             "inf_name": f"oem{n + 40}.inf", "third_party": True, "own": False}
 
 
-def driver_package(n, provider, original_name, present_device=False, class_name="Display"):
+def driver_package(n, provider, original_name, device_state="no_device_found",
+                   class_name="Display"):
+    # Plan 051 M3: the package shape of ush-inventory moved from ``present_device`` to
+    # ``device_state`` (False -> "no_device_found", None -> null).
     item = {"id": f"o{n}",
             "key": f"driver_package:{original_name}|{provider}|1.0.0.0".casefold(),
             "published_name": f"oem{n + 50}.inf", "original_name": original_name,
             "provider": provider, "class": class_name, "version": "1.0.0.0",
             "date": "2026-03-14", "signer": "Invented Driver Signer",
-            "present_device": present_device}
-    if present_device is None:
-        item["present_device_reason"] = "invented reason: not judged"
+            "device_state": device_state, "owner": provider,
+            "group": "graphics" if class_name == "Display" else "other",
+            "no_device_by_nature": False}
+    if device_state is None:
+        item["device_state_reason"] = "invented reason: not judged"
     return item
 
 
@@ -180,7 +185,7 @@ def inventory_child(programs=(), drivers=(), packages=(), folders=(), roots=READ
     }
     sources = []
     for name in ("firewall_rules", "win32_programs", "msix_programs", "drivers",
-                 "driver_packages", "vendor_folders"):
+                 "devices", "driver_packages", "vendor_folders"):
         if name in unread:
             sources.append({"name": name, "status": "unreadable", "reason": FAILURE})
         elif name in by_source and not by_source[name]:
@@ -366,15 +371,15 @@ class TestRunallDecisions(RunallTestCase):
 
     def test_vendor_back(self):
         decisions = [decision(1, [vendor_check("provider", "Contoso")])]
-        package = driver_package(7, "contoso", "contosodisplay.inf", present_device=False)
-        other = driver_package(8, "Fabrikam", "fabrikamaudio.inf", present_device=False,
+        package = driver_package(7, "contoso", "contosodisplay.inf", device_state="no_device_found")
+        other = driver_package(8, "Fabrikam", "fabrikamaudio.inf", device_state="no_device_found",
                                class_name="MEDIA")
         update = driver_update(3, "Contoso")
 
         cases = (
-            ("an orphan package and a pending update", [package, other], [update],
+            ("an unused package and a pending update", [package, other], [update],
              (("ush-inventory", "o7"), ("ush-health", "q3"))),
-            ("only an orphan package", [package, other], [],
+            ("only an unused package", [package, other], [],
              (("ush-inventory", "o7"),)),
             ("only a pending driver update", [other], [update],
              (("ush-health", "q3"),)),
@@ -402,7 +407,7 @@ class TestRunallDecisions(RunallTestCase):
                       program(2, "Invented Notes", "Fabrikam", source="msix_programs")],
             drivers=[driver(2, "Contoso Ltd")],
             packages=[driver_package(7, "Contoso Ltd", "contosoltd.inf",
-                                     present_device=False)],
+                                     device_state="no_device_found")],
             folders=[folder("Contoso Ltd", False, item_id="v1"),
                      folder("ContosoTools", True),
                      folder("Fabrikam", True, root=READ_ROOTS[1])])
@@ -424,7 +429,7 @@ class TestRunallDecisions(RunallTestCase):
         clean_programs = [program(1, "Invented Notes", "Fabrikam")]
         clean_drivers = [driver(2, "Fabrikam")]
         clean_packages = [driver_package(8, "Fabrikam", "fabrikamaudio.inf",
-                                         present_device=False, class_name="MEDIA")]
+                                         device_state="no_device_found", class_name="MEDIA")]
         clean_folders = [folder("Fabrikam", True)]
 
         def inventory(**changes):
@@ -491,7 +496,7 @@ class TestRunallDecisions(RunallTestCase):
 
         with self.subTest("drivers unreadable while the detail still holds drivers: []"):
             unjudged = [driver_package(8, "Fabrikam", "fabrikamaudio.inf",
-                                       present_device=None, class_name="MEDIA")]
+                                       device_state=None, class_name="MEDIA")]
             content = inventory(drivers=[], packages=unjudged, unread=("drivers",))
             self.assertEqual(content[0]["drivers"], [])
             summary, _, _ = self.run_pass(vendors, inventory=content,

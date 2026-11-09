@@ -1,28 +1,18 @@
-"""The ``--block o<n>`` printer for an orphan driver package (plan 027, milestone M1).
+"""The ``--block o<n>`` printer for a driver package (plan 027, milestone M1; plan 051,
+milestone M1).
 
-Interface under test (from the plan; the general one is in ``test_block.py``):
+Interface under test (the general one is in ``test_block.py``):
 
-- ``main(["--data-dir", <dir>, "--block", "o1", "--detail-file", <file>])`` prints a block
-  for a ``driver_packages`` item of the detail file only when all of these hold:
-  ``present_device`` is ``false``; the item is not ``from_baseline``; the sources
-  ``driver_packages`` and ``drivers`` were read; ``published_name`` matches
-  ``^oem\\d+\\.inf$`` (any case); ``original_name`` matches ``^[A-Za-z0-9_.\\-]+\\.inf$``.
-  Otherwise it prints ``# o<n>: no block: <reason>``.
-- The block is for an elevated shell. In order: ``pnputil /export-driver <oem>
-  '<data dir>\\work\\driver-<stamp>-<oem>'``; a check of ``$LASTEXITCODE`` and of
-  ``Test-Path -LiteralPath '<export folder>\\<original name>'`` that throws "export
-  missing, nothing removed"; ``pnputil /delete-driver <oem>`` without ``/force`` or
-  ``/uninstall``; a check of ``$LASTEXITCODE`` that throws; ``Test-Path
-  "$env:WINDIR\\INF\\<oem>"`` as the read-back. Then ``# Rollback, same shell:`` and
-  ``pnputil /add-driver '<export folder>\\<original name>' /install``.
+- ``main(["--data-dir", <dir>, "--block", "o1", "--detail-file", <file>])`` prints no
+  removal for any ``driver_packages`` item of the detail file (plan 051): whatever its
+  ``device_state``, sources or names, it prints ``# o<n>: no block: <reason>`` with the
+  reason ``PACKAGE_NO_BLOCK_REASON`` and no ``pnputil`` line, and starts no job.
 
 Assumptions added by these tests beyond the plan text:
 
 - A detail item of ``driver_packages`` has the fields of references/summary-contract.md
   "Driver packages" plus ``source`` (``driver_packages``) and ``own`` (``false``) like the
   other detail items; ``listed["driver_packages"]`` holds the listable ids.
-- ``<oem>`` in the export folder name may be written with or without ``.inf``; the stamp
-  holds at least one digit.
 
 Every value here is invented; nothing comes from a machine. PowerShell never starts and
 no block is run.
@@ -52,8 +42,6 @@ PUBLISHED = "oem7.inf"
 # variables keep the printed path a literal path under <data dir>\work.
 INVENTED_ENV = {"LOCALAPPDATA": r"Q:\InventedProfile\AppData\Local",
                 "USERPROFILE": r"Q:\InventedProfile"}
-
-ROLLBACK_MARKER = r"^\s*#\s*Rollback, same shell:\s*$"
 
 
 def package_item(item_id, published, original, present_device, version="1.2.3.4",
@@ -122,86 +110,13 @@ class DriverPackageBlockTestCase(AdditionBlockTestCase):
             self.assertRegex(line, reason, line)
         return line
 
-    def assert_has_block(self, data_dir, detail_file, item_id, published):
-        """Clean-data control: the same fixture with a valid item keeps its block, so a
-        refusal that fires too widely fails."""
-        code, stdout, stderr = self.block(data_dir, [item_id], detail_file=detail_file)
-        self.assertEqual(code, 0, stderr[:300] or stdout[:300])
-        self.assertNotRegex(stdout, rf"(?m)^\s*#\s*{item_id}\s*:\s*no block", stdout)
-        delete = rf"(?i)\bpnputil(?:\.exe)?\s+/delete-driver\s+'?{re.escape(published)}'?"
-        self.assertTrue(any(re.search(delete, line) for line in commands(stdout)), stdout)
-
 
 class TestDriverPackageBlock(DriverPackageBlockTestCase):
-    def test_orphan_block_order_and_rollback(self):
-        """K1: the guarded export, check, delete and read-back, then the rollback."""
-        data_dir, detail_file = self.prepare_packages([ORPHAN])
-        work = str(data_dir / "work")
-        fake = FakePowerShell()
-        with mock.patch("subprocess.Popen",
-                        side_effect=AssertionError("a process was started")) as popen:
-            code, stdout, stderr = self.block(data_dir, ["o1"], detail_file=detail_file,
-                                              fake=fake)
-        self.assertEqual(code, 0, stderr[:300] or stdout[:300])
-        self.assertEqual(fake.calls, [], "--block started a PowerShell job")
-        self.assertFalse(popen.called, "--block started a process")
-        self.assertNotRegex(stdout, r"(?m)^\s*#\s*o1\s*:\s*no block", stdout)
-
-        lines = stdout.splitlines()
-        markers = [i for i, line in enumerate(lines) if re.match(ROLLBACK_MARKER, line)]
-        self.assertEqual(len(markers), 1, stdout)
-        change_part = "\n".join(lines[:markers[0]])
-        rollback_part = "\n".join(lines[markers[0] + 1:])
-        self.assert_shell(change_part, elevated=True)
-
-        text = "\n".join(commands(change_part))
-        published = re.escape(PUBLISHED)
-        export = re.search(
-            rf"(?i)\bpnputil(?:\.exe)?\s+/export-driver\s+'?{published}'?\s+"
-            rf"'({re.escape(work)}\\driver-[^'\\]*\d[^'\\]*-oem7(?:\.inf)?)'", text)
-        self.assertIsNotNone(export, f"no export into a stamped folder under {work}:\n"
-                                     + change_part)
-        folder = export.group(1)
-        exported_inf = f"{folder}\\{ORIGINAL}"
-
-        deletes = list(re.finditer(
-            rf"(?i)\bpnputil(?:\.exe)?\s+/delete-driver\s+'?{published}'?", stdout))
-        self.assertEqual(len(deletes), 1, stdout)
-        delete = re.search(rf"(?i)\bpnputil(?:\.exe)?\s+/delete-driver\s+'?{published}'?",
-                           text)
-        self.assertIsNotNone(delete, change_part)
-        self.assertLess(export.end(), delete.start(), change_part)
-        self.assertNotRegex(stdout, r"(?i)/force\b", stdout)
-        self.assertNotRegex(stdout, r"(?i)/uninstall\b", stdout)
-
-        # Between the export and the delete: the exit code and the exact exported inf
-        # are checked, and a failed check throws that nothing was removed.
-        check = text[export.end():delete.start()]
-        self.assertIn("$LASTEXITCODE", check, change_part)
-        self.assertRegex(
-            check,
-            rf"(?is)Test-Path\s+-LiteralPath\s+'{re.escape(exported_inf)}'"
-            r".*?\bthrow\b[^\n]*nothing (?:was )?removed", change_part)
-
-        # After the delete: its exit code is checked with a throw, then the read-back.
-        after = text[delete.end():]
-        readback = re.search(
-            rf'(?i)Test-Path\s+(?:-LiteralPath\s+)?"\$env:WINDIR\\INF\\{published}"', after)
-        self.assertIsNotNone(readback, change_part)
-        between = after[:readback.start()]
-        self.assertIn("$LASTEXITCODE", between, change_part)
-        self.assertRegex(between, r"(?i)\bthrow\b", change_part)
-
-        rollback_commands = commands(rollback_part)
-        self.assertTrue(rollback_commands, stdout)
-        self.assertRegex(
-            rollback_commands[0],
-            rf"(?i)^\s*pnputil(?:\.exe)?\s+/add-driver\s+'{re.escape(exported_inf)}'"
-            r"\s+/install\b", rollback_part)
-        self.assertNotRegex(rollback_part, r"(?i)/delete-driver", rollback_part)
-
     def test_refused_packages(self):
-        """K2: a used, extension or baseline package and an unread drivers source."""
+        """Plan 051 M1: every package gets the one ``no block`` reason, whatever its
+        state, sources or copies (plan 027 K2 gave a block to ``present_device`` false;
+        that block is gone)."""
+        reason = re.escape(self.inventory.PACKAGE_NO_BLOCK_REASON)
         present = package_item("o2", "oem8.inf", "inventedcamera.inf", True)
         extension = package_item(
             "o3", "oem9.inf", "inventedextension.inf", None, class_name="Extension",
@@ -209,14 +124,8 @@ class TestDriverPackageBlock(DriverPackageBlockTestCase):
         baseline = package_item("o4", "oem10.inf", "inventedkeyboard.inf", False,
                                 from_baseline=True)
         data_dir, detail_file = self.prepare_packages([ORPHAN, present, extension, baseline])
-        with self.subTest(case="clean control: the orphan of the same file"):
-            self.assert_has_block(data_dir, detail_file, "o1", PUBLISHED)
-        cases = (
-            ("present_device true", "o2", r"(?i)device"),
-            ("present_device null", "o3", r"(?i)device"),
-            ("from_baseline", "o4", r"(?i)baseline"),
-        )
-        for case, item_id, reason in cases:
+        for case, item_id in (("former orphan", "o1"), ("present_device true", "o2"),
+                              ("present_device null", "o3"), ("from_baseline", "o4")):
             with self.subTest(case=case):
                 fake = FakePowerShell()
                 _code, stdout, _stderr = self.block(data_dir, [item_id],
@@ -224,47 +133,30 @@ class TestDriverPackageBlock(DriverPackageBlockTestCase):
                 self.assert_refused(stdout, item_id, reason)
                 self.assertEqual(fake.calls, [])
 
-        with self.subTest(case="drivers source unreadable"):
-            unread_dir, unread_file = self.prepare_packages([ORPHAN],
-                                                            drivers_status="unreadable")
-            fake = FakePowerShell()
-            _code, stdout, _stderr = self.block(unread_dir, ["o1"],
-                                                detail_file=unread_file, fake=fake)
-            self.assert_refused(stdout, "o1", r"(?i)\bdrivers\b")
-            self.assertEqual(fake.calls, [])
-
-        with self.subTest(case="driver_packages source unreadable"):
-            unread_dir, unread_file = self.prepare_packages([ORPHAN],
-                                                            packages_status="unreadable")
-            fake = FakePowerShell()
-            _code, stdout, _stderr = self.block(unread_dir, ["o1"],
-                                                detail_file=unread_file, fake=fake)
-            self.assert_refused(stdout, "o1", r"(?i)\bdriver_packages\b")
-            self.assertEqual(fake.calls, [])
-
-        with self.subTest(case="more than one copy in the driver store"):
-            copies = package_item("o5", "oem11.inf", "inventedtablet.inf", False,
-                                  other_published_names=["oem13.inf"])
-            copies_dir, copies_file = self.prepare_packages([copies])
-            fake = FakePowerShell()
-            _code, stdout, _stderr = self.block(copies_dir, ["o5"],
-                                                detail_file=copies_file, fake=fake)
-            self.assert_refused(stdout, "o5", r"(?i)cop(?:y|ies)")
-            self.assertEqual(fake.calls, [])
-
-        with self.subTest(case="clean control: a non-ASCII provider keeps the block"):
-            accent = package_item("o6", "oem14.inf", "inventedpen.inf", False,
-                                  provider="Invénted Pens®")
-            accent_dir, accent_file = self.prepare_packages([accent])
-            self.assert_has_block(accent_dir, accent_file, "o6", "oem14.inf")
+        prepared = {
+            "drivers source unreadable": self.prepare_packages(
+                [ORPHAN], drivers_status="unreadable"),
+            "driver_packages source unreadable": self.prepare_packages(
+                [ORPHAN], packages_status="unreadable"),
+            "more than one copy in the driver store": self.prepare_packages(
+                [package_item("o1", "oem11.inf", "inventedtablet.inf", False,
+                              other_published_names=["oem13.inf"])]),
+            "a non-ASCII provider": self.prepare_packages(
+                [package_item("o1", "oem14.inf", "inventedpen.inf", False,
+                              provider="Invénted Pens®")]),
+        }
+        for case, (case_dir, case_file) in prepared.items():
+            with self.subTest(case=case):
+                fake = FakePowerShell()
+                _code, stdout, _stderr = self.block(case_dir, ["o1"],
+                                                    detail_file=case_file, fake=fake)
+                self.assert_refused(stdout, "o1", reason)
+                self.assertEqual(fake.calls, [])
 
     def test_bad_published_name(self):
         """K3: a bad published or original name gives no block and is never printed."""
-        with self.subTest(case="clean control: valid names, upper-case published name"):
-            item = package_item("o1", "OEM12.INF", ORIGINAL, False)
-            data_dir, detail_file = self.prepare_packages([item])
-            self.assert_has_block(data_dir, detail_file, "o1", "OEM12.INF")
         cases = (
+            ("valid names, upper-case published name", "OEM12.INF", ORIGINAL, ()),
             ("published with a command", "oem1.inf; calc", ORIGINAL,
              ("oem1.inf; calc", "oem1.inf", "; calc", "calc")),
             ("published with a parent path", "..\\x.inf", ORIGINAL,
@@ -286,6 +178,42 @@ class TestDriverPackageBlock(DriverPackageBlockTestCase):
                 for fragment in fragments:
                     self.assertNotIn(fragment.lower(), stdout.lower(),
                                      f"{fragment!r} reached the printed text:\n{stdout}")
+
+    def test_no_removal_in_any_state(self):
+        """Plan 051 M1, K8: a package in each of the three device states, otherwise fit
+        for a block (valid names, not from the baseline, every source read), gets the
+        ``no block`` line with the reason and no ``pnputil /delete-driver`` line."""
+        def state_item(item_id, published, original, state, **extra):
+            item = package_item(item_id, published, original, None, **extra)
+            del item["present_device"]
+            item["device_state"] = state
+            return item
+
+        present = state_item("o1", "oem7.inf", "inventedmouse.inf", "present")
+        non_present = state_item(
+            "o2", "oem8.inf", "inventedwebcam.inf", "non_present", class_name="Camera",
+            devices=[{"device_name": "Invented Webcam", "class": "Camera",
+                      "status": "Disconnected", "last_removal": "2026-05-04"}])
+        no_device = state_item("o3", "oem9.inf", "inventedtablet.inf", "no_device_found",
+                               class_name="HIDClass")
+        data_dir, detail_file = self.prepare_packages([present, non_present, no_device])
+        document = json.loads(detail_file.read_text(encoding="utf-8"))
+        document["sources"].append(source("devices"))
+        detail_file.write_text(json.dumps(document, indent=2), encoding="utf-8")
+
+        reason = ("Windows refused every removal tried on this machine although no "
+                  "device names the package without administrator rights; a removal is "
+                  "not offered until a read proves Windows will accept it")
+        for item_id, state in (("o1", "present"), ("o2", "non_present"),
+                               ("o3", "no_device_found")):
+            with self.subTest(state=state):
+                fake = FakePowerShell()
+                _code, stdout, _stderr = self.block(data_dir, [item_id],
+                                                    detail_file=detail_file, fake=fake)
+                self.assertEqual(fake.calls, [], "--block started a PowerShell job")
+                line = self.assert_refused(stdout, item_id)
+                self.assertIn(reason, line, line)
+                self.assertNotRegex(stdout, r"(?i)/delete-driver", stdout)
 
 
 if __name__ == "__main__":

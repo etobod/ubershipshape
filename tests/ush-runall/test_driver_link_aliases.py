@@ -8,7 +8,7 @@ Interface under test (from the plan):
   temporary JSON file they write.
 - Table shape: ``{"classes": [{"windows_update": str, "inf": [str, ...], "seen": str}],
   "providers": [{"names": [str, ...], "seen": str}]}``.
-- A pending driver update and an orphan package link when the providers are equal after
+- A pending driver update and a package no present device uses link when the providers are equal after
   case-folding or are in one provider group (both directions), and the classes are equal
   after case-folding or the package's class is in the ``inf`` list of the update's class
   (one way: Windows Update -> INF). Every pair is one ``y<n>`` item.
@@ -25,7 +25,9 @@ Assumptions added by these tests beyond the plan text:
   ``CHILDREN_FILE``.
 - ``link_counts`` follows ``test_driver_update_links``: ``updates_without_package`` counts
   the pending driver updates linked to no package, ``packages_without_update`` the
-  packages with ``present_device`` false linked to no update.
+  packages with ``device_state`` ``non_present`` or ``no_device_found`` linked to no
+  update (plan 051, M3: the fixtures moved from ``present_device`` false to
+  ``device_state`` ``no_device_found``).
 - In K7 the ``not_checked`` entry "names the file" when its JSON text contains either
   the temporary file's name or ``driver-link-aliases``; exactly one such entry is
   expected. Its wording ("only exact names were linked") is not asserted.
@@ -116,7 +118,7 @@ class TestDriverLinkAliases(AliasTestCase):
                     health=health_child([driver_update(3, update_provider,
                                                        driver_class="Graphics")]),
                     inventory=inventory_child([
-                        driver_package(7, package_provider, "contosodisplay.inf", False,
+                        driver_package(7, package_provider, "contosodisplay.inf", "no_device_found",
                                        class_name="Display")]))
                 summary = self.collect_with(self.aliases_file(BASE_TABLE), fake)
 
@@ -136,7 +138,7 @@ class TestDriverLinkAliases(AliasTestCase):
             self.temp(),
             health=health_child([driver_update(3, "Fabrikam", driver_class="Bluetooth")]),
             inventory=inventory_child([
-                driver_package(7, "Fabrikam Labs", "fabrikamports.inf", False,
+                driver_package(7, "Fabrikam Labs", "fabrikamports.inf", "no_device_found",
                                class_name="Ports")]))
         summary = self.collect_with(self.aliases_file(BASE_TABLE), fake)
 
@@ -150,7 +152,7 @@ class TestDriverLinkAliases(AliasTestCase):
             self.temp(),
             health=health_child([driver_update(3, "Contoso", driver_class="Bluetooth")]),
             inventory=inventory_child([
-                driver_package(7, "Contoso Holdings", "contosoports.inf", False,
+                driver_package(7, "Contoso Holdings", "contosoports.inf", "no_device_found",
                                class_name="Ports")]))
         summary = self.collect_with(self.aliases_file(BASE_TABLE), fake)
 
@@ -164,7 +166,7 @@ class TestDriverLinkAliases(AliasTestCase):
             self.temp(),
             health=health_child([driver_update(3, "Contoso", driver_class="Graphics")]),
             inventory=inventory_child([
-                driver_package(7, "Fabrikam", "fabrikamdisplay.inf", False,
+                driver_package(7, "Fabrikam", "fabrikamdisplay.inf", "no_device_found",
                                class_name="Display")]))
         summary = self.collect_with(self.aliases_file(BASE_TABLE), fake)
 
@@ -178,7 +180,7 @@ class TestDriverLinkAliases(AliasTestCase):
             self.temp(),
             health=health_child([driver_update(3, "Contoso", driver_class="Display")]),
             inventory=inventory_child([
-                driver_package(7, "Contoso", "contosographics.inf", False,
+                driver_package(7, "Contoso", "contosographics.inf", "no_device_found",
                                class_name="Graphics")]))
         summary = self.collect_with(self.aliases_file(BASE_TABLE), fake)
 
@@ -193,9 +195,9 @@ class TestDriverLinkAliases(AliasTestCase):
             self.temp(),
             health=health_child([driver_update(3, "Contoso", driver_class="Graphics")]),
             inventory=inventory_child([
-                driver_package(7, "Contoso", "contosodisplay.inf", False,
+                driver_package(7, "Contoso", "contosodisplay.inf", "no_device_found",
                                class_name="Display"),
-                driver_package(8, "Contoso", "contosodisplayext.inf", False,
+                driver_package(8, "Contoso", "contosodisplayext.inf", "no_device_found",
                                class_name="Extension"),
             ]))
         summary = self.collect_with(self.aliases_file(aliases), fake)
@@ -241,9 +243,9 @@ class TestDriverLinkAliases(AliasTestCase):
                                       driver_class="Graphics"),
                     ]),
                     inventory=inventory_child([
-                        driver_package(7, "Contoso", "contosodisplay.inf", False,
+                        driver_package(7, "Contoso", "contosodisplay.inf", "no_device_found",
                                        class_name="Display"),
-                        driver_package(8, "Fabrikam Holdings", "fabrikamdisplay.inf", False,
+                        driver_package(8, "Fabrikam Holdings", "fabrikamdisplay.inf", "no_device_found",
                                        class_name="Display"),
                     ]))
                 summary = self.collect_with(path, fake)
@@ -315,7 +317,7 @@ class TestLinkEvidence(AliasTestCase):
             self.temp(),
             health=health_child([driver_update(3, update[0], driver_class=update[1])]),
             inventory=inventory_child([
-                driver_package(7, package[0], "contosodisplay.inf", False,
+                driver_package(7, package[0], "contosodisplay.inf", "no_device_found",
                                class_name=package[1])]))
         path = self.aliases_file(aliases)
         summary = self.collect_with(path, fake)

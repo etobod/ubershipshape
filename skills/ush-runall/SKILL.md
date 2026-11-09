@@ -12,9 +12,9 @@ per child (status, duration, its `not_checked` count, `truncated`,
 sets the active inbound Allow firewall rules of `ush-inventory` against the
 TCP listening ports of `ush-processes` (items `w1`...), and links each
 pending driver update of `ush-health` to a driver package of
-`ush-inventory` that no present device uses when the provider and the
-driver class are the same or paired by `data/driver-link-aliases.json`
-(items `y1`...). A script runs and
+`ush-inventory` that no present device uses (state `non_present` or
+`no_device_found`) when the provider and the driver class are the same or
+paired by `data/driver-link-aliases.json` (items `y1`...). A script runs and
 counts; you read the children one at a time, judge and write one Markdown
 report; the user decides what to act on.
 
@@ -141,20 +141,35 @@ or running anything on a schedule. Say so if the user asks for these.
   item the report names each of these with its evidence and says whether it
   is worth a look: an autostart entry with a target that exists and whose
   `signature_status` is set and not `Valid` (a `null` status is a missing or
-  unchecked file, never a signature finding); every RunOnce value (`kind` `run_once`); every orphan
-  driver package (`ush-inventory o..`); every unmatched vendor folder
+  unchecked file, never a signature finding); every RunOnce value (`kind` `run_once`); every unmatched vendor folder
   (`ush-inventory v..` with `matched` `false`; one with `matched` `null`
   was not judged: name it with its `not_judged` cause, never as a
-  leftover). A driver package and a vendor folder with `matched`
-  `false` whose names match in the JSON go into one entry with both sources (the rule "Links
+  leftover). A driver package whose `no_device_by_nature` is `false` and a
+  vendor folder with `matched` `false` whose names match in the JSON go into one entry with both sources (the rule "Links
   between skills"). So does each `driver_update_links` item (`y..`): the
-  pending driver update `ush-health q<n>` and the orphan package
+  pending driver update `ush-health q<n>` and the package
   `ush-inventory o<n>` it links to: name both sides' provider and class
-  (`provider`, `driver_class`, `package_provider`, `package_class`). Call
+  (`provider`, `driver_class`, `package_provider`, `package_class`) and the
+  package's state (`package_state`) and group (`package_group`). Call
   the two providers the same only when `provider_via` is `equal`, and the
   two classes the same only when `class_via` is `equal`; when one of them is
   `table`, say that a line of `driver-link-aliases.json` paired those two
   names.
+- **Driver packages by state and group, no removal.** A driver package of
+  `ush-inventory` (`o..`) is named by its `device_state`, never as an orphan
+  or "without a device": `non_present` is "known device not present", with
+  each device of its `devices` (name, class and `last_removal`, or "no
+  removal date" when it is `null`); `no_device_found` is "no device found
+  without administrator rights" (Windows may hold a record a normal read
+  does not show). The report gives the packages of the `ush-inventory` item
+  by `group` (`driver_package_groups`: `count` and `by_state` per group),
+  each listed package under its group with its `owner`; a package with
+  `no_device_by_nature` `true` (a filter or antivirus package) is owned by
+  its program, never a leftover. A state is a fact about this moment, not
+  proof that a package is unused or safe to remove. No driver package
+  removal is offered or put into a repair plan: `ush-inventory --block
+  o<n>` prints only `no block` with the reason, and the report points to
+  `ush-inventory` for that reason.
 - **Firewall rules as facts.** Describe each `firewall_ports` item by facts:
   the program listens only on the loopback address (`loopback_only` `true`)
   or on other addresses too, and the rule's `profile` set against

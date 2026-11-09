@@ -41,11 +41,18 @@ see ``skills/ush-common/scripts/psrun.py``):
   device that is not present now (e.g. unplugged), not an uninstalled driver.
 - ``driver_packages``: the driver store listing as XML (``/enum-drivers /format
   xml``), only the third-party packages (published name ``oem<N>.inf``), each
-  with ``present_device``: whether a ``drivers`` row (one without ``DeviceID``
-  included) names it as ``InfName``; null for an ``Extension`` package and for
-  every package when ``drivers`` was not read. A failed job, an exit code other
-  than 0 or a text that is no XML listing makes the source unreadable. The summary
-  lists the packages with ``present_device`` false (``o..``, cut to the budget).
+  with ``device_state`` from the ``devices`` source (see ``package_state``):
+  ``present``, ``non_present`` (with the disconnected ``devices`` that name it),
+  ``no_device_found`` (no device found without administrator rights, which is not
+  "no device"), or null with ``device_state_reason``. A failed job, an exit code
+  other than 0 or a text that is no XML listing makes the source unreadable. The
+  summary lists the ``non_present`` and ``no_device_found`` packages (``o..``, cut
+  to the budget); ``--block`` prints no removal for any of them.
+- ``devices``: every device Windows knows, present or not, as XML (``pnputil
+  /enum-devices /drivers /format xml``), with ``DEVPKEY_Device_LastRemovalDate``
+  of each disconnected device whose driver is an ``oem<N>.inf``. Used only for the
+  package states; no instance id leaves the job's raw file. A failed job, an exit
+  code other than 0 or a text that is no listing makes the source unreadable.
 - ``firewall_rules``: the rule values of the ``FirewallRules`` keys of the local
   store (``local``), of Store apps (``app_iso``) and of the policy (``policy``);
   a missing key is no rules, a key that cannot be read fails the source. The
@@ -130,7 +137,7 @@ to its minimum: ``programs``
 (``truncated``; programs without an install date, then the oldest installs) down to
 ``PROGRAMS_MIN``, ``vendor_folders`` (``truncated_vendor_folders``) down to
 ``VENDOR_FOLDERS_MIN``, ``driver_packages`` (``truncated_driver_packages``; the
-first packages in id order stay) down to ``DRIVER_PACKAGES_MIN``,
+first packages of the list stay: non_present, then filter packages, then the rest) down to ``DRIVER_PACKAGES_MIN``,
 ``drivers`` (``truncated_drivers``; the ``DRIVER_CLASSES_FIRST`` classes lead the
 list) down to ``DRIVERS_MIN``, ``components`` (``truncated_components``) down to
 ``COMPONENTS_MIN`` and ``additions`` (``truncated_additions``; the items without a
@@ -197,6 +204,10 @@ PER_USER_SUFFIXES_FILE = (Path(__file__).absolute().parents[1] / "data"
 # type (the unresolved "ms-resource:" firewall rule names); read at run time.
 COLLAPSED_NAMES_FILE = (Path(__file__).absolute().parents[1] / "data"
                         / "collapsed_names.json")
+# The rules that put a driver package in a group by its class or provider; read at
+# run time.
+DRIVER_PACKAGE_GROUPS_FILE = (Path(__file__).absolute().parents[1] / "data"
+                              / "driver-package-groups.json")
 
 PROGRAM_SOURCES = ("win32_programs", "msix_programs")
 AUTOSTART_SOURCES = ("run_keys", "startup_folders", "scheduled_tasks", "services")
@@ -252,12 +263,27 @@ LISTED_STATES = {"feature": "enabled", "capability": "Installed"}
 FEATURE_STATES = {1: "enabled", 2: "disabled", 3: "absent"}
 # Driver packages: the published name of a third-party package in the driver store,
 # the class whose packages no device names as its INF, and why their
-# present_device is null.
+# device_state is null.
 THIRD_PARTY_PACKAGE = re.compile(r"oem\d+\.inf", re.IGNORECASE)
 EXTENSION_CLASS = "extension"
 EXTENSION_REASON = "extension packages are not listed per device"
-DRIVERS_UNREAD_REASON = ("the present devices (source drivers) were not read, so no "
-                         "package is known to have no present device")
+DEVICES_UNREAD_REASON = ("the devices (source devices) were not read, so no package "
+                         "state is known")
+# The Status of a device in the device listing, case-folded: a present device (any
+# of these four), or one Windows knows but that is not connected now. Any other or a
+# missing status counts for neither (see package_state).
+PRESENT_STATUSES = ("started", "stopped", "disabled", "problem")
+NON_PRESENT_STATUSES = ("disconnected",)
+UNKNOWN_STATUS_REASON = "device status not known"
+# Windows reuses an oem<N>.inf number after a package is removed, so a disconnected
+# device of another class than the package may name an earlier package of that number.
+OTHER_CLASS_REASON = ("a disconnected device of another class names this published "
+                      "name (Windows reuses oem<N>.inf numbers), so it is no evidence")
+# Why --block prints no removal for any driver package (plan 051).
+PACKAGE_NO_BLOCK_REASON = (
+    "Windows refused every removal tried on this machine although no device names the "
+    "package without administrator rights; a removal is not offered until a read "
+    "proves Windows will accept it")
 # DriverVersion of the driver store listing: "MM/DD/YYYY <version>".
 PACKAGE_VERSION = re.compile(r"\s*(\d{1,2})/(\d{1,2})/(\d{4})\s+(\S+)\s*")
 ADMIN_REASON = ("requires administrator rights (not read in this run, which is not "
@@ -265,7 +291,8 @@ ADMIN_REASON = ("requires administrator rights (not read in this run, which is n
 # The lists cut to fit the budget, with the key that counts the cut items. Every short
 # list (programs, vendor_folders, driver_packages, drivers, components, additions) keeps
 # its minimum before any list goes below it; then autostart goes to AUTOSTART_MIN; then
-# components, driver_packages (the orphan packages) and drivers go to nothing, in that
+# components, driver_packages (the packages no device or only a disconnected one names)
+# and drivers go to nothing, in that
 # order, so the listed drivers outlast the packages; then vendor_folders (the folders no
 # rule matches, each not judged one repeating the shared not_judged cause; every folder
 # is a lead the detail file and the not_checked cause still cover), additions and
@@ -1212,6 +1239,37 @@ $text = (& $exe /enum-drivers /format xml | Out-String)
 $result = [pscustomobject]@{ exit_code = $LASTEXITCODE; text = $text }
 """
 
+# Works without administrator rights. Every device Windows knows, present or not, as
+# XML (tag names are not translated); the whole stdout and the exit code go to Python.
+# For each Disconnected device with an oem<N>.inf driver, DEVPKEY_Device_LastRemovalDate
+# (a FileTime, readable without elevation) as a UTC yyyy-MM-dd, null when not read;
+# keyed by the instance id, which only this raw file holds.
+DEVICES_BODY = r"""$inv = [System.Globalization.CultureInfo]::InvariantCulture
+$exe = Join-Path $env:SystemRoot 'System32\pnputil.exe'
+$text = (& $exe /enum-devices /drivers /format xml | Out-String)
+$code = $LASTEXITCODE
+$removal = @{}
+$xml = $null
+if ($code -eq 0) { try { $xml = [xml]$text } catch { $xml = $null } }
+if ($xml -ne $null) {
+  foreach ($dev in @($xml.SelectNodes('/PnpUtil/Device'))) {
+    $id = $dev.GetAttribute('InstanceId')
+    $status = $dev.SelectSingleNode('Status')
+    $driver = $dev.SelectSingleNode('DriverName')
+    if (-not $id -or $status -eq $null -or $driver -eq $null) { continue }
+    if ($status.InnerText.Trim() -ne 'Disconnected') { continue }
+    if ($driver.InnerText.Trim() -notmatch '^oem\d+\.inf$') { continue }
+    $day = $null
+    try {
+      $prop = Get-PnpDeviceProperty -InstanceId $id -KeyName 'DEVPKEY_Device_LastRemovalDate' -ErrorAction Stop
+      if ($prop.Data -is [datetime]) { $day = $prop.Data.ToUniversalTime().ToString('yyyy-MM-dd', $inv) }
+    } catch { $day = $null }
+    $removal[$id] = $day
+  }
+}
+$result = [pscustomobject]@{ exit_code = $code; text = $text; last_removal = $removal }
+"""
+
 # One row per store with the raw rule text of every value. OpenSubKey gives null
 # for a missing key (no rules in that store) and throws when access is denied,
 # which fails the whole job.
@@ -1604,6 +1662,65 @@ def load_vendor_folders(path: Path):
     }, None
 
 
+def load_driver_package_groups(path: Path):
+    """The rules of the driver package groups file as ``(rules, None)``, or
+    ``(None, reason)`` when the file cannot be used.
+
+    The file is a list of rules, each an object with exactly one of ``class`` and
+    ``provider`` (a non-empty string), a non-empty ``group`` and a boolean
+    ``no_device_by_nature``; no class and no provider in two rules (compared
+    case-folded). Each rule comes back as ``{"match": "class" or "provider", "value":
+    case-folded name, "group", "no_device_by_nature"}``. A file that cannot be used
+    gives no rules, so no package is put in a group by a list that was not read."""
+    name = Path(path).name
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        return None, f"{name} could not be read: {type(exc).__name__}: {exc}"
+    if not isinstance(data, list):
+        return None, f"{name} does not hold a list"
+    rules = []
+    seen = {"class": set(), "provider": set()}
+    for number, item in enumerate(data, 1):
+        if not isinstance(item, dict):
+            return None, f"{name}: rule {number} is not an object"
+        group = item.get("group")
+        if not isinstance(group, str) or not group.strip():
+            return None, f"{name}: rule {number} has no group"
+        if not isinstance(item.get("no_device_by_nature"), bool):
+            return None, f"{name}: rule {number}: no_device_by_nature is not true or false"
+        keys = [key for key in ("class", "provider") if key in item]
+        if len(keys) != 1:
+            return None, f"{name}: rule {number} has neither or both of class and provider"
+        value = item[keys[0]]
+        if not isinstance(value, str) or not value.strip():
+            return None, f"{name}: rule {number}: {keys[0]} is not a non-empty string"
+        folded = value.strip().casefold()
+        if folded in seen[keys[0]]:
+            return None, f"{name}: {keys[0]} {value.strip()!r} is in two rules"
+        seen[keys[0]].add(folded)
+        rules.append({"match": keys[0], "value": folded, "group": group.strip(),
+                      "no_device_by_nature": item["no_device_by_nature"]})
+    return rules, None
+
+
+def package_group(item: dict, rules) -> tuple:
+    """``(group, no_device_by_nature)`` of one driver package by ``rules`` (see
+    ``load_driver_package_groups``): a provider rule wins over a class rule, a package
+    no rule matches is ``other``; ``(None, None)`` when the rules were not read."""
+    if rules is None:
+        return None, None
+    for match in ("provider", "class"):
+        value = item.get(match)
+        if not isinstance(value, str):
+            continue
+        folded = value.strip().casefold()
+        for rule in rules:
+            if rule["match"] == match and rule["value"] == folded:
+                return rule["group"], rule["no_device_by_nature"]
+    return "other", False
+
+
 def load_own(path: Path):
     """The data file as ``({name: value}, None)``, or empty values and a reason.
 
@@ -1652,9 +1769,9 @@ class Collector:
         self.not_checked = []
         self.drivers_without_inf = None  # set by collect: rows without InfName
         self.drivers_without_inf_items = None  # set by collect: their name and class
-        # set by collect_drivers: the InfName of every driver row, case-folded (rows
-        # without DeviceID included), None when the drivers source was not read
-        self.driver_inf_names = None
+        # set by collect_devices: every device of the device listing ({device_name,
+        # class, status, driver_name, last_removal}), None when it was not read
+        self.devices = None
         self.hosts_file = None  # set by collect_hosts: the folder and file of hosts
         self.current_sid = None  # set by collect_administrators
         # set by collect_facts: {(source, key): {target path}} of the facts taken from
@@ -2404,15 +2521,13 @@ def collect_drivers(col: Collector, patterns) -> tuple[str, dict, list | None]:
     the source was not read.
     """
     result = col.job("drivers", DRIVERS_BODY)
-    items, without_inf, without_id, inf_names = {}, [], 0, set()
+    items, without_inf, without_id = {}, [], 0
     for row in result["rows"]:
         inf_name = text(row.get("InfName"))
         if inf_name is None:  # no INF file: e.g. a software device, or no driver
             without_inf.append({"device_name": text(row.get("DeviceName")),
                                 "class": text(row.get("DeviceClass"))})
             continue
-        # A row without DeviceID is no item, but its INF is in use.
-        inf_names.add(inf_name.strip().casefold())
         device_id = text(row.get("DeviceID"))
         if device_id is None:
             without_id += 1
@@ -2436,7 +2551,6 @@ def collect_drivers(col: Collector, patterns) -> tuple[str, dict, list | None]:
     skip_keyless(col, "drivers", "DeviceID", without_id)
     status, reason = entry_status("drivers", result, items, without_id)
     col.record("drivers", status, reason)
-    col.driver_inf_names = inf_names if status in READ_STATUSES else None
     return status, items, (without_inf if status in READ_STATUSES else None)
 
 
@@ -2481,6 +2595,84 @@ def parse_driver_store(value) -> tuple:
     return packages, None
 
 
+def pnputil_listing(col: Collector, name: str, body: str, what: str) -> tuple:
+    """``(status, reason, row)`` of a job that answers one ``{exit_code, text}`` object
+    of a pnputil ``/format xml`` listing (``what`` names it in a reason). A failed
+    job, no single object, no exit code or an exit code other than 0 is
+    ``unreadable`` with the reason; ``row`` is the object when ``read``."""
+    result = col.job(name, body)
+    rows = [row for row in result["rows"] if isinstance(row, dict)]
+    status, reason = result["status"], result["reason"]
+    if status == "read" and len(rows) != 1:
+        return "unreadable", f"the {name} job gave {len(rows)} objects, not one", None
+    if status != "read":
+        return "unreadable", reason or f"the {name} job gave no result", None
+    code = rows[0].get("exit_code")
+    if isinstance(code, bool) or not isinstance(code, int):
+        return "unreadable", f"the {name} job gave no exit code", None
+    if code != 0:
+        output = (text(rows[0].get("text")) or "").strip()[:300]
+        return "unreadable", (f"the {what} ended with exit code {code} (an older "
+                              f"Windows may not know /format xml): "
+                              f"{output or 'no output'}"), None
+    return "read", None, rows[0]
+
+
+def removal_day(value):
+    """``value`` when it is a ``yyyy-MM-dd`` day that exists, else None."""
+    if not isinstance(value, str) or len(value) != 10:
+        return None
+    try:
+        return date.fromisoformat(value).isoformat()
+    except ValueError:
+        return None
+
+
+def parse_devices(value, last_removal) -> tuple:
+    """``(devices, reason)`` of the device listing XML: one dict per ``Device`` element
+    ``{device_name, class, status, driver_name, last_removal}`` (a missing value is
+    None), or ``(None, reason)`` when the text is no listing. ``last_removal`` maps an
+    instance id to ``yyyy-MM-dd``; a missing or other value, or a map that is no dict,
+    gives null. The instance id is used for that lookup only and is not kept."""
+    if not isinstance(value, str) or not value.strip():
+        return None, "the device listing gave no text"
+    try:
+        root = ET.fromstring(value.strip())
+    except ET.ParseError as exc:
+        return None, f"the device listing is not XML: {exc}"
+    if root.tag != "PnpUtil":
+        return None, f"the device listing has the root element {root.tag!r}, not PnpUtil"
+    dates = last_removal if isinstance(last_removal, dict) else {}
+    devices = []
+    for element in root.iter("Device"):
+        devices.append({
+            "device_name": text(element.findtext("DeviceDescription")),
+            "class": text(element.findtext("ClassName")),
+            "status": text(element.findtext("Status")),
+            "driver_name": text(element.findtext("DriverName")),
+            "last_removal": removal_day(dates.get(element.get("InstanceId"))),
+        })
+    return devices, None
+
+
+def collect_devices(col: Collector) -> str:
+    """The status of the ``devices`` source; sets ``col.devices`` (None unless read).
+
+    A failed job, an exit code other than 0 or a text that is no listing makes the
+    source unreadable with the reason, never empty; a listing without a ``Device``
+    is ``empty``."""
+    status, reason, row = pnputil_listing(col, "devices", DEVICES_BODY, "device listing")
+    if status == "read":
+        devices, reason = parse_devices(row.get("text"), row.get("last_removal"))
+        if devices is None:
+            status = "unreadable"
+        elif not devices:
+            status = "empty"
+        col.devices = devices
+    col.record("devices", status, reason)
+    return status
+
+
 def collect_driver_packages(col: Collector) -> tuple[str, dict]:
     """``(status, {key: item})`` of the third-party packages (``oem<N>.inf``) of the
     driver store.
@@ -2493,29 +2685,13 @@ def collect_driver_packages(col: Collector) -> tuple[str, dict]:
     A missing published name, date or version is null and named in
     ``unread_fields``; the published name is not part of the key.
     """
-    result = col.job("driver_packages", DRIVER_PACKAGES_BODY)
-    rows = [row for row in result["rows"] if isinstance(row, dict)]
-    status, reason = result["status"], result["reason"]
-    if status == "read" and len(rows) != 1:
-        status, reason = ("unreadable",
-                          f"the driver_packages job gave {len(rows)} objects, not one")
-    elif status != "read":
-        reason = reason or "the driver_packages job gave no result"
-        status = "unreadable"
+    status, reason, row = pnputil_listing(col, "driver_packages", DRIVER_PACKAGES_BODY,
+                                          "driver store listing")
     packages = None
     if status == "read":
-        code = rows[0].get("exit_code")
-        if isinstance(code, bool) or not isinstance(code, int):
-            status, reason = "unreadable", "the driver_packages job gave no exit code"
-        elif code != 0:
-            output = (text(rows[0].get("text")) or "").strip()[:300]
+        packages, reason = parse_driver_store(row.get("text"))
+        if packages is None:
             status = "unreadable"
-            reason = (f"the driver store listing ended with exit code {code} (an older "
-                      f"Windows may not know /format xml): {output or 'no output'}")
-        else:
-            packages, reason = parse_driver_store(rows[0].get("text"))
-            if packages is None:
-                status = "unreadable"
     items, without_name = {}, 0
     if status != "read":
         col.record("driver_packages", status, reason)
@@ -2550,7 +2726,8 @@ def collect_driver_packages(col: Collector) -> tuple[str, dict]:
             item["unread_fields"] = unread
         items[key] = item
     skip_keyless(col, "driver_packages", "OriginalName", without_name)
-    status, reason = entry_status("driver_packages", result, items, without_name)
+    status, reason = entry_status("driver_packages", {"status": status, "reason": reason},
+                                  items, without_name)
     col.record("driver_packages", status, reason)
     return status, items
 
@@ -3592,6 +3769,8 @@ def collect(run_ps, work: Path, stamp: str, previous: dict, config: dict, admin:
     if col.drivers_without_inf_items is not None:
         col.drivers_without_inf = len(col.drivers_without_inf_items)
     statuses["driver_packages"], current["driver_packages"] = collect_driver_packages(col)
+    # The states of the packages; not a baseline source (statuses), no item of its own.
+    collect_devices(col)
 
     statuses["firewall_rules"], current["firewall_rules"] = collect_firewall(
         col, config["firewall_builtin"])
@@ -3848,41 +4027,87 @@ PUBLISHED_UNREAD_REASON = ("the published name (oem<N>.inf) of a copy of this pa
                            "was not read, so it cannot be matched to a device")
 
 
-def package_present(item: dict, inf_names) -> tuple:
-    """``(present_device, reason)`` of one driver package: whether a driver row names
-    one of its published names as ``InfName`` (``inf_names``, case-folded). Null with
-    the reason for an ``Extension`` package (no device names it), for every package
-    when the drivers were not read (``inf_names`` None), and for one with no matching
-    name when the published name of a copy was not read."""
-    if inf_names is None:
-        return None, DRIVERS_UNREAD_REASON
+def devices_by_driver(devices) -> dict | None:
+    """``{driver name, case-folded: [device]}`` of the device listing; None when it
+    was not read."""
+    if devices is None:
+        return None
+    named = {}
+    for dev in devices:
+        if isinstance(dev.get("driver_name"), str):
+            named.setdefault(dev["driver_name"].strip().casefold(), []).append(dev)
+    return named
+
+
+def package_state(item: dict, named) -> tuple:
+    """``(device_state, reason, devices)`` of one driver package from the devices that
+    name one of its published names as their driver (``named``, see
+    ``devices_by_driver``).
+
+    ``present`` when a present device names it; else null with the reason when a
+    device of a status not known names it (it may be present); else null with the reason when a
+    disconnected device of another class names it (a reused ``oem<N>.inf`` number); else
+    ``non_present`` with those disconnected devices (``{device_name, class, status, last_removal}``);
+    else ``no_device_found``. Null with the reason for every package when the devices
+    were not read, for an ``Extension`` package (a device names only its primary INF)
+    and for one with no device when the published name of a copy was not read."""
+    if named is None:
+        return None, DEVICES_UNREAD_REASON, None
     if (item.get("class") or "").strip().casefold() == EXTENSION_CLASS:
-        return None, EXTENSION_REASON
+        return None, EXTENSION_REASON, None
     names = [item.get("published_name"), *(item.get("other_published_names") or [])]
-    if any(isinstance(name, str) and name.strip().casefold() in inf_names
-           for name in names):
-        return True, None
+    found = [dev for name in names if isinstance(name, str)
+             for dev in named.get(name.strip().casefold(), [])]
+    statuses = [(dev.get("status") or "").strip().casefold() for dev in found]
+    if any(status in PRESENT_STATUSES for status in statuses):
+        return "present", None, None
+    unknown = [dev.get("status") for dev, status in zip(found, statuses)
+               if status not in NON_PRESENT_STATUSES]
+    if unknown:
+        shown = ", ".join(dict.fromkeys(one_line(s) if s is not None else "none given"
+                                        for s in unknown))
+        return None, f"{UNKNOWN_STATUS_REASON}: {shown}", None
+    package_class = (item.get("class") or "").strip().casefold()
+    other = [dev.get("class") for dev in found
+             if package_class and (dev.get("class") or "").strip()
+             and dev["class"].strip().casefold() != package_class]
+    if other:
+        shown = ", ".join(dict.fromkeys(one_line(c) for c in other))
+        return None, f"{OTHER_CLASS_REASON}: {shown}", None
+    if found:
+        return "non_present", None, [{k: dev.get(k) for k in
+                                      ("device_name", "class", "status", "last_removal")}
+                                     for dev in found]
     if "published_name" in (item.get("unread_fields") or []):
-        return None, PUBLISHED_UNREAD_REASON
-    return False, None
+        return None, PUBLISHED_UNREAD_REASON, None
+    return "no_device_found", None, None
 
 
-def build_driver_packages(current: dict, inf_names, numbering=None) -> list:
-    """Every third-party driver package with an id and ``present_device`` (see
-    ``package_present``; a null one names its reason in ``present_device_reason``),
-    by provider, then original name, then version. The id is the stable number of
-    the package's ``key`` (``numbering``)."""
+def build_driver_packages(current: dict, devices, numbering=None, rules=None) -> list:
+    """Every third-party driver package with an id and ``device_state`` (see
+    ``package_state``; a null one names its reason in ``device_state_reason``, a
+    ``non_present`` one its ``devices``), its ``owner`` (the provider, null when not
+    read) and its ``group`` and ``no_device_by_nature`` (see ``package_group``; null
+    when the rules were not read), by provider, then original name, then version.
+    The id is the stable number of the package's ``key`` (``numbering``)."""
     entries = [{"key": key, **item}
                for key, item in (current.get("driver_packages") or {}).items()]
     entries.sort(key=lambda e: (text_order(e.get("provider")),
                                 text_order(e.get("original_name")),
                                 text_order(e.get("version")), e["key"]))
+    named = devices_by_driver(devices)
     packages = []
     for entry in entries:
-        present, reason = package_present(entry, inf_names)
-        package = {"id": None, **entry, "present_device": present}
+        state, reason, found = package_state(entry, named)
+        group, by_nature = package_group(entry, rules)
+        provider = entry.get("provider")
+        package = {"id": None, **entry, "device_state": state,
+                   "owner": provider if isinstance(provider, str) else None,
+                   "group": group, "no_device_by_nature": by_nature}
         if reason is not None:
-            package["present_device_reason"] = reason
+            package["device_state_reason"] = reason
+        if found is not None:
+            package["devices"] = found
         packages.append(package)
     numbering_of(numbering).assign("o", packages)
     return packages
@@ -6104,75 +6329,11 @@ def block_registry_key(part: dict, context: dict) -> tuple:
     return elevated, header, change, back, rollback
 
 
-# An orphan driver package (o..): the published name the driver store gives and the
-# original inf name; nothing else reaches the printed block.
-PUBLISHED_INF = re.compile(r"^oem\d+\.inf$", re.IGNORECASE)
-ORIGINAL_INF = re.compile(r"^[A-Za-z0-9_.\-]+\.inf$")
-
-
 def block_driver_package(item: dict, context: dict) -> tuple:
-    """SKILL.md "Orphan driver package": export the package into ``<data dir>\\work``,
-    check the export's exit code and the exported inf, delete the package from the
-    driver store without force, then read back that the published inf is gone; the
-    rollback adds the exported package back. Neither name is printed unless it passed
-    its pattern."""
-    if item.get("from_baseline") is True:
-        raise NoBlock("not read in this run (from_baseline true), so it is not known "
-                      "whether a present device uses it now")
-    for name in ("driver_packages", "drivers"):
-        status = context["statuses"].get(name)
-        if status not in READ_STATUSES:
-            raise NoBlock(f"the source {name} was not read in this run (status "
-                          f"{one_line(status)}), so it is not known whether a present "
-                          "device uses the package")
-    present = item.get("present_device")
-    if present is not False:
-        raise NoBlock(f"present_device is {'true' if present is True else 'not false'}: "
-                      "only a package that no present device uses gets a block")
-    published = item.get("published_name")
-    if not isinstance(published, str) or not PUBLISHED_INF.match(published):
-        raise NoBlock("the published name is not oem<digits>.inf, so it is not printed")
-    if item.get("other_published_names"):
-        raise NoBlock("the package has more than one copy in the driver store "
-                      "(other_published_names), and the block removes only one")
-    original = item.get("original_name")
-    if not isinstance(original, str) or not ORIGINAL_INF.match(original):
-        raise NoBlock("the original name is not an inf name of letters, digits and _ . - "
-                      "only, so it is not printed")
-    folder = f"{work_dir(context)}\\driver-{context['stamp']}-{published[:-4].lower()}"
-    exported = f"{folder}\\{original}"
-    oem = ps_quote(published)
-    header = [
-        (f"Removes the orphan driver package {published} ({original}) "
-         f"from the driver store. Exports it first to {folder} and stops if the export is "
-         "missing; a package a device uses is not deleted."),
-        SHELL_NOTE[True],
-        ("Risk: a device that needs this package (one unplugged now, too) is no longer "
-         "installed by itself when it is plugged in; it needs the package added back."),
-        f"Previous state: {published} is in the driver store, no present device uses it.",
-    ]
-    change = [
-        "& {",
-        GUARD_64,
-        (f"  if (Test-Path -LiteralPath {ps_quote(folder)}) {{ throw \"the export folder is "
-         "already there; nothing removed\" }"),
-        f"  New-Item -ItemType Directory -Path {ps_quote(folder)} -ErrorAction Stop | Out-Null",
-        f"  pnputil /export-driver {oem} {ps_quote(folder)}",
-        ("  if ($LASTEXITCODE -ne 0) { throw \"the export failed (exit code $LASTEXITCODE); "
-         "export missing, nothing removed\" }"),
-        (f"  if (-not (Test-Path -LiteralPath {ps_quote(exported)})) {{ throw \"export "
-         "missing, nothing removed\" }"),
-        f"  pnputil /delete-driver {oem}",
-        ("  if ($LASTEXITCODE -ne 0) { throw \"the delete failed (exit code $LASTEXITCODE); "
-         "a device may use the package; the export stays\" }"),
-        (f"  if (Test-Path \"$env:WINDIR\\INF\\{published}\") {{ 'the inf is still there' }} "
-         "else { 'the inf is gone' }"),
-        "}",
-    ]
-    rollback = [f"pnputil /add-driver {ps_quote(exported)} /install",
-                ("# Adds the exported package back to the driver store (its oem number may "
-                 "differ).")]
-    return True, header, change, "", rollback
+    """SKILL.md "Driver packages": no removal for any package, whatever its
+    ``device_state`` (plan 051: Windows refused every removal tried; no read without
+    administrator rights shows what blocks it)."""
+    raise NoBlock(PACKAGE_NO_BLOCK_REASON)
 
 
 def leftover_part_block(part: dict, context: dict) -> tuple:
@@ -6578,30 +6739,83 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
                      "signer")
     listed_drivers = [{k: d.get(k) for k in driver_fields}
                       for d in drivers[:listed_driver_count]] if drivers_read else None
-    # Driver packages: the summary lists the ones no present device uses, null when
-    # the store was not read, or when it holds packages and the devices were not read.
-    packages = build_driver_packages(current, col.driver_inf_names, numbering)
+    # Driver packages: the summary lists the ones no present device names (non_present
+    # and no_device_found), null when the store was not read, or when it holds packages
+    # and the devices were not read.
+    group_rules, groups_reason = load_driver_package_groups(DRIVER_PACKAGE_GROUPS_FILE)
+    packages = build_driver_packages(current, col.devices, numbering, group_rules)
     packages_status = statuses["driver_packages"]
-    if packages_status == "read" and col.driver_inf_names is None:
-        col.skip("driver_packages present_device", DRIVERS_UNREAD_REASON)
+    if group_rules is None:
+        col.skip(f"data/{DRIVER_PACKAGE_GROUPS_FILE.name}",
+                 f"no driver package is put in a group; group, no_device_by_nature and "
+                 f"driver_package_groups are null: {groups_reason}")
+    if packages_status == "read" and col.devices is None:
+        col.skip("driver_packages device_state", DEVICES_UNREAD_REASON)
     # Counted after matching: a package matched through another published name is not
-    # unread, and with the drivers not read the entry above covers every package.
-    unread_names = sum(p.get("present_device_reason") == PUBLISHED_UNREAD_REASON
+    # unread, and with the devices not read the entry above covers every package.
+    unread_names = sum(p.get("device_state_reason") == PUBLISHED_UNREAD_REASON
                        for p in packages)
     if unread_names:
         col.skip("driver_packages published_name",
-                 f"{unread_names} package(s): {PUBLISHED_UNREAD_REASON}; present_device "
+                 f"{unread_names} package(s): {PUBLISHED_UNREAD_REASON}; device_state "
                  f"is null and they are listed only in the detail file")
+    unknown_status = sum((p.get("device_state_reason") or "").startswith(
+        UNKNOWN_STATUS_REASON) for p in packages)
+    if unknown_status:
+        col.skip("driver_packages device_state",
+                 f"{unknown_status} package(s): a device that names the package has a "
+                 f"status this script does not know ({UNKNOWN_STATUS_REASON}); "
+                 f"device_state is null and they are listed only in the detail file")
+    extensions = sum(p.get("device_state_reason") == EXTENSION_REASON for p in packages)
+    if extensions:
+        col.skip("driver_packages device_state (Extension packages)",
+                 f"{extensions} package(s): {EXTENSION_REASON}; device_state is null and "
+                 f"they are listed only in the detail file")
+    other_class = sum((p.get("device_state_reason") or "").startswith(
+        OTHER_CLASS_REASON) for p in packages)
+    if other_class:
+        col.skip("driver_packages device_class",
+                 f"{other_class} package(s): {OTHER_CLASS_REASON}; device_state is null "
+                 f"and they are listed only in the detail file")
     packages_judged = (packages_status == "empty"
-                       or (packages_status == "read" and col.driver_inf_names is not None))
+                       or (packages_status == "read" and col.devices is not None))
     package_fields = ("id", "key", "published_name", "original_name", "provider", "class",
-                      "version", "date", "signer", "present_device")
-    listed_packages = [{k: p.get(k) for k in package_fields} for p in packages
-                       if p["present_device"] is False] if packages_judged else None
+                      "version", "date", "signer", "device_state", "owner", "group",
+                      "no_device_by_nature")
+    listed_packages = None
+    if packages_judged:
+        listed_packages = []
+        for p in packages:
+            if p["device_state"] not in ("non_present", "no_device_found"):
+                continue
+            listed = {k: p.get(k) for k in package_fields}
+            if "devices" in p:
+                listed["devices"] = p["devices"]
+            listed_packages.append(listed)
+        # The budget cuts the list from its end, so the packages the report must name
+        # come first: a non_present one (its device), then a filter package (its
+        # owner), then the rest; each part keeps the provider/name/version order.
+        listed_packages.sort(key=lambda p: (p["device_state"] != "non_present",
+                                            p.get("no_device_by_nature") is not True))
     component_counts["driver_packages"] = (len(packages) if packages_status in READ_STATUSES
                                            else None)
-    component_counts["driver_packages_without_device"] = (
-        len(listed_packages) if listed_packages is not None else None)
+    by_state = None
+    if listed_packages is not None:
+        by_state = {state: sum(p["device_state"] == state for p in packages)
+                    for state in ("present", "non_present", "no_device_found")}
+        by_state["unread"] = sum(p["device_state"] is None for p in packages)
+    component_counts["driver_packages_by_state"] = by_state
+    # Every package by group and state: null when the rules or the store were not read.
+    package_groups = None
+    if group_rules is not None and packages_status in READ_STATUSES:
+        package_groups = []
+        for group in sorted({p["group"] for p in packages}):
+            members = [p for p in packages if p["group"] == group]
+            counts = {state: sum(p["device_state"] == state for p in members)
+                      for state in ("present", "non_present", "no_device_found")}
+            counts["unread"] = sum(p["device_state"] is None for p in members)
+            package_groups.append({"group": group, "count": len(members),
+                                   "by_state": counts})
 
     defender_method = next((e.get("method") for e in col.sources
                             if e["name"] == "defender_exclusions"), None)
@@ -6754,6 +6968,7 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
         "component_counts": component_counts,
         "drivers": listed_drivers,
         "driver_packages": listed_packages,
+        "driver_package_groups": package_groups,
         "additions": listed_additions,
         "leftovers": leftovers,
         "vendor_folders": listed_vendor_folders,

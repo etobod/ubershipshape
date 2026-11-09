@@ -66,8 +66,8 @@ class TestDocs(unittest.TestCase):
             self.assertIn('"$env:USERPROFILE\\', text)
 
     def test_driver_package_block_documented(self):
-        """Test K5 (plan 027 M1): a device driver gets no block, an orphan driver package
-        has a printer block for an elevated shell, and the old rule is gone."""
+        """Test K5 (plan 027 M1, plan 051 M1): a device driver and a driver package get
+        no block, and the old rule is gone."""
         text = SKILL_MD.read_text(encoding="utf-8")
         sentences = _sentences(text)
         device_id = re.compile(r"(?<![A-Za-z0-9<])d\.\.(?!\.)")
@@ -79,14 +79,14 @@ class TestDocs(unittest.TestCase):
                      and re.search(r"(?i)\bno (?:printer )?block\b", s)]
             self.assertTrue(found, "no sentence saying a device driver (`d..`) gets no block")
 
-        with self.subTest("an orphan driver package (o..) has a printer block"):
+        # Plan 051 M1 replaced the printer block of an orphan package (plan 027 K5)
+        # with no block for any driver package.
+        with self.subTest("a driver package (o..) gets no block"):
             found = [s for s in sentences
                      if package_id.search(s) and re.search(r"(?i)\bpackage\b", s)
-                     and re.search(r"(?i)\bprinter block\b", s)
-                     and not re.search(r"(?i)\bno printer block\b", s)
-                     and re.search(r"(?i)\belevated\b", s)]
-            self.assertTrue(found, "no sentence saying an orphan driver package (`o..`) "
-                                   "has a printer block for an elevated shell")
+                     and re.search(r"(?i)\bno (?:printer )?block\b", s)]
+            self.assertTrue(found, "no sentence saying a driver package (`o..`) gets "
+                                   "no block")
 
         with self.subTest("no passage still says 'a driver, ever'"):
             self.assertNotIn("a driver, ever", _flat(text).lower())
@@ -157,6 +157,25 @@ class TestFirstRunFileDocs(unittest.TestCase):
             self.assertNotIn("windows-own.json", sentence)
 
 
+class TestPackageGroupDocs(unittest.TestCase):
+    """Plan 051 M2: the package section's fixed Polish texts and the new summary fields."""
+
+    def test_groups_documented(self):
+        report = _flat((REFERENCES / "report-format.md").read_text(encoding="utf-8"))
+        contract = _flat((REFERENCES / "summary-contract.md").read_text(encoding="utf-8"))
+        skill = _flat(SKILL_MD.read_text(encoding="utf-8"))
+        for text in ("Pakiety sterowników według grup",
+                     "Raport nie proponuje usuwania pakietów sterowników."):
+            with self.subTest(report=text):
+                self.assertIn(text, report)
+        for name in ("`driver_package_groups`", "`owner`", "`no_device_by_nature`",
+                     "`data/driver-package-groups.json`"):
+            with self.subTest(contract=name):
+                self.assertIn(name, contract)
+            with self.subTest(skill=name):
+                self.assertIn(name, skill)
+
+
 class TestBudgetDocs(unittest.TestCase):
     """Test K8 (plan 035 M2): a cut list is described by its count key only."""
 
@@ -176,7 +195,7 @@ class TestBudgetDocs(unittest.TestCase):
             self.assertIn(never, text)
 
         with self.subTest("report format: driver packages paragraph"):
-            start = report.find("An orphan package (`o..`) has a printer block")
+            start = report.find("No package gets a removal")
             self.assertNotEqual(start, -1, "driver packages paragraph")
             end = report.find(" - ", start)
             paragraph = report[start:end if end != -1 else len(report)]

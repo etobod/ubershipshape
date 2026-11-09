@@ -300,30 +300,57 @@ common point.
 
 Leftovers of `ush-inventory` (the SKILL.md rule "Leftovers are named"): an
 autostart entry with an existing target whose `signature_status` is set and
-not `Valid`, every RunOnce value (`kind` `run_once`), every orphan driver
-package (`ush-inventory o..`) and every unmatched vendor folder
+not `Valid`, every RunOnce value (`kind` `run_once`) and every unmatched vendor folder
 (`ush-inventory v..` with `matched` `false`) are named in the recommendations with their evidence
 (a leftover that is also a change item `c..` stays in "Changes" as well,
 named there as a change; one that is no change is never put there: it is a
 current fact, not a change since the last run) and your judgement of
-whether each is worth a look. A driver package and a vendor folder with
-`matched` `false` whose names match in the JSON form one entry here, with both sources and the
+whether each is worth a look. A driver package whose `no_device_by_nature` is
+`false` and a vendor folder with `matched` `false` whose names match in the JSON form one entry here, with both sources and the
 matching name. A vendor folder with `matched` `null` was not judged: it is
 no leftover, so name it once with its `not_judged` cause, never as a folder
 no installed program matches.
 
 Each `driver_update_links` item (`y..`) is one entry here with both sources:
 the pending driver update (`ush-health q<n>` in its `update`, with its
-`title`) and the orphan driver package (`ush-inventory o<n>` in its
-`package`, with its `original_name`), with both sides' provider and class
+`title`) and the driver package (`ush-inventory o<n>` in its
+`package`, with its `original_name`, its state `package_state` in words and
+its group `package_group`), with both sides' provider and class
 (`provider` and `driver_class` of the update, `package_provider` and
 `package_class` of the package). The two providers are the same only when
 `provider_via` is `equal`, and the two classes only when `class_via` is
 `equal`; when one of them is `table`, a line of `driver-link-aliases.json`
 paired those two names, and the entry says so instead of calling them the
-same. Such a
-package is not named a second time as a lone leftover. Then one line with
+same. Then one line with
 `link_counts` (`updates_without_package`, `packages_without_update`).
+
+Driver packages of `ush-inventory` get their own part of this section, under
+the heading `Pakiety sterowników według grup` in a Polish report. First one
+line per entry of the inventory item's `driver_package_groups` with its
+`group`, `count` and the four counts of `by_state` (`present`,
+`non_present`, `no_device_found`, `unread`); with `driver_package_groups`
+`null` say that the groups were not read (the reason goes to "Not
+checked"). Then each package of the item's `driver_packages` under its
+`group`. That list holds only the packages in state `non_present` or
+`no_device_found` (the `present` and unread ones are only counted in
+`by_state`) and is cut to the inventory's budget: say so in one sentence,
+with the number of packages cut (`truncated_driver_packages`) when it is
+above 0, never as a complete list of the
+group. Each listed package with its id, `original_name`, `owner` and its state in words:
+`non_present` "known device not present", naming each device of its
+`devices` with its class and last removal (`last_removal`, or "no removal
+date" when it is `null`); `no_device_found` "no device found without
+administrator rights", never "no device" or "orphan". A package with
+`no_device_by_nature` `true` (a filter or antivirus package) is shown as
+owned by its program (`owner`), never as a leftover. A package linked by a
+`y` item is named here by its id with a pointer to that `y` item, not
+described a second time. A state is a fact about this moment, not proof
+that a package is unused or safe to remove. No package removal is offered,
+here or in the recommendations: `ush-inventory --block o<n>` prints only
+`no block` with its reason, and the report points to `ush-inventory` for that
+reason. A Polish report says exactly once "Raport nie proponuje usuwania
+pakietów sterowników." With the item's `driver_packages` `null` the
+packages were not read: say so, never "no packages".
 `driver_update_links` `null`: say that the updates were not linked and why
 (the `not_checked` item), never "no link".
 
