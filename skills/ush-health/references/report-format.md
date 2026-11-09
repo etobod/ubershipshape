@@ -157,7 +157,11 @@ the count of low recommendations whose main source no line names.
    - Updates and Windows version: `os_version`, `by_result` as written,
      every failure group (`u..`) with its `title`, `result`, `hresult`,
      `count`, `first` and `last`, and the three `pending_reboot` signals,
-     each on its own. Then a subsection `### Pending updates`: the date of
+     each on its own. The failure groups that a later cumulative update of
+     the same Windows line installed successfully are not in the summary:
+     `updates.superseded` gives them only as a count, in one line
+     („zastąpione późniejszą aktualizacją zbiorczą: N”), never one by one and
+     never a recommendation; `0` is said as nothing superseded. Then a subsection `### Pending updates`: the date of
      the last successful update scan (`last_scan`, rule 1 of
      `report-style.md`; `null` is "unknown", never a date), then every
      pending update (`q..`) with its `title`, `kb`, `categories`, `type`,
@@ -263,8 +267,10 @@ Never report missing data as "clean":
   of `SKILL.md`); never "no restore points" or "WinRE off".
 - A source with `status` `empty`: read, and nothing there - a finding in its
   own right: no failed update in the history (`failures` `[]` with
-  `update_history` `read`), no restore points (`count` 0), no battery
-  (`present` `false`), no volume with a letter.
+  `update_history` `read` and `superseded` `0`), no restore points (`count` 0), no battery
+  (`present` `false`), no volume with a letter. `failures` `[]` with
+  `superseded` above 0 is no failure that a later cumulative update did not
+  supersede: give the `superseded` count, never "no failed update".
 - `devices` `[]`: every present device reports `OK` (✅). `devices` `null`:
   not read.
 - `update_history` `empty`: the history holds no entries at all; it may have

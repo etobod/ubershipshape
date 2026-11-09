@@ -1,0 +1,23 @@
+[
+  {
+    "id": "monthly-security-build",
+    "pattern": "^\\d{4}-\\d{2} Security Update \\(KB\\d+\\) \\((?P<line>\\d{5})\\.\\d+\\)$",
+    "line_kind": "build",
+    "example": "2099-01 Security Update (KB9900001) (99999.1001)",
+    "reason": "the monthly Windows security update, named by its OS build and revision; it carries every earlier fix of the same build line"
+  },
+  {
+    "id": "monthly-cumulative-build",
+    "pattern": "^\\d{4}-\\d{2} (?:Cumulative Update|Cumulative Update Preview|Non-Security Update)(?: for Windows \\d+)?(?: Version \\w+)?(?: for x64-based Systems| for ARM64-based Systems)? \\(KB\\d+\\) \\((?P<line>\\d{5})\\.\\d+\\)$",
+    "line_kind": "build",
+    "example": "2099-01 Cumulative Update for Windows 11 Version 99H9 for x64-based Systems (KB9900002) (99999.1002)",
+    "reason": "the monthly Windows cumulative update named with its OS build and revision; the build is the line"
+  },
+  {
+    "id": "cumulative-version",
+    "pattern": "^(?:\\d{4}-\\d{2} )?Cumulative Update(?: Preview)? for Windows \\d+ Version (?P<line>\\d{2}H\\d|\\d{4}) for (?:x64|ARM64|x86)-based Systems \\(KB\\d+\\)$",
+    "line_kind": "version",
+    "example": "Cumulative Update for Windows 11 Version 99H9 for x64-based Systems (KB9900003)",
+    "reason": "the monthly Windows cumulative update named with its Windows version and no build; the version is the line"
+  }
+]

@@ -79,6 +79,7 @@ UNRECOGNISED_REAGENTC = "unrecognised reagentc output"
 RESULT_NAMES = {0: "NotStarted", 1: "InProgress", 2: "Succeeded",
                 3: "SucceededWithErrors", 4: "Failed", 5: "Aborted"}
 FAILED_RESULTS = (4, 5)
+SUCCEEDED = 2  # only a clean success supersedes a failed cumulative update
 # Get-MpComputerStatus sentinels for "unknown/never" (e.g. Defender not running).
 SIGNATURE_AGE_UNKNOWN = 65535
 QUICK_SCAN_AGE_UNKNOWN = 4294967295
@@ -735,7 +736,61 @@ def collect_tpm(col: Collector) -> dict:
     return tpm
 
 
-def collect_updates(col: Collector) -> dict | None:
+DEFAULT_CUMULATIVE_FILE = Path(__file__).absolute().parents[1] / "data" / "cumulative-updates.json"
+
+
+LINE_KINDS = ("build", "version")
+
+
+def load_cumulative(path=None) -> list[dict]:
+    """Load the cumulative update patterns: a JSON list of
+    {id, pattern, line_kind, example, reason}, each pattern with a group ``line``.
+
+    A missing or malformed file raises ValueError naming the file: a broken
+    list must not silently change which failures are reported.
+    """
+    path = DEFAULT_CUMULATIVE_FILE if path is None else Path(path)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise ValueError(f"{path}: {type(exc).__name__}: {exc}") from exc
+    if not isinstance(data, list):
+        # ValueError like every other malformed-file case, so callers catch one type.
+        raise ValueError(f"{path}: expected a JSON list of cumulative update patterns")  # noqa: TRY004
+    entries = []
+    for number, item in enumerate(data, 1):
+        item = item if isinstance(item, dict) else {}
+        pattern = item.get("pattern")
+        if (not isinstance(item.get("id"), str) or not item["id"]
+                or not isinstance(pattern, str) or not pattern
+                or item.get("line_kind") not in LINE_KINDS):
+            raise ValueError(f"{path}: entry {number} needs a non-empty id and pattern "
+                             f"and a line_kind of {' or '.join(LINE_KINDS)}")
+        try:
+            compiled = re.compile(pattern)
+        except re.error as exc:
+            raise ValueError(f"{path}: entry {number} ({item['id']}): the pattern does "
+                             f"not compile: {exc}") from exc
+        if "line" not in compiled.groupindex:
+            raise ValueError(f"{path}: entry {number} ({item['id']}): the pattern has "
+                             "no group named line")
+        entries.append({"id": item["id"], "regex": compiled,
+                        "line_kind": item["line_kind"]})
+    return entries
+
+
+def cumulative_line(title, patterns):
+    """(line_kind, line) of the first pattern the title matches, else None."""
+    if not isinstance(title, str):
+        return None
+    for entry in patterns:
+        match = entry["regex"].search(title)
+        if match and match.group("line"):
+            return entry["line_kind"], match.group("line")
+    return None
+
+
+def collect_updates(col: Collector, patterns=()) -> dict | None:
     """Windows Update history: entries by result and the failed ones grouped."""
     result = col.job("update_history", UPDATE_HISTORY_BODY)
     col.record("update_history", result["status"], result["reason"])
@@ -743,10 +798,19 @@ def collect_updates(col: Collector) -> dict | None:
         return None
     by_result = {}
     groups = {}
+    # (line_kind, line) -> the latest successful cumulative update of that Windows line.
+    latest_success = {}
     for row in result["rows"]:
         name = result_name(row.get("ResultCode"))
         by_result[name] = by_result.get(name, 0) + 1
-        if number(row.get("ResultCode")) not in FAILED_RESULTS:
+        code = number(row.get("ResultCode"))
+        if code == SUCCEEDED:
+            line = cumulative_line(row.get("Title"), patterns)
+            when = utc_text(row.get("Date"))
+            if line is not None and when is not None and (
+                    line not in latest_success or when > latest_success[line]["date"]):
+                latest_success[line] = {"title": text(row.get("Title")), "date": when}
+        if code not in FAILED_RESULTS:
             continue
         # The result is part of the key, so a group never mixes Failed and Aborted.
         key = (text(row.get("Title")), hresult(row.get("HResult")), name)
@@ -760,12 +824,20 @@ def collect_updates(col: Collector) -> dict | None:
             # One format, one zone: the text sorts as the time does.
             group["first"] = when if group["first"] is None else min(group["first"], when)
             group["last"] = when if group["last"] is None else max(group["last"], when)
+    for group in groups.values():
+        # Superseded only by a later Succeeded entry of the same Windows line.
+        line = cumulative_line(group["title"], patterns)
+        success = latest_success.get(line) if line is not None else None
+        group["superseded_by"] = (dict(success) if success is not None
+                                  and group["last"] is not None
+                                  and success["date"] > group["last"] else None)
     # Newest last first; a group without a known time goes to the end.
     failures = sorted(groups.values(), key=lambda g: g["last"] or "", reverse=True)
     return {
         "history_count": len(result["rows"]),
         "by_result": by_result,
         "failures": with_ids(failures, "u"),
+        "superseded": sum(1 for g in failures if g["superseded_by"] is not None),
     }
 
 
@@ -962,7 +1034,8 @@ def collect_winre(col: Collector) -> dict | None:
     return {"status": match.group(1)}
 
 
-def collect(run_ps, admin: bool, work: Path, stamp: str) -> tuple[dict, Collector]:
+def collect(run_ps, admin: bool, work: Path, stamp: str,
+            patterns=()) -> tuple[dict, Collector]:
     """Run every source; return the data fields of the summary and the collector.
 
     A new source is one more ``collect_*`` function called here.
@@ -975,7 +1048,7 @@ def collect(run_ps, admin: bool, work: Path, stamp: str) -> tuple[dict, Collecto
     data["devices"], data["devices_by_status"] = collect_devices(col)
     data["secure_boot"] = collect_secure_boot(col)
     data["tpm"] = collect_tpm(col)
-    data["updates"] = collect_updates(col)
+    data["updates"] = collect_updates(col, patterns)
     data["pending_updates"], data["last_scan"] = collect_pending_updates(col)
     data["pending_reboot"] = collect_pending_reboot(col)
     data["os_version"] = collect_os_version(col)
@@ -1281,8 +1354,13 @@ def build_summary(now, admin, col, data, summary_file, detail_file,
     for key, value in data.items():
         summary[key] = public(value, key) if key in DETAIL_SECTIONS else value
     if summary.get("updates") is not None:
-        # A copy: fit_budget may cut the summary's failures, never the detail's.
+        # A copy: fit_budget may cut the summary's failures, never the detail's. The
+        # summary keeps only the groups no later cumulative update superseded; their
+        # ids stay those of the detail file.
         summary["updates"] = dict(summary["updates"])
+        summary["updates"]["failures"] = [
+            group for group in summary["updates"]["failures"]
+            if group["superseded_by"] is None]
     return summary
 
 
@@ -1431,8 +1509,13 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
     summary_file = work / f"health-{stamp}.summary.json"
     detail_file = work / f"health-{stamp}.detail.json"
 
+    try:
+        patterns = load_cumulative()
+    except ValueError as exc:
+        print(f"the cumulative update patterns could not be read: {exc}", file=sys.stderr)
+        return 1
     admin = bool(is_admin())
-    data, col = collect(run_ps, admin, work, stamp)
+    data, col = collect(run_ps, admin, work, stamp, patterns)
     id_map, map_reason = ids.load_map(state, SKILL)
     if map_reason is not None:
         col.skip(*ids.load_note(map_reason))

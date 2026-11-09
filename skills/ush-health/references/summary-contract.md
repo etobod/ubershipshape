@@ -171,11 +171,29 @@ From the Windows Update Agent history (`Microsoft.Update.Session`,
 - `failures`: the entries with `ResultCode` 4 or 5, grouped by (`title`,
   `hresult`, `result`), so a group never mixes `Failed` and `Aborted`. Ids
   `u1`, `u2`, ... Newest `last` first; groups without a known time at the end.
+  The summary holds only the groups with `superseded_by` `null`; the detail
+  file's `update_failures` holds every group. Ids are numbered over every
+  group, so a summary id is the same in the detail file and the summary's ids
+  may have gaps where a superseded group was left out;
+- `superseded`: the number of failure groups a later cumulative update of the
+  same Windows line installed successfully (`superseded_by` set).
+
+A failed cumulative update is recognised only by the patterns of
+`data/cumulative-updates.json`: each gives the Windows line of a title, as a
+build number (`line_kind` `build`, e.g. `<YYYY-MM> Security Update (KB...)
+(<build>.<revision>)`) or a version (`line_kind` `version`, e.g. `Cumulative
+Update for Windows 11 Version <version> ...`). A group is superseded when its
+title matches a pattern, its `last` is known, and an entry with `ResultCode` 2
+(`Succeeded` only) whose title gives the same `line_kind` and `line` has a
+later date. Driver, Defender, Store and other titles never match. A missing or
+malformed patterns file stops the script with a message naming the file.
 
 A failure group: `id`, `title`, `result` (`Failed` or `Aborted`), `hresult`
 (`0x` and 8 upper-case hex digits of the 32-bit value, e.g. `0x8024200B`;
 `null` when missing), `count`, `first`, `last` (ISO 8601 UTC with `Z`;
-`null` when no entry of the group had a readable time). The agent gives the
+`null` when no entry of the group had a readable time), `superseded_by`
+(`{title, date}` of the latest successful cumulative update of the same line,
+`date` ISO 8601 UTC with `Z`; `null` when not superseded). The agent gives the
 time in UTC without a zone; the script marks it as UTC without shifting it.
 
 | `ResultCode` | Result name |

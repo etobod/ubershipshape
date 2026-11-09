@@ -197,6 +197,17 @@ Then one line per item of `children`, in order: id, skill, `status` in words,
 and that its findings are not in this report; its reason goes to "Not
 checked". Then `counts` in one line.
 
+Superseded update failures: right after the line of the `ush-health` child
+(`h1` in the order of `data/children.json`), one line gives
+`updates.superseded` of that `h` item, named in `ush:detail`: the number of
+failed cumulative update groups that a later cumulative update of the same
+Windows line installed successfully („zastąpione późniejszą aktualizacją
+zbiorczą: N”); `0` is said as nothing superseded. When that child is not
+`ok`, or its `updates` or `updates.superseded` is `null`, the line says the
+update history was not read, never `0`, and the reason goes to "Not
+checked". It is given only as a count: such a failure is never a recommendation
+and is never named by an id (it is not in the summary's `updates.failures`).
+
 ### 4. Decisions (Decyzje)
 
 The user's decisions of `<data dir>/decisions.json`, one line per item of
