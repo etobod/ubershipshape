@@ -315,10 +315,10 @@ the other rules.
     ```
 
 15. **Summary first.** Every report opens with a summary section, directly
-    after the header (the `ush:summary` line, the title and its line): the
-    line `<!-- ush:attention -->` stands directly before the report's first
-    `##` heading, and the section `## Podsumowanie` runs to the next `##`
-    heading. Nothing stands between the header and the section: a dashboard
+    after the header (the `ush:summary` line, the title and the paragraph
+    under it): the line `<!-- ush:attention -->` stands directly before the
+    report's first `##` heading, and the section `## Podsumowanie` runs to the
+    next `##` heading. Nothing stands between the header and the section: a dashboard
     comes after it, under a `##` heading of its own (with its legend or the
     lines under its table below that heading). It has 4 parts, in this order, each under
     its own `###` heading; an empty part says „nic”. A Polish report uses the
@@ -337,13 +337,19 @@ the other rules.
       code block, never in inline code. A folder that cannot be listed goes
       to „Nie sprawdzono” and this part then never says „nic”.
     - The last line: „Nic więcej nie wymaga uwagi: N niskich.”, where N is the
-      count of low recommendations the section does not name.
+      count of low recommendations whose main source no line names.
 
     The `Dowód` item of every recommendation starts with its main source: an
     item id, `ush-<skill> <id>` or a summary key path in inline code. The
     checker (`check_report.py`) checks that every id the section names is
-    such a main source, that each high or medium recommendation is named
-    exactly once, and that N equals the count of low recommendation blocks.
+    such a main source, that each source of high or medium recommendations is
+    named on as many lines as it has high and medium recommendations, and that
+    N equals the count of low recommendations whose main source the section
+    does not name. A section line that names a main source names every
+    recommendation with that source, so a source of high and medium
+    recommendations is named on as many lines as it has high and medium
+    recommendations, and N counts the low recommendations whose main source
+    no line names.
     N is a count of the report's own items, checked by code, not a number of
     the JSON: an interim exception (question 054, option A) to the rule that
     every number comes from the script's JSON, until the user answers it.

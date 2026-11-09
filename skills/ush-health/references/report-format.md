@@ -104,7 +104,7 @@ names each high or medium recommendation of this report by its main source
 (the first id of its `Dowód`). Part 2 says „nie dotyczy: decyzje sprawdza
 ush-runall”: this skill checks no decisions. Part 3 names the open plans of
 `<data dir>/plans/` (not `done/`) in a fenced code block. The last line gives
-the count of low recommendations the section does not name.
+the count of low recommendations whose main source no line names.
 
 1. First line, exactly:
 

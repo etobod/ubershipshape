@@ -174,7 +174,7 @@ sections after it are the details. Its parts:
   repair plans could not be listed, and the reason goes to "Not checked";
   it is never „nic” and never "no open plans".
 - The last line: „Nic więcej nie wymaga uwagi: N niskich.”, N the count of
-  `low` recommendations the section does not name, which the checker
+  `low` recommendations whose main source no line names, which the checker
   counts in the report itself (interim answer A of question 054). Beyond
   that line the summary gives no count of its own ("3 rzeczy warte uwagi"
   is not written): every other number in a report comes from the script's

@@ -849,6 +849,27 @@ class TestSummaryRule(unittest.TestCase):
                      and re.search(r"\bpath\b", s, re.IGNORECASE)]
             self.assertTrue(found, rule)
 
+        with self.subTest(check="a shared main source is named on as many lines as it has"):
+            # Plan 058 M3 K1: a section line naming a main source names every
+            # recommendation with that source; the lines equal its high and medium ones.
+            found = [s for s in sentences
+                     if re.search(r"main source", s, re.IGNORECASE)
+                     and re.search(r"\bevery recommendation\b", s, re.IGNORECASE)
+                     and re.search(r"as many lines as", s, re.IGNORECASE)
+                     and re.search(r"high and medium", s, re.IGNORECASE)]
+            self.assertTrue(found, rule)
+
+        with self.subTest(check="N counts the low recommendations whose source no line names"):
+            found = [s for s in sentences
+                     if "N niskich" in s and re.search(r"\blow recommendations\b", s)
+                     and re.search(r"main source no (?:section )?line names", s)]
+            self.assertTrue(found, rule)
+            self.assertNotIn("named exactly once", rule)
+
+        with self.subTest(check="the header is the title and the paragraph under it"):
+            self.assertIn("the title and the paragraph under it", rule)
+            self.assertNotIn("the title and its line", rule)
+
         with self.subTest(check="the old part-one chat sentence is gone"):
             self.assertNotIn(OLD_CHAT_PART_ONE, _join(text).lower())
 
@@ -902,6 +923,14 @@ class TestSummaryRule(unittest.TestCase):
                           and re.search(r"(?i)\bat the top of the report\b", p)]
                 self.assertEqual(at_top, [], "text placed at the top of the report outside "
                                              "the summary section rule")
+
+            with self.subTest(format=skill, check="N counts low recommendations by main source"):
+                # Plan 058 M3 code-review (judge): N is the count of low recommendations
+                # whose main source no section line names, as in rule 15.
+                joined = _join(text)
+                self.assertRegex(joined, r"low`? recommendations whose main source no line "
+                                         r"names")
+                self.assertNotIn("recommendations the section does not name", joined)
 
             if skill != "ush-runall":
                 with self.subTest(format=skill, check="part 2 is not applicable"):

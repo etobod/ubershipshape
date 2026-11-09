@@ -46,10 +46,12 @@ Rules:
   from ``data/recommendation-labels.json``) each need a weight item and an id
   first in their evidence item (an item id, ``ush-<skill> <id>`` or a dotted
   summary key path in inline code): their main source. Every id a section line
-  names is a main source; every high or medium block is named by exactly one
-  section line; the numbers on the section's last non-blank line equal the
-  count of low blocks it does not name, and are then not checked against the
-  JSON. On OK the section is printed after the OK line, marker lines left out.
+  names is a main source, and a line naming one names every block with that
+  source; a source of high or medium blocks is named on exactly as many
+  section lines as it has such blocks; the numbers on the section's last
+  non-blank line equal the count of low blocks whose main source no section
+  line names, and are then not checked against the JSON. On OK the section
+  is printed after the OK line, marker lines left out.
 - Allowed numbers are the tokens of the summary plus the tokens of those items of
   the detail file (``detail_file`` in the summary, items in the profile's
   ``detail_sections``) whose ids are named in
@@ -929,6 +931,8 @@ def recommendations(lines: list[str], summary, profile: Profile
         ids = source_ids(evidence, summary, profile) if evidence is not None else []
         if ids:
             source = ids[0]
+        elif evidence is None:
+            problems.append(f"line {start + 1}: the recommendation has no evidence item")
         else:
             problems.append(
                 f"line {start + 1}: the evidence item of the recommendation names no id "
@@ -948,8 +952,9 @@ def summary_section(lines: list[str], raw: list[str], summary, profile: Profile)
     section line names is the main source of a recommendation, every high or
     medium recommendation is named by exactly one section line, and the
     numbers on the last non-blank line equal the count of low recommendations
-    the section does not name. Lines naming a main source beyond its high and
-    medium blocks name its low blocks, up to their number.
+    the section does not name. A line naming a main source names every
+    recommendation with that source, so a source of high or medium blocks is
+    named on as many lines as it has such blocks.
     """
     markers = [index for index, line in enumerate(lines) if ATTENTION_LINE.match(line)]
     if not markers:
@@ -981,29 +986,25 @@ def summary_section(lines: list[str], raw: list[str], summary, profile: Profile)
             if ident not in sources:
                 problems.append(f"line {index + 1}: {ident} is not the main source (first "
                                 f"evidence id) of a recommendation")
-    # Each high or medium block gets a line of its own, so a main source shared by
-    # several such blocks is named once per block. Lines naming a source beyond
-    # those name its low blocks, up to their number; its other low blocks count.
+    # A section line naming a main source names every recommendation with that
+    # source. A source of high or medium blocks is named on exactly as many lines
+    # as it has such blocks; N counts the low blocks whose source no line names.
     expected: dict[str, int] = {}
-    lows: dict[str, int] = {}
     for block in blocks:
         if block.source is not None and block.weight in ("high", "medium"):
             expected[block.source] = expected.get(block.source, 0) + 1
-        elif block.source is not None and block.weight == "low":
-            lows[block.source] = lows.get(block.source, 0) + 1
     for block in blocks:
         if block.source is not None and block.weight in ("high", "medium"):
-            count = named.get(block.source, 0)
-            need, extra = expected[block.source], lows.get(block.source, 0)
-            if not need <= count <= need + extra:
-                allowed = f"{need}" if not extra else f"{need} to {need + extra}"
+            need, count = expected[block.source], named.get(block.source, 0)
+            if count != need:
                 problems.append(
                     f"line {block.index + 1}: the {block.weight} recommendation {block.source} "
-                    f"is named by {count} lines of the summary section; name each high or "
-                    f"medium recommendation exactly once ({allowed} with this main source, "
-                    f"low ones included)")
-    low = sum(max(0, number - max(0, named.get(src, 0) - expected.get(src, 0)))
-              for src, number in lows.items())
+                    f"is named by {count} lines of the summary section; name this main "
+                    f"source on {need} lines, one for each high or medium recommendation "
+                    f"with it")
+    low = sum(1 for block in blocks
+              if block.weight == "low" and block.source is not None
+              and not named.get(block.source, 0))
     count_line = next((index for index in range(end - 1, first, -1)
                        if lines[index].strip()
                        and not (NOT_CHECKED_LINE.match(lines[index])
@@ -1030,25 +1031,56 @@ def _above_section(lines: list[str], raw: list[str], levels: dict[int, int],
                    marker: int) -> list[str]:
     """Problems with lines between the header and the ``<!-- ush:attention -->`` line.
 
-    The header is the ush:summary line (line 1), the ``#`` title and the one
-    line under the title; blank lines and ``<!-- ush:... -->`` marker lines
-    may stand there too. Every other non-blank line before the marker is named,
-    the lines of a code block included (``lines`` has them blanked, ``raw`` not).
+    The header is the ush:summary line (line 1), the ``#`` title and the
+    paragraph under it: after the blank and marker lines that follow the title,
+    the run of non-blank lines up to the first blank line. A table, heading,
+    list, fence or code block line is never a paragraph line. Blank lines and
+    ``<!-- ush:... -->`` marker lines may stand anywhere. Every other non-blank
+    line before the marker is named, the lines of a code block included
+    (``lines`` has them blanked, ``raw`` not).
     """
     title = next((index for index in range(1, marker) if levels.get(index) == 1), None)
-    under_title = title is not None
+    # None: the paragraph has not started; True: inside it; False: it ended.
+    paragraph = None if title is not None else False
     problems = []
     for index in range(1, marker):
-        if (index == title or not raw[index].strip()
-                or USH_MARKER_LINE.match(lines[index])):
+        if index == title or USH_MARKER_LINE.match(lines[index]):
             continue
-        if under_title and index > title:
-            under_title = False
+        if not raw[index].strip():
+            if paragraph:
+                paragraph = False
             continue
+        if (paragraph is not False and index > title and index not in levels
+                and _paragraph_line(lines[index], bool(paragraph))):
+            paragraph = True
+            continue
+        if index > (title if title is not None else 0):
+            paragraph = False
         problems.append(f"line {index + 1}: the summary section must come directly after "
-                        f"the header (the ush:summary line, the # title and its line); move "
-                        f"this line below the section, under a ## heading of its own")
+                        f"the header (the ush:summary line, the # title and the paragraph "
+                        f"under it); move this line below the section, under a ## heading "
+                        f"of its own")
     return problems
+
+
+LIST_ITEM = re.compile(r"^ {0,3}(?:[-+*]|(?P<number>[0-9]{1,9})\.)(?=[ \t]|$)(?P<rest>.*)")
+
+
+def _paragraph_line(line: str, continuing: bool) -> bool:
+    """Whether a non-heading line (code blocks blanked) can be a line of the header
+    paragraph: not a table row, a fence or a list item. Inside the paragraph
+    (``continuing``) a list item breaks it only as CommonMark lets one interrupt
+    a paragraph: not empty, and an ordered one only when it starts at 1, so a
+    wrapped line such as ``2025. roku`` stays paragraph text."""
+    if not line.strip() or TABLE_ROW.match(line) or FENCE.match(line):
+        return False
+    item = LIST_ITEM.match(line)
+    if item is None:
+        return True
+    if not continuing:
+        return False
+    number = item["number"]
+    return not item["rest"].strip() or (number is not None and int(number) != 1)
 
 
 def required_ids(summary, profile: Profile) -> list[tuple[str, str]]:

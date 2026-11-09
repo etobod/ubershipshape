@@ -364,8 +364,11 @@ class TestSection(_SummaryCase):
 class TestPlacement(_SummaryCase):
     """Final review 055 round 2: only the header stands above the summary section.
 
-    The header is the ush:summary line, the # title and the one line under the
-    title; blank lines and ush: marker lines may stand between them and the
+    The header is the ush:summary line, the # title and the paragraph under the
+    title (plan 058 M2): after skipping blank and ush: marker lines, the run of
+    non-blank lines up to the first blank line. A line starting with ``|``,
+    ``#``, a list marker or a code fence is never a paragraph line. Blank lines
+    and ush: marker lines may stand between the header and the
     ``<!-- ush:attention -->`` line, nothing else.
     """
 
@@ -382,7 +385,22 @@ class TestPlacement(_SummaryCase):
             "its line after a blank": ["", "Przebieg ręczny, tylko odczyt."],
             "its line and a detail marker": ["Przebieg ręczny, tylko odczyt.", "",
                                              "<!-- ush:detail c1 -->"],
+            # Plan 058 M2 K1: the header is the paragraph under the title.
+            "a two-line paragraph under the title": ["Przebieg ręczny, tylko odczyt.",
+                                                     "Dane z ostatniego przebiegu."],
+            "a blank, then a two-line paragraph": ["", "Przebieg ręczny, tylko odczyt.",
+                                                   "Dane z ostatniego przebiegu."],
+            # M2 code-review: a # with no space after it is no heading (clean data).
+            "a paragraph line starting with #word": ["#BC: przebieg ręczny, tylko odczyt."],
+            # M2 code-review round 2: an ordered marker other than 1 cannot interrupt a
+            # paragraph, so a wrapped line starting with a year stays paragraph text.
+            "a wrapped line starting with a year": ["Dane z przebiegu w",
+                                                    "2025. roku, tylko odczyt."],
         }
+        # The year of the wrapped line is a number the report must have backed.
+        data = json.loads(self.summary_file.read_text(encoding="utf-8"))
+        data["year"] = 2025
+        self.summary_file.write_text(json.dumps(data), encoding="utf-8")
         for label, header in cases.items():
             with self.subTest(label):
                 code, output = self.run_report(self._with_header(header), "clean-header.md")
@@ -390,10 +408,18 @@ class TestPlacement(_SummaryCase):
 
     def test_unheaded_dashboard_fails(self):
         table = ["| # | Obszar | Stan |", "|---|---|---|", "| a | Dysk | ok |"]
+        # Plan 058 M2 K2: a table line is never a paragraph line, so the table's
+        # first line is the one reported in every case.
+        one_line = ["Przebieg ręczny, tylko odczyt."]
+        two_lines = ["Przebieg ręczny, tylko odczyt.", "Dane z ostatniego przebiegu."]
         cases = {
-            "a table directly under the title": (table, table[1]),
-            "a table under the title's line": (["Przebieg ręczny, tylko odczyt.", "", *table],
-                                                table[0]),
+            "a table directly under the title": (table, table[0]),
+            "a table directly after the header line, no blank": ([*one_line, *table],
+                                                                 table[0]),
+            "a table after a two-line paragraph and a blank": ([*two_lines, "", *table],
+                                                               table[0]),
+            "a table after a one-line paragraph and a blank": ([*one_line, "", *table],
+                                                               table[0]),
         }
         for label, (header, first_bad) in cases.items():
             with self.subTest(label):
@@ -401,6 +427,27 @@ class TestPlacement(_SummaryCase):
                 code, output = self.run_report(body, "dashboard-first.md")
                 self.assert_fails(code, output)
                 line_no = _line_number(body, first_bad)
+                self.assertTrue(
+                    any(re.search(rf"\bline {line_no}\b", line) and "directly after the header"
+                        in line for line in output.splitlines()),
+                    f"no output line names line {line_no} and the header:\n{output}")
+
+    def test_block_lines_are_no_paragraph(self):
+        # M2 code-review: a heading, a list line or a fence directly under the title
+        # is never a header paragraph line; its first line is reported.
+        cases = {
+            "a heading": ["### Stan", "Dysk: ok."],
+            "an empty heading": ["###", "Dysk: ok."],
+            "a bullet list": ["- Dysk: ok", "- Pamięć: ok"],
+            "a numbered list": ["1. Dysk: ok", "2. Pamięć: ok"],
+            "a fence": ["```text", "Dysk: ok", "```"],
+        }
+        for label, header in cases.items():
+            with self.subTest(label):
+                body = self._with_header(header)
+                code, output = self.run_report(body, "block-under-title.md")
+                self.assert_fails(code, output)
+                line_no = _line_number(body, header[0])
                 self.assertTrue(
                     any(re.search(rf"\bline {line_no}\b", line) and "directly after the header"
                         in line for line in output.splitlines()),
@@ -488,33 +535,53 @@ class TestIds(_SummaryCase):
             self.assert_names(output, "c1")
 
     def test_shared_main_source_low(self):
-        # Final review 055 round 2: a low block whose main source is also the main
-        # source of a high or medium block is not named by the line that names the
-        # high or medium block; only a further line naming that source names it.
+        # Plan 058 M1 K2 (architect ruling, replaces the 055 round 2 rule): a section
+        # line naming c1 names every recommendation whose main source is c1, the low
+        # one included; the lines naming c1 equal its high and medium blocks.
         blocks = [_block(["c1", "c2"], "wysoka"), _block(["c1", "c3"], "niska")]
         second = f"- c1 — {NAMES['c1']}: zostaw tak i obserwuj."
 
-        with self.subTest("one line naming c1: the low block is counted"):
-            body = _report(_section(part1=[_line("c1")], low=1), blocks)
-            code, output = self.run_report(body, "shared-low-one.md")
-            self.assert_ok(code, output)
-
-        with self.subTest("one line naming c1 and a count of 0 fails"):
+        with self.subTest("one line naming c1 names the low block too: count 0 passes"):
             body = _report(_section(part1=[_line("c1")], low=0), blocks)
             code, output = self.run_report(body, "shared-low-zero.md")
-            self.assert_fails(code, output)
-            self.assertIn(f"line {_line_number(body, _count_line(0))}", output)
-
-        with self.subTest("two lines naming c1: the low block is named, count 0"):
-            body = _report(_section(part1=[_line("c1"), second], low=0), blocks)
-            code, output = self.run_report(body, "shared-low-two.md")
             self.assert_ok(code, output)
 
-        with self.subTest("three lines naming c1 fails"):
-            body = _report(_section(part1=[_line("c1"), second, second], low=0), blocks)
-            code, output = self.run_report(body, "shared-low-three.md")
+        with self.subTest("one line naming c1 and a count of 1 fails"):
+            body = _report(_section(part1=[_line("c1")], low=1), blocks)
+            code, output = self.run_report(body, "shared-low-one.md")
+            self.assert_fails(code, output)
+            self.assertRegex(output, rf"\bline {_line_number(body, _count_line(1))}\b")
+
+        with self.subTest("two lines naming c1 for one high block fails"):
+            body = _report(_section(part1=[_line("c1"), second], low=0), blocks)
+            code, output = self.run_report(body, "shared-low-two.md")
             self.assert_fails(code, output)
             self.assert_names(output, "c1")
+
+    def test_shared_source_names_its_low_blocks(self):
+        # Plan 058 M1 K1: a line naming a main source names every low block on it,
+        # so those low blocks are not in the count.
+        with self.subTest("a high and two low blocks on c1, one line: count 0 passes"):
+            blocks = [_block(["c1", "c2"], "wysoka"), _block(["c1", "c3"], "niska"),
+                      _block(["c1", "c4"], "niska")]
+            body = _report(_section(part1=[_line("c1")], low=0), blocks)
+            code, output = self.run_report(body, "shared-two-low-zero.md")
+            self.assert_ok(code, output)
+
+        with self.subTest("a high and two low blocks on c1, one line: count 2 fails"):
+            blocks = [_block(["c1", "c2"], "wysoka"), _block(["c1", "c3"], "niska"),
+                      _block(["c1", "c4"], "niska")]
+            body = _report(_section(part1=[_line("c1")], low=2), blocks)
+            code, output = self.run_report(body, "shared-two-low-two.md")
+            self.assert_fails(code, output)
+            self.assertRegex(output, rf"\bline {_line_number(body, _count_line(2))}\b",
+                             f"expected the last line's number:\n{output}")
+
+        with self.subTest("two low blocks on c1, no high block, c1 named once: count 0 passes"):
+            blocks = [_block(["c1", "c3"], "niska"), _block(["c1", "c4"], "niska")]
+            body = _report(_section(part2=[_line("c1")], low=0), blocks)
+            code, output = self.run_report(body, "low-only-named.md")
+            self.assert_ok(code, output)
 
     def write_runall(self):
         """An invented ush-runall profile and summary: decision items j<n>."""
@@ -649,6 +716,17 @@ class TestBlocks(_SummaryCase):
                     line_no = _line_number(body, _problem_line(block))
                     self.assertRegex(output, rf"\bline {line_no}\b",
                                      f"expected the block's line {line_no}:\n{output}")
+                    # Plan 058 M1 K4: the message says which item is missing.
+                    if label == "no evidence item":
+                        self.assertTrue(
+                            any(re.search(rf"\bline {line_no}\b", line)
+                                and "no evidence item" in line
+                                for line in output.splitlines()),
+                            f"no output line names line {line_no} and 'no evidence item':"
+                            f"\n{output}")
+                    elif label == "no id in the evidence":
+                        self.assertIn("names no id", output)
+                        self.assertNotIn("no evidence item", output)
 
     def test_english_labels(self):
         for lang in ("pl", "en"):
