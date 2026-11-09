@@ -1,7 +1,7 @@
 {
   "detail_sections": ["children", "firewall_ports", "driver_update_links", "decisions",
-                      "accepted"],
-  "id_letters": "ahjwy",
+                      "accepted", "review"],
+  "id_letters": "ahjrwy",
   "path_keys": ["summary_file", "detail_file", "program_path"],
   "id_keys": [],
   "required_lists": ["children", "firewall_ports", "driver_update_links",

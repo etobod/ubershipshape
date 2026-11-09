@@ -194,6 +194,53 @@ class TestPip(PipTestCase):
         self.assertNotIn("no registered Python has an InstallPath", reason, summary)
         self.assertTrue(self.notes_with(summary, "ContosoPy/2.0"), summary.get("not_checked"))
 
+    def test_store_python_note_names_its_source(self):
+        # Plan 063, M1 code-review round 1: a skipped Store Python is a partial skip of
+        # pip_packages, so its not_checked entry names that source and its Python; runall
+        # then keeps its review entries not_checked instead of gone.
+        regs = [registration("3.12", "C:\\Invented\\WindowsApps\\PythonSoftwareFoundation"
+                             ".Python.3.12_invented\\")]
+        summary = self.collect(pip_fake(regs, {}))
+        store = self.notes_with(summary, "microsoft store")
+        self.assertEqual(len(store), 1, summary.get("not_checked"))
+        self.assertEqual(store[0].get("what"),
+                         "pip_packages PythonCore/3.12 from the Microsoft Store (WindowsApps)",
+                         store)
+
+    def test_store_only_first_run_is_unreadable(self):
+        # Final review round 2: a first run with only a Store Python and no baseline
+        # reads nothing, so pip is unreadable with pythons null and no item.
+        store = ("C:\\Invented\\WindowsApps\\PythonSoftwareFoundation"
+                 ".Python.3.12_invented")
+        summary = self.collect(pip_fake([registration("3.12", store)], {}),
+                               data_dir=self.data_dir(), now=NOW)
+        self.assertEqual(self.pip(summary).get("status"), "unreadable", self.pip(summary))
+        self.assertIsNone(self.pip(summary).get("pythons"), self.pip(summary))
+        self.assertEqual(self.pip_items(summary), [], summary)
+
+    def test_store_python_keeps_baseline(self):
+        # Plan 063, M1 code-review round 2: a Python now skipped as a Store install is
+        # not read, so its packages are kept from the baseline, never reported removed,
+        # and its not_checked entry says why.
+        data_dir = self.data_dir()
+        path = "C:\\Invented\\Python312"
+        first = {install_folder(path): read_folder(package("requests", "2.31.0"))}
+        self.collect(pip_fake([registration("3.12", path)], first), data_dir=data_dir, now=NOW)
+        store = ("C:\\Invented\\WindowsApps\\PythonSoftwareFoundation"
+                 ".Python.3.12_invented")
+        run2 = self.collect(pip_fake([registration("3.12", store)], {}), data_dir=data_dir,
+                            now=NOW + timedelta(days=1))
+        self.assertEqual(self.changes_from(run2, "pip_packages"), [], run2)
+        # Final review: nothing was read, so the source is unreadable, never empty.
+        self.assertEqual(self.pip(run2).get("status"), "unreadable", self.pip(run2))
+        carried = self.by_key(self.pip_items(run2))
+        self.assertIn("pip:PythonCore/3.12|install|requests", carried, carried)
+        for item in carried.values():
+            self.assertIs(item.get("from_baseline"), True, item)
+        notes = self.notes_with(run2, "microsoft store")
+        self.assertEqual(len(notes), 1, run2.get("not_checked"))
+        self.assertIn("windowsapps", str(notes[0].get("reason") or "").casefold(), notes)
+
     def test_same_python_with_and_without_install_path(self):
         # M1 code-review round 2: a leftover registration of the same company/tag
         # without an InstallPath does not hide the copy that is read.
@@ -243,6 +290,8 @@ class TestPip(PipTestCase):
         self.assertEqual(set(self.pythons(summary)), {"PythonCore/3.11"},
                          self.pip(summary))
         self.assertEqual(self.pythons(summary)["PythonCore/3.11"].get("count"), 1)
+        # Final review round 2: a Store Python next to one that is read keeps it read.
+        self.assertEqual(self.pip(summary).get("status"), "read", self.pip(summary))
         for item in self.pip_items(summary):
             self.assertEqual(item.get("python"), "PythonCore/3.11", item)
 

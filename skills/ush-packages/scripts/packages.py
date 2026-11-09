@@ -325,6 +325,7 @@ class Collector:
         # row could not be read, for a comparison with another state (compare_view)
         self.unread_keys = set()
         self.unread_pythons = set()  # PEP 514 names whose folders are not known
+        self.store_pythons = set()  # PEP 514 names skipped as Store installs, not read
         # set by collect_pip: the summary part managers.pip (without state)
         self.pip_summary = None
         # set by collect_npm: the summary part managers.npm (without state)
@@ -366,16 +367,17 @@ def python_registrations(col: Collector) -> tuple[str, str | None, list]:
     ``pythons`` are ``{python, install_path, sys_version, sys_architecture}``, one per
     install path (case-folded, without a trailing backslash), first row first. A
     Microsoft Store Python (an install path under WindowsApps) is named in not_checked
-    and left out; so is a registration without a company or a tag, and one whose
+    and left out, its name added to ``col.store_pythons`` unless another registration
+    of it is read; so is a registration without a company or a tag, and one whose
     ``<company>/<tag>`` an earlier Python already has. A ``<company>/<tag>`` that only
     registrations without an install path have is named in not_checked and added to
-    ``col.unread_pythons``; status ``unreadable`` when no Python is read and such a
-    name is left.
+    ``col.unread_pythons``; status ``unreadable`` when no Python is read and a Store
+    name or such a name is left.
     """
     result = col.job("python_registrations", PYTHON_REGISTRATIONS_BODY)
     if result["status"] == "unreadable":
         return "unreadable", result["reason"], []
-    pythons, paths, names, no_path = [], set(), set(), set()
+    pythons, paths, names, no_path, store = [], set(), set(), set(), set()
     for row in result["rows"]:
         if not isinstance(row, dict):
             continue
@@ -395,8 +397,10 @@ def python_registrations(col: Collector) -> tuple[str, str | None, list]:
             continue
         paths.add(folded)
         if STORE_PYTHON_PART in folded + "\\":
-            col.skip(f"Python {tag} from the Microsoft Store (WindowsApps)",
-                     "packages not read")
+            col.skip(f"pip_packages {python} from the Microsoft Store (WindowsApps)",
+                     "the Store's WindowsApps folder is not read, so its packages are "
+                     "not read; those of the previous run are kept")
+            store.add(python)
             continue
         if python in names:
             col.skip(f"pip_packages {python}",
@@ -409,14 +413,16 @@ def python_registrations(col: Collector) -> tuple[str, str | None, list]:
                         "sys_version": text(row.get("sys_version")),
                         "sys_architecture": text(row.get("sys_architecture"))})
     # A name also read through another registration is read, not carried.
+    col.store_pythons |= store - names
     for python in sorted(no_path - names):
         col.skip(f"pip_packages {python}",
                  "the PEP 514 registration has no InstallPath, so its packages are "
                  "not read")
         col.unread_pythons.add(python)
-    if not pythons and col.unread_pythons:
-        return "unreadable", ("no Python was read: each Python not skipped has a PEP 514 "
-                              "registration without an InstallPath"), []
+    if not pythons and (col.unread_pythons or col.store_pythons):
+        return "unreadable", ("no Python was read: each Python not skipped is a Store "
+                              "install (WindowsApps) or has a PEP 514 registration "
+                              "without an InstallPath"), []
     return ("read" if pythons else "empty"), None, pythons
 
 
@@ -550,10 +556,10 @@ def collect_pip(col: Collector, previous: dict) -> tuple[str, dict]:
     ``{status, pythons}`` is kept in ``col.pip_summary``.
 
     Status ``read`` with at least one Python whose folders were looked at, ``empty``
-    with none (no registration, or each one skipped and named in not_checked: from
-    the Microsoft Store, or without a company or tag), ``unreadable`` when the
-    registrations could not be read or every Python not skipped has no InstallPath.
-    A Python without an InstallPath (and not read through another registration of
+    with none (no registration, or each one skipped without a company or tag and
+    named in not_checked), ``unreadable`` when the registrations could not be read
+    or every Python not skipped is from the Microsoft Store or has no InstallPath.
+    A Python without an InstallPath or from the Store (and not read through another registration of
     the same name) keeps its items from the previous baseline, also when the status
     is ``unreadable``. A folder that could not be read (or was skipped) keeps its
     items from the previous baseline, marked ``from_baseline``, so they are not reported as
@@ -564,7 +570,8 @@ def collect_pip(col: Collector, previous: dict) -> tuple[str, dict]:
     status, reason, pythons = python_registrations(col)
     col.record("pip_packages", status, reason)
     items = {}
-    for name in sorted(col.unread_pythons):  # registered, but its folders are unknown
+    # Registered, but its folders are unknown or not read (a Store install).
+    for name in sorted(col.unread_pythons | col.store_pythons):
         carry_pip(col, previous, f"pip:{name}|", items)
     if status != "read":
         col.pip_summary = {"status": status,

@@ -197,12 +197,13 @@ and a `not_checked` reason often start with the profile folder,
 Never report missing data as „none” or „nothing there”:
 
 - pip `status` `unreadable` (`pythons` `null`): the PEP 514 registrations
-  could not be read; give the reason from „Not checked”, never „no Python”.
+  could not be read, or every registered Python is a Microsoft Store install
+  or has no InstallPath, so none was read (their packages are kept from the
+  baseline); give the reason from „Not checked”, name each such Python as
+  registered but not read, never „no Python”.
 - pip `pythons` `[]`: no Python whose packages were read. When „Not
-  checked” names a Python from the Microsoft Store, a `pip_packages
-  <company>/<tag>` entry without an InstallPath, or a `pip_packages
-  registration` entry, name each such Python as registered but not read;
-  only with none of them is it „no Python registered”.
+  checked” names a `pip_packages registration` entry, name each such Python
+  as registered but not read; only with none is it „no Python registered”.
 - A Python whose `count` is `null`: one of its folders could not be
   listed; its packages there are kept from the baseline (`from_baseline`).
 - npm `status` `empty`: „npm not present” at the prefix read (no global

@@ -55,7 +55,7 @@ order:
 
 | Source | What is read | Gives |
 |---|---|---|
-| `pip_packages` | the Pythons registered under PEP 514 (`HKCU\Software\Python` once, `HKLM\SOFTWARE\Python` in the 64-bit and the 32-bit view; job `python_registrations`), and for each the `*.dist-info\METADATA` and `*.egg-info\PKG-INFO` files (the first `Name:` and `Version:` header lines) of `<InstallPath>\Lib\site-packages` and of the per-user `%APPDATA%\Python\Python<XY>[-32]\site-packages` (job `package_folders`, layout `python`). pip and python never run. `read` with at least one Python whose folders were looked at, `empty` with none (no registration, or every one skipped: from the Microsoft Store, or without a company or tag, each named in `not_checked`), `unreadable` when the registrations could not be read or no Python was read and one is left without an InstallPath; a Python without an InstallPath (not read through another registration of the same `<company>/<tag>`) keeps its packages from the previous baseline (`from_baseline`), also when the status is `unreadable` | `managers.pip`, the `pip` items of `packages`, the detail list `pip_packages` |
+| `pip_packages` | the Pythons registered under PEP 514 (`HKCU\Software\Python` once, `HKLM\SOFTWARE\Python` in the 64-bit and the 32-bit view; job `python_registrations`), and for each the `*.dist-info\METADATA` and `*.egg-info\PKG-INFO` files (the first `Name:` and `Version:` header lines) of `<InstallPath>\Lib\site-packages` and of the per-user `%APPDATA%\Python\Python<XY>[-32]\site-packages` (job `package_folders`, layout `python`). pip and python never run. `read` with at least one Python whose folders were looked at, `empty` with none (no registration, or every one skipped without a company or tag, each named in `not_checked`), `unreadable` when the registrations could not be read or no Python was read and one is left from the Microsoft Store or without an InstallPath; a Python without an InstallPath or from the Microsoft Store (not read through another registration of the same `<company>/<tag>`) keeps its packages from the previous baseline (`from_baseline`), also when the status is `unreadable` | `managers.pip`, the `pip` items of `packages`, the detail list `pip_packages` |
 | `npm_packages` | the npm global prefix: a non-blank environment variable `NPM_CONFIG_PREFIX` (its name in any case; `.npmrc` is then not read), else the first `prefix=` line of `%USERPROFILE%\.npmrc` (spaces around `=` allowed; job `npmrc`), else `%APPDATA%\npm`; the prefix stays raw, its `%VAR%` expanded by the job `package_folders`; then `name` and `version` of each `<prefix>\node_modules\*\package.json` and `<prefix>\node_modules\@<scope>\*\package.json` (job `package_folders`, layout `npm`; a folder without `package.json`, such as `.bin`, is no package; an empty, `null` or non-object `package.json`, or one without a string `version`, is a package with status `unreadable`). npm never runs. `read` with at least one package; `empty` when `node_modules` is missing ("npm not present") or holds no package; `unreadable` when `.npmrc` or the folder could not be read, or when nothing but scope folders that could not be listed came, never `empty` | `managers.npm`, the `npm` items of `packages`, the detail list `npm_packages` |
 
 ## Summary fields
@@ -94,11 +94,10 @@ reads them). Every entry has `state`:
 
 `managers.pip` is `{state, status, pythons}`: `status` as the source
 `pip_packages`; `pythons` is `[]` when no Python's packages were read: none is
-registered, or every registration was skipped, each with its `not_checked`
-entry (`what` `Python <tag> from the Microsoft Store (WindowsApps)`; `what`
-`pip_packages registration` for one without a company or tag), `null` when the
-registrations could not be read or no Python was read and one is left without an
-InstallPath, else one entry
+registered, or every registration was skipped for having no company or tag,
+each with its `not_checked` entry (`what` `pip_packages registration`), `null`
+when the registrations could not be read or no Python was read and one is left
+from the Microsoft Store or without an InstallPath, else one entry
 per Python read. A Python without an InstallPath has no entry: its `not_checked`
 entry has `what` `pip_packages <company>/<tag>` and a reason naming no InstallPath.
 Each entry:
@@ -180,8 +179,8 @@ as without the flag.
 | `what` | When |
 |---|---|
 | `Python installs not registered in PEP 514 (venvs, portable builds)` | every run: "not searched" |
-| `Python <tag> from the Microsoft Store (WindowsApps)` | a registration under the Store's folder; its packages are not read |
-| `pip_packages` | the source is `unreadable`: the registrations could not be read |
+| `pip_packages <company>/<tag> from the Microsoft Store (WindowsApps)` | a registration under the Store's folder; its packages are not read |
+| `pip_packages` | the source is `unreadable`: the registrations could not be read, or no Python was read and each one left is a Microsoft Store install or has no InstallPath (their packages are kept from the baseline) |
 | `pip_packages <company>/<tag>`, `pip_packages registration` | a registration without company, tag or install path, or a second one with the same company and tag; its packages are not read |
 | `pip_packages <company>/<tag> <install / user>` | that folder could not be listed (the Python's `count` is `null`), or the user folder is not known from the registration (`skipped`); its items keep the previous baseline's |
 | `npm_packages` | the source is `unreadable`: `.npmrc` or the global `node_modules` folder could not be read (the reason says which); `managers.npm.count` is `null`. A missing `node_modules` is no item of this kind: npm is not present at that prefix (see the next row) |

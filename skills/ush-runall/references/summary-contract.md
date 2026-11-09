@@ -19,7 +19,8 @@ absolute at once; see the shared contract):
   the same run), `children` (one item per child with its full summary),
   `firewall_ports` (every matched rule, no limit), `firewall_ports_counts`,
   `network_categories`, `driver_update_links`, `link_counts`,
-  `decisions`, `accepted` and `accepted_counts`.
+  `decisions`, `accepted`, `accepted_counts`, `review` (every review item,
+  no limit) and `review_counts`.
 
 Each child writes its own summary, detail file, baseline and id map to the
 same `<data dir>`, as in a run of its own; `runall` keeps no baseline.
@@ -87,6 +88,9 @@ Besides the shared fields (`schema_version`, `skill` `"ush-runall"`,
 | `decisions` | list or `null` | one item per decision of `<data dir>/decisions.json`, ids `j1`... (see "The user's decisions"); `[]` when there is no file; `null` when the file cannot be used (one `not_checked` item names `decisions.json`) |
 | `accepted` | list or `null` | one item per entry of `<data dir>/state/accepted.json`, ids `a1`... (see "Accepted findings"); `[]` when there is no file; `null` when the file or the kinds file cannot be used (one `not_checked` item names `accepted.json`) |
 | `accepted_counts` | object or `null` | `{quiet, back, gone, not_checked}`: the `accepted` items per state, every state present (`0` when none); `null` with `accepted` `null` |
+| `review` | list or `null` | the review items, ids `r1`..., at most 50 (see "Review dates"); `[]` when no program or package is listed and the file has no entry; `null` when `<data dir>/state/review-dates.json` cannot be used (one `not_checked` item names `review-dates.json`) |
+| `review_counts` | object or `null` | `{due, no_decision, gone, not_checked, not_due, no_limit}`: every review item per state (the detail file's list, never cut), every state present (`0` when none); `null` with `review` `null` |
+| `truncated_review` | int | `review` items cut from the summary by the limit of 50, from the end of the order; `0` when none (also when `review` is `null`). The detail file has them all |
 | `truncated` | int | `firewall_ports` items cut from the summary by the limit of 50, from the end of the order; `0` when none. The detail file has them all |
 
 The summary holds no child summary and is cut nowhere else; `runall`
@@ -318,6 +322,71 @@ never its cut summary:
 
 The script sets no threshold. `--detail a1` prints one item.
 
+## Review dates (`review`, ids `r..`)
+
+After the accepted findings, `runall` reads `<data dir>/state/review-dates.json`
+with the shared `review_dates` module
+(`<plugin root>/skills/ush-common/scripts/review_dates.py`). The file holds
+`{"schema_version": 1, "entries": [...]}`, one entry per decision of the user:
+`{kind, key, name, decided_on, period, review_on}`, `kind` `program` or
+`package`, `name` a string or `null`, `period` `<N>d`, `<N>m`, `<N>y` or
+`none`, the dates ISO `YYYY-MM-DD` local dates (`review_on` `null` for
+`none`). Two entries with the same kind and key, or any other bad shape,
+make the file unusable. No file means no decision yet.
+
+The lists come from the child detail files of this pass, never their cut
+summaries:
+
+| Key prefix | `kind` | Child, detail list | Source |
+|---|---|---|---|
+| `win32:` | `program` | `ush-inventory` `programs` | `win32_programs` |
+| `msix:` | `program` | `ush-inventory` `programs` | `msix_programs` |
+| `pip:` | `package` | `ush-packages` `packages` | `pip_packages` |
+| `npm:` | `package` | `ush-packages` `packages` | `npm_packages` |
+
+One item per program whose `own` is not `true` (`null` counts as not
+`true`) and per package, one per entry of a listed `own: true` program
+(a Windows part without an entry gets none), and one per entry whose key
+is in no list. The same item in the summary and the detail file:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | string | `r1`... in the order of the list (below) |
+| `kind` | string | `program` or `package` |
+| `key` | string | the child's key (or the entry's, for an item in no list) |
+| `name` | string or `null` | the child item's name; the entry's for an item in no list; `null` for a pip package whose metadata was not read |
+| `state` | string | see below |
+| `decided_on`, `period`, `review_on` | string or `null` | copied from the entry; `null` without one |
+| `reason` | string or `null` | on `not_checked`, why; `null` otherwise |
+
+States:
+
+- `not_checked` (with the reason): the child not `ok`, its detail file
+  unreadable or without the list, or the key's source missing or not
+  `read`/`empty`; or the item was carried from the baseline
+  (`from_baseline`, its source was not read in this pass), with an entry
+  or without; or an entry whose key is in no list while the child's
+  `not_checked` (summary or detail file) names a part of that source it
+  could not read (`what` the source name, or the source name and a space:
+  `win32_programs key ...`, `pip_packages <python> <folder>`,
+  `npm_packages <folder>\<scope>`). Such an entry is never `gone`; any
+  partial skip of a source covers every missing key of it. An entry whose
+  key has none of the prefixes, or whose kind does not fit its prefix, is
+  also `not_checked`.
+- `gone`: an entry whose key is in no list (`own: true` programs included)
+  and whose source was read whole.
+- `no_decision`: a listed item without an entry.
+- `no_limit`: an entry with period `none`.
+- `due`: `review_on` is the local date of the run or earlier; `not_due`:
+  later. The local date is `review_dates.local_date(now)`
+  (`now.astimezone().date()`), the date the writer stores as `decided_on`.
+
+Order: `due`, `no_decision`, `gone`, `not_checked`, `not_due`, `no_limit`,
+then by `kind` and `key`; the summary keeps the first 50 and counts the rest
+in `truncated_review`. `review_counts` counts every item. The script
+compares the user's dates only and sets no threshold. `--detail r1` prints
+one item.
+
 ## not_checked
 
 Besides the shared cases:
@@ -325,6 +394,9 @@ Besides the shared cases:
 - The accepted findings file not usable: `what` "the user's accepted
   findings (accepted.json)", `reason` why the file or the kinds file cannot
   be used, followed by "no accepted finding was checked".
+- The review dates file not usable: `what` "the user's review dates
+  (review-dates.json)", `reason` why it cannot be used, followed by "no
+  review item was made".
 
 - A child not `ok`: `{what, id, status, reason}`, `what`
   `"<skill> (<script>)"`, `id` its `h` id, `status` its status, `reason` the
@@ -368,7 +440,8 @@ The `not_checked` entries of each child stay in its `h` item.
 ## --detail
 
 `runall.py --detail <id>` prints one item, a child (`h3`), a firewall
-item (`w1`), a driver update link (`y1`) or a decision (`j1`), from the newest `runall-*.detail.json` in `<data dir>/work/`
+item (`w1`), a driver update link (`y1`), a decision (`j1`), an accepted
+finding (`a1`) or a review item (`r1`), from the newest `runall-*.detail.json` in `<data dir>/work/`
 (by name, so by time) and exits 0. `--detail-file <path>` (the summary's
 `detail_file`) reads that file instead and needs no data directory;
 `--detail-file` without `--detail` is a usage error. An unknown id, no

@@ -79,8 +79,10 @@ sys.path.insert(0, str(Path(__file__).absolute().parents[2] / "ush-common" / "sc
 import accepted as accepted_file
 import datadir
 import decisions as decisions_file
+import review_dates as review_file
 from baseline import parse_utc
 from psrun import dump
+from review_dates import local_date
 
 SKILL = "ush-runall"
 SCHEMA_VERSION = 1
@@ -97,12 +99,22 @@ SCRIPT_NAME = re.compile(r"[a-z_]+\.py")
 # A child that reads the baseline of another must run after it: (earlier, later).
 ORDER_RULES = (("ush-inventory", "ush-processes"),)
 DETAIL_SECTIONS = ("children", "firewall_ports", "driver_update_links", "decisions",
-                   "accepted")
+                   "accepted", "review")
 ACCEPTED_STATES = ("quiet", "back", "gone", "not_checked")
+# The review states in the order of the review list.
+REVIEW_STATES = ("due", "no_decision", "gone", "not_checked", "not_due", "no_limit")
 SKILL_HEALTH = "ush-health"
 SKILL_INVENTORY = "ush-inventory"
 SKILL_PROCESSES = "ush-processes"
 SKILL_SETTINGS = "ush-settings"
+SKILL_PACKAGES = "ush-packages"
+# key prefix -> (item kind, skill, source, detail section): the lists review items come from
+REVIEW_SOURCES = {
+    "win32:": ("program", SKILL_INVENTORY, "win32_programs", "programs"),
+    "msix:": ("program", SKILL_INVENTORY, "msix_programs", "programs"),
+    "pip:": ("package", SKILL_PACKAGES, "pip_packages", "packages"),
+    "npm:": ("package", SKILL_PACKAGES, "npm_packages", "packages"),
+}
 CATALOGUE_FILE = SKILLS_DIR / SKILL_SETTINGS / "data" / "settings-catalogue.json"
 # vendor_absent match -> ((skill, source, detail section, field compared), ...)
 VENDOR_LISTS = {
@@ -118,6 +130,7 @@ FIREWALL_INPUTS = ((SKILL_INVENTORY, "firewall_rules", ("additions",)),
                    (SKILL_PROCESSES, "tcp_listeners", ("groups", "ports")))
 READ_STATUSES = ("read", "empty")
 FIREWALL_PORTS_MAX = 50  # summary items; the rest is counted in truncated
+REVIEW_MAX = 50  # review items in the summary; the rest is counted in truncated_review
 STATUSES = ("ok", "failed", "timeout", "bad_output")
 STDERR_TAIL_CHARS = 2000
 REASON_MAX = 300
@@ -480,6 +493,18 @@ def read_child_detail(skill: str, outcome, source, sections: tuple):
         return None, f"the {skill} detail file could not be read: {error_text(exc)}"
     if not isinstance(detail, dict):
         return None, f"the {skill} detail file does not hold an object"
+    reason = source_reason(detail, skill, source)
+    if reason is not None:
+        return None, reason
+    missing = [name for name in sections if not isinstance(detail.get(name), list)]
+    if missing:
+        return None, f"the {skill} detail file has no list {', '.join(missing)}"
+    return detail, None
+
+
+def source_reason(detail: dict, skill: str, source):
+    """Why ``source`` (as in ``read_child_detail``) of a child's detail file was not
+    read, or None when it was read (or none is required)."""
     want = {"name": source} if isinstance(source, str) else dict(source or {})
     label = source if isinstance(source, str) else ", ".join(
         f"{field} {value}" for field, value in want.items())
@@ -487,15 +512,12 @@ def read_child_detail(skill: str, outcome, source, sections: tuple):
                and isinstance(entry, dict)
                and all(entry.get(field) == value for field, value in want.items())]
     if want and not entries:
-        return None, f"source {label} is not in the {skill} detail file"
+        return f"source {label} is not in the {skill} detail file"
     for entry in entries:
         if entry.get("status") not in READ_STATUSES:
             why = str(entry.get("reason") or "no reason given")[:REASON_MAX]
-            return None, f"source {label} of {skill} is {entry.get('status')}: {why}"
-    missing = [name for name in sections if not isinstance(detail.get(name), list)]
-    if missing:
-        return None, f"the {skill} detail file has no list {', '.join(missing)}"
-    return detail, None
+            return f"source {label} of {skill} is {entry.get('status')}: {why}"
+    return None
 
 
 def unread_path_ports(processes_detail: dict) -> int:
@@ -958,6 +980,103 @@ def check_accepted(outcomes: dict, data_dir: Path) -> tuple:
     return items, {state: counts[state] for state in ACCEPTED_STATES}, []
 
 
+# --- review dates (plan 063) ------------------------------------------------------------
+def review_prefix(key):
+    """The ``REVIEW_SOURCES`` prefix of a key, or None."""
+    if isinstance(key, str):
+        for prefix in REVIEW_SOURCES:
+            if key.startswith(prefix):
+                return prefix
+    return None
+
+
+def partial_skip(outcome: dict, detail: dict, source: str):
+    """The first ``not_checked`` entry of a child (summary or detail file) naming a part
+    of ``source`` it could not read (``what`` is the source, or starts with it and a
+    space), as a reason; None when there is none."""
+    notes = list((outcome.get("summary") or {}).get("not_checked") or [])
+    if isinstance(detail.get("not_checked"), list):
+        notes += detail["not_checked"]
+    for note in notes:
+        what = note.get("what") if isinstance(note, dict) else None
+        if isinstance(what, str) and (what == source or what.startswith(source + " ")):
+            why = str(note.get("reason") or "no reason given")
+            return f"{what} was not read in this pass: {why}"[:REASON_MAX]
+    return None
+
+
+def review_state(entry, today) -> str:
+    """The date state of an entry; ``no_decision`` without one."""
+    if entry is None:
+        return "no_decision"
+    if entry["period"] == review_file.NO_PERIOD:
+        return "no_limit"
+    return "due" if review_file.parse_date(entry["review_on"]) <= today else "not_due"
+
+
+def review_item(kind: str, key: str, name, entry, state: str, reason=None) -> dict:
+    entry = entry or {}
+    return {"kind": kind, "key": key, "name": name, "state": state,
+            "decided_on": entry.get("decided_on"), "period": entry.get("period"),
+            "review_on": entry.get("review_on"), "reason": reason}
+
+
+def build_review(outcomes: dict, entries: list, today) -> list:
+    """The ``r`` items, ordered and numbered: one per program whose ``own`` is not
+    ``true`` and per package of this pass, one per entry of a listed ``own: true``
+    program, and one per entry whose key is in no list (``gone``, or ``not_checked`` when
+    the list of its key was not read whole)."""
+    by_key = {(entry["kind"], entry["key"]): entry for entry in entries}
+    details, unread, partial = {}, {}, {}
+    rows, listed = [], set()
+    for prefix, (kind, skill, source, section) in REVIEW_SOURCES.items():
+        if skill not in details:
+            details[skill] = read_child_detail(skill, outcomes.get(skill), None, (section,))
+        detail, reason = details[skill]
+        if detail is None:
+            unread[prefix] = reason
+            continue
+        unread[prefix] = source_reason(detail, skill, source)
+        partial[prefix] = partial_skip(outcomes[skill], detail, source)
+        for item in detail[section]:
+            key = item.get("key") if isinstance(item, dict) else None
+            if review_prefix(key) != prefix or (kind, key) in listed:
+                continue
+            listed.add((kind, key))
+            entry = by_key.get((kind, key))
+            if item.get("own") is True and entry is None:
+                continue  # a Windows part gets no review date
+            # fields=(): no field of the item is compared, only its presence counts.
+            reason = unread[prefix] or accepted_file.not_read_reason(item, REASON_MAX, ())
+            state = "not_checked" if reason else review_state(entry, today)
+            rows.append(review_item(kind, key, item.get("name"), entry, state, reason))
+    for (kind, key), entry in by_key.items():
+        if (kind, key) in listed:
+            continue
+        prefix = review_prefix(key)
+        if prefix is None or REVIEW_SOURCES[prefix][0] != kind:
+            reason = f"no list of this pass holds {kind} keys like this one"
+        else:
+            reason = unread[prefix] or partial.get(prefix)
+        rows.append(review_item(kind, key, entry["name"], entry,
+                                "not_checked" if reason else "gone", reason))
+    rows.sort(key=lambda row: (REVIEW_STATES.index(row["state"]), row["kind"], row["key"]))
+    return [{"id": f"r{n}", **row} for n, row in enumerate(rows, 1)]
+
+
+def check_review(outcomes: dict, data_dir: Path, today) -> tuple:
+    """``(items or None, counts or None, notes)``: the ``r`` items against the user's
+    ``review-dates.json`` (no file: every item ``no_decision``); ``None`` and one
+    not_checked entry when the file cannot be used."""
+    loaded = review_file.load(data_dir)
+    if loaded["status"] == "unreadable":
+        return None, None, [{"what": f"the user's review dates ({review_file.FILE_NAME})",
+                             "reason": f"{loaded['reason']}; no review item was made"}]
+    items = build_review(outcomes, loaded["entries"], today)
+    counts = Counter(item["state"] for item in items)
+    return items, {state: counts[state] for state in REVIEW_STATES}, []
+
+
 # --- command line -----------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -965,7 +1084,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--detail", metavar="ID",
                         help="print one item (a child h1, h2, ..., a firewall item w1, "
                              "w2, ..., a driver update link y1, y2, ..., a decision j1, "
-                             "j2, ... or an accepted finding a1, a2, ...) of the newest "
+                             "j2, ..., an accepted finding a1, a2, ... or a review item "
+                             "r1, r2, ...) of the newest "
                              "detail file and exit; no child is run")
     parser.add_argument("--detail-file", metavar="PATH",
                         help="with --detail: read this detail file (the summary's "
@@ -1023,7 +1143,9 @@ def main(argv=None, run_child=None, now=None) -> int:
         return 2
 
     run_child = run_child or default_run_child
-    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    now = now or datetime.now(timezone.utc)
+    today = local_date(now)  # compared with the review dates
+    now = now.astimezone(timezone.utc)
     stamp = now.strftime("%Y%m%d-%H%M%S")  # UTC, so names sort by time
     work.mkdir(parents=True, exist_ok=True)
     summary_file = work / f"runall-{stamp}.summary.json"
@@ -1058,6 +1180,10 @@ def main(argv=None, run_child=None, now=None) -> int:
     not_checked.extend(decision_notes)
     accepted_items, accepted_counts, accepted_notes = check_accepted(outcomes, data_dir)
     not_checked.extend(accepted_notes)
+    all_review, review_counts, review_notes = check_review(outcomes, data_dir, today)
+    not_checked.extend(review_notes)
+    listed_review = all_review[:REVIEW_MAX] if all_review is not None else None
+    cut_review = len(all_review) - len(listed_review) if all_review is not None else 0
     all_ports = firewall["firewall_ports"]
     listed_ports = all_ports[:FIREWALL_PORTS_MAX] if all_ports is not None else None
     cut_ports = len(all_ports) - len(listed_ports) if all_ports is not None else 0
@@ -1080,6 +1206,8 @@ def main(argv=None, run_child=None, now=None) -> int:
         "decisions": decision_items,
         "accepted": accepted_items,
         "accepted_counts": accepted_counts,
+        "review": all_review,
+        "review_counts": review_counts,
     }
     detail_file.write_text(dump(detail) + "\n", encoding="utf-8")
 
@@ -1103,6 +1231,9 @@ def main(argv=None, run_child=None, now=None) -> int:
         "decisions": decision_items,
         "accepted": accepted_items,
         "accepted_counts": accepted_counts,
+        "review": listed_review,
+        "review_counts": review_counts,
+        "truncated_review": cut_review,  # review items cut by REVIEW_MAX
     }
     text_out = dump(summary)
     summary_file.write_text(text_out + "\n", encoding="utf-8")

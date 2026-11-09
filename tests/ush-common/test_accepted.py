@@ -39,6 +39,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tests.skill_loader import load_script, script_path
 
@@ -374,6 +375,23 @@ class TestLoad(AcceptedTestCase):
 
 
 class TestAccept(AcceptedTestCase):
+    def test_saved_but_previous_is_ok_with_warning(self):
+        data_dir = Path(self.data_dir())
+        detail = make_pass(data_dir)
+        warning = ("the new accepted.json is saved, but accepted.previous.json could not "
+                   "be replaced: locked")
+        with mock.patch.object(self.accepted.baseline, "save_json", return_value=warning):
+            result = self.accepted.accept("ush-health u2", detail, data_dir)
+        self.assertIs(result["ok"], True, result)
+        self.assertEqual(result["key"], [U2_TITLE, U2_HRESULT], result)
+        self.assertEqual(result["warning"], warning)
+
+        with mock.patch.object(self.accepted.baseline, "save_json",
+                               return_value="cannot write accepted.json.tmp: denied"):
+            result = self.accepted.accept("ush-health u2", detail, data_dir)
+        self.assertIs(result["ok"], False, result)
+        self.assertIn("not saved", result["reason"])
+
     def test_update_entry(self):
         data_dir = self.data_dir()
         first = self.accept_ok(data_dir, "ush-health u2", make_pass(data_dir))

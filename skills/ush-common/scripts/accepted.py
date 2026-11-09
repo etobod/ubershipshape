@@ -300,9 +300,13 @@ def accept(target: str, detail_file, data_dir, today=None) -> dict:
     data = {"schema_version": SCHEMA_VERSION, "entries": entries}
     failure = baseline.save_json(path.parent, FILE_STEM, data,
                                  lambda old: _check(old, kinds)[0])
+    saved = {"ok": True, "key": entry["key"], "kind": name, "path": str(path)}
+    if failure is not None and failure.startswith(f"the new {FILE_NAME} is saved, but "):
+        # The verified new file is in place; only the previous generation failed.
+        return dict(saved, warning=failure)
     if failure is not None:
         return dict(refused, reason=f"{FILE_NAME} not saved: {failure}")
-    return {"ok": True, "key": entry["key"], "kind": name, "path": str(path)}
+    return saved
 
 
 def main(argv=None) -> int:
