@@ -1,7 +1,7 @@
 {
   "detail_sections": ["packages", "changes"],
   "id_letters": "ck",
-  "path_keys": ["summary_file", "detail_file", "folder", "install_path", "entry", "prefix_from", "reference_file"],
+  "path_keys": ["summary_file", "detail_file", "folder", "install_path", "entry", "prefix_from", "reference_file", "looked_in"],
   "id_keys": ["id"],
   "required_lists": ["packages", "changes"],
   "truncated": [

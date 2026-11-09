@@ -9,8 +9,10 @@ Interface these tests assume (fixed before the code exists):
 - ``summary["managers"]`` holds one entry per manager in the file's order: a dict keyed
   by name (key order) or a list of entries with ``name``.
 - pip is ``{state, status, pythons}``; npm is ``{state, status, prefix_from, count,
-  unreadable}``; every other manager is ``{state: "not_read"}`` with one ``not_checked``
-  entry reading ``<name>: not read yet`` (``what`` and ``reason`` joined by ": ").
+  unreadable}``; pipx, uv and conda (plan 066) are ``not_present`` here, since none of
+  their locations exists in these fixtures; every other manager is ``{state:
+  "not_read"}`` with one ``not_checked`` entry reading ``<name>: not read yet``
+  (``what`` and ``reason`` joined by ": ").
 - ``state`` is ``read`` for pip/npm ``status`` ``read`` or ``empty``, ``unreadable`` for
   ``status`` ``unreadable``.
 
@@ -68,7 +70,10 @@ class TestManagers(PackagesTestCase):
         for wanted in ("pip", "npm", "winget"):
             self.assertIn(wanted, folded, names)
         self.assertEqual(len(set(folded)), len(folded), names)
-        others = [name for name in names if name.casefold() not in ("pip", "npm")]
+        # Read by plan 066 (M1: pipx, uv; M2: conda) and absent in these fixtures.
+        absent_here = ("pipx", "uv", "conda")
+        others = [name for name in names
+                  if name.casefold() not in ("pip", "npm") + absent_here]
 
         path = "C:\\Invented\\Python312"
         runs = {
@@ -106,6 +111,9 @@ class TestManagers(PackagesTestCase):
                 self.assertEqual(npm["status"], npm_status, npm)
 
                 notes = self.not_checked(summary)
+                for name in absent_here:
+                    entry = self.manager(summary, name)
+                    self.assertEqual(entry.get("state"), "not_present", f"{name}: {entry}")
                 for name in others:
                     entry = self.manager(summary, name)
                     self.assertEqual(entry, {"state": "not_read"}, f"{name}: {entry}")

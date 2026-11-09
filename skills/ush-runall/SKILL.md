@@ -207,6 +207,11 @@ or running anything on a schedule. Say so if the user asks for these.
   outdated. A manager
   of `ush-packages` whose `state` is `not_read` is "not read yet" (its
   `not_checked` entry), never absent or not installed.
+- **Not present is not "not read yet".** In the `h8` item (`ush-packages`),
+  a manager whose `state` is `not_present` (none of its disk locations
+  exists) is "not present", never "not read yet", "could not be read" or 0
+  packages, and it is no finding; a manager whose `state` is `not_read`
+  stays "not read yet". The two are never swapped.
 - **Offline, with a pointer to ush-advice.** For a fault this machine cannot
   explain offline (a device problem code, a crash code), the report offers
   a web lookup through `ush-advice` as the next step (its Polish wording is

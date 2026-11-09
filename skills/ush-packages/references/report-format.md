@@ -33,11 +33,11 @@ shared by all skills (see `<plugin root>/skills/ush-health/references/report-for
 - Every run of digits is a separate number: `2.32.0` is 2, 32 and 0,
   `2026-11-09` is 2026, 11 and 9. A version is written as the JSON has it
   (it is a name, not a decimal number), with its dots.
-- Names back their own digits: a package's `name`, `version` and `python`
-  (`PythonCore/3.12`), a change's `name`, `version` and `fields`, and the
-  other text values of the summary. `summary_file`, `detail_file`,
-  `folder`, `entry`, `prefix_from`, `install_path` and `reference_file`
-  back no number (the profile's `path_keys`): a number in a folder path is
+- Names back their own digits: a package's `name`, `version`, `python`
+  (`PythonCore/3.12`), `venv` and `environment` (`py312`), a change's
+  `name`, `version` and `fields`, and the other text values of the summary.
+  `summary_file`, `detail_file`, `folder`, `entry`, `prefix_from`,
+  `install_path`, `reference_file` and `looked_in` back no number (the profile's `path_keys`): a number in a folder path is
   never written as a reading.
 - Item ids (`k1`, `c2`) are not numbers when they name an item of the
   summary, an item named in `ush:detail` or an item cut from the summary
@@ -101,12 +101,30 @@ gives the count of low recommendations whose main source no line names.
    |---|---|---|
    | pip | read | PythonCore/3.12: 12 |
    | npm | npm not present | 0 |
+   | pipx | read | 3 (home %USERPROFILE%\pipx) |
+   | uv | not present | — |
+   | conda | read | 41 (environments miniconda3, contoso) |
    | winget | not read yet | not read |
 
    - pip: the cell names each Python of `managers.pip.pythons` with its
      `count`, or „not read” when a `count` is `null`; never add them up.
    - npm: `managers.npm.count`; `null` is „not read”, never 0. `status`
      `empty` is „npm not present” in the State cell.
+   - pipx: `managers.pipx.count`, with the homes of `managers.pipx.homes`
+     whose `status` is `read` (raw, as `%USERPROFILE%\pipx`); `null` is „not
+     read”, never 0.
+   - uv: `managers.uv.count`, with the tool folder `managers.uv.folder`
+     (raw); `null` is „not read”, never 0.
+   - conda: `managers.conda.count`, with the environments of
+     `managers.conda.environments` named by their `label`, never by their
+     `folder` (an expanded path with the account name); an environment whose
+     `status` is `absent` is named as „folder absent”, one whose `status` is
+     `unreadable` as „could not be read”. `null` is „not read”, never 0; the
+     count is for the whole manager, never split per environment.
+   - A manager with `state` `not_present` (none of its disk locations
+     exists) is „not present” in the State cell and „—” in the Packages
+     cell, never 0, „none”, „not read yet” or „could not be read”; the places
+     looked in are its `looked_in`.
    - A manager with `state` `not_read` is „not read yet” in the State cell
      and „not read” in the Packages cell, never „not present”, „none” or 0.
    - `state` `unreadable`: „could not be read”, with the reason in „Not
@@ -119,17 +137,20 @@ gives the count of low recommendations whose main source no line names.
    `report-style.md`) and `age_days`, and with `baseline.reference` other
    than `latest` that the run compared with the saved state of
    `baseline.reference`. Then every change of `changes`, one bullet each:
-   its id, `name`, the Python for pip (`python`), and what changed: `added`
+   its id, `name`, the Python for pip (`python`), the venv for pipx
+   (`venv`), the environment label for conda (`environment`), and what changed: `added`
    with `version`, `removed` with `version`, `changed` with `fields.version`
    `before` and `after`. With `truncated_changes` above 0, one line: how
    many changes were cut and that the detail file has them. A source with
    comparison `no_baseline` (a first run) or `not_read` gives no changes:
    say so for that source, never „no changes”.
 
-4. Installed packages, one `###` heading per read manager (pip, npm), each
-   package of `packages` one bullet with its id, `name`, `version`, and the
-   place: for pip the Python (`python`) and the folder (`install` or
-   `user`), for npm „global folder”. Every package carries the words „not
+4. Installed packages, one `###` heading per manager with packages (pip,
+   npm, pipx, uv, conda), each package of `packages` one bullet with its id,
+   `name`, `version`, and the place: for pip the Python (`python`) and the
+   folder (`install` or `user`), for npm „global folder”, for pipx the venv
+   (`venv`, and „injected” when `injected` is `true`), for uv „tool
+   folder”, for conda the environment label (`environment`). Every package carries the words „not
    checked for updates” (in a Polish report „nie sprawdzono pod kątem
    aktualizacji”): no ush-advice lookup exists yet. Rule 7 (long lists) of
    `<plugin root>/skills/ush-common/references/report-style.md` applies: with
@@ -181,14 +202,22 @@ A report never carries the account name, except in the `ush:summary`
 marker, which the checker needs. A `folder` of an npm package, an `entry`
 and a `not_checked` reason often start with the profile folder,
 `C:\Users\` followed by the account name: write that folder as
-`%USERPROFILE%` (`%USERPROFILE%\AppData\Roaming\npm`).
+`%USERPROFILE%` (`%USERPROFILE%\AppData\Roaming\npm`). A conda environment
+is named by its label (`environment`, `managers.conda.environments[*].label`);
+when its folder must be written, the prefix and the `folder` of a conda
+package are expanded paths: write the profile folder as `%USERPROFILE%`
+(`%USERPROFILE%\miniconda3\conda-meta`).
 
 ## Values that are not readings
 
 - `null` is „not read”, in words, never „no”, „none” or „0”.
 - A field in `unread_fields` is unknown in this run; never judge from it.
 - `state` `not_read`: the manager was not read by this skill yet. It is
-  never absent, missing or not installed.
+  „not read yet”, never absent, missing or not installed.
+- `state` `not_present`: none of the manager's disk locations (`looked_in`)
+  exists. It is „not present”, never „not read yet”, „could not be read” or
+  0 packages, and it is no finding; the places outside `looked_in` were not
+  searched („Not checked”). `not_present` and `not_read` are never swapped.
 - `from_baseline` `true`: the item is the previous baseline's, kept because
   its folder could not be read in this run; it is not a new reading.
 
@@ -212,6 +241,16 @@ Never report missing data as „none” or „nothing there”:
   node.exe) were not searched, so npm may still be installed elsewhere.
 - npm `status` `unreadable` or a `count` of `null`: „could not be read”,
   never 0; give the reason from „Not checked”.
+- pipx, uv or conda `state` `unreadable` (`count` `null`): a home, the tool
+  folder or `environments.txt` exists but could not be read; their packages
+  are kept from the baseline. Give the reason from „Not checked”, never „not
+  present” or 0.
+- A uv `count` or conda `count` of `null` with `state` `read`: a tool's
+  folder or an environment's `conda-meta` could not be listed (named in „Not
+  checked”); its packages are kept from the baseline (`from_baseline`).
+- A conda environment with `status` `absent`: the line of
+  `environments.txt` names a folder that does not exist; it has no packages
+  and is not unreadable.
 - A first run (`baseline.status` `none`, comparison `no_baseline`): no
   changes can be given; say that this run is the baseline for the next.
 - `baseline.status` `unreadable` or `baseline.saved` `false`: say so with

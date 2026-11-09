@@ -5,6 +5,10 @@ The checker loads the real ``skills/ush-packages/data/report-profile.json`` thro
 its unpatched ``SKILLS_DIR``; no copy of the profile is used. The detail sections and
 the cut-count keys of the invented summary are taken from that profile, so the
 fixture follows it. All summary data below is invented.
+
+Plan 066, M2, K6 (``TestReportProfile``): a report naming pipx, uv and conda in state
+``not_present`` as "nie ma" or "not present", with the Packages cell "—", passes the
+checker; the managers not read keep "not read yet".
 """
 
 import contextlib
@@ -127,6 +131,54 @@ def clean_report_lines(summary_file):
     ]
 
 
+# Plan 066, M2, K6: pipx, uv and conda not present (none of their locations exists).
+NOT_PRESENT = {
+    "pipx": ["%USERPROFILE%\\pipx", "%USERPROFILE%\\.local\\pipx",
+             "%LOCALAPPDATA%\\pipx\\pipx"],
+    "uv": ["%APPDATA%\\uv\\data\\tools"],
+    "conda": ["%USERPROFILE%\\.conda\\environments.txt"],
+}
+NOT_PRESENT_SOURCES = ("pipx_packages", "uv_tools", "conda_packages")
+NOT_PRESENT_NOTES = (
+    ("pipx homes outside looked_in",
+     ("a pipx home set by another account's PIPX_HOME, or the default of another pipx "
+      "version, is not searched")),
+    ("uv tools outside looked_in",
+     ("a tool folder set by UV_TOOL_DIR in another environment, or under XDG_DATA_HOME, "
+      "is not searched")),
+    ("conda environments outside environments.txt (.condarc envs_dirs, CONDA_ENVS_PATH)",
+     "not searched"),
+)
+
+
+def not_present_summary(summary_file, detail_file):
+    """``clean_summary`` with pipx, uv and conda not present: each source read as
+    ``empty`` and compared, each manager ``{state: "not_present", looked_in}``, and
+    each one's "outside the locations searched" note."""
+    summary = clean_summary(summary_file, detail_file)
+    summary["sources"] += [{"name": name, "status": "empty", "reason": None}
+                           for name in NOT_PRESENT_SOURCES]
+    summary["comparison"].update({name: "compared" for name in NOT_PRESENT_SOURCES})
+    summary["managers"].update({name: {"state": "not_present", "looked_in": list(paths)}
+                                for name, paths in NOT_PRESENT.items()})
+    summary["not_checked"] += [{"what": what, "reason": reason}
+                               for what, reason in NOT_PRESENT_NOTES]
+    return summary
+
+
+def not_present_report_lines(summary_file, wording):
+    """``clean_report_lines`` with a dashboard row per not-present manager in
+    ``wording`` and the Packages cell "—"; the managers not read keep "not read yet"."""
+    lines = clean_report_lines(summary_file)
+    last_row = lines.index("| vscode | not read yet | - |")
+    rows = [f"| {name} | {wording} | — |" for name in NOT_PRESENT]
+    lines[last_row + 1:last_row + 1] = rows
+    marker = lines.index("<!-- ush:not-checked -->")
+    notes = [f"- {what}: {reason}." for what, reason in NOT_PRESENT_NOTES]
+    lines[marker + 1:marker + 1] = notes
+    return lines
+
+
 def _quiet_tempdir():
     """A temporary directory whose random name holds no digits (so it cannot supply an
     id or a number) and whose path holds no word the tests assert on."""
@@ -238,6 +290,37 @@ class TestPackagesProfile(ReportCheckMixin, unittest.TestCase):
             self.assertEqual(code, 1, f"output:\n{output}")
             self.assertNotIn("OK", output)
             self.assertIn("managers", output)
+
+
+class TestReportProfile(ReportCheckMixin, unittest.TestCase):
+    """Plan 066, M2, K6."""
+
+    def setUp(self):
+        self.make_workspace()
+
+    def test_not_present_manager_report(self):
+        self.assert_real_profile()
+        summary_file, summary = self.write_summary("packages-np", not_present_summary)
+        for name in NOT_PRESENT:
+            self.assertEqual(summary["managers"][name]["state"], "not_present")
+
+        for number, wording in enumerate(("nie ma", "not present")):
+            with self.subTest(wording=wording):
+                lines = not_present_report_lines(summary_file, wording)
+                for name in NOT_PRESENT:
+                    self.assertIn(f"| {name} | {wording} | — |", lines)
+                # The managers not read keep "not read yet", never the not-present words.
+                for name in NOT_READ:
+                    self.assertIn(f"| {name} | not read yet | - |", lines)
+                    self.assertIn(f"- {name}: not read yet.", lines)
+                self.assert_passes(lines, f"packages-2026-11-09-110{number}.md")
+
+        with self.subTest("the shared clean report keeps 'not read yet'"):
+            clean = clean_report_lines(summary_file)
+            for name in NOT_READ:
+                self.assertIn(f"| {name} | not read yet | - |", clean)
+            self.assertFalse([line for line in clean
+                              if "not present" in line or "nie ma" in line], clean)
 
 
 if __name__ == "__main__":

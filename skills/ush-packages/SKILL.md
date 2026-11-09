@@ -1,15 +1,18 @@
 ---
 name: ush-packages
-description: List the packages the package managers of this Windows machine have installed, read offline from disk - pip for every Python registered in PEP 514 and the global npm packages - with each version and what was added, removed or changed since the last run. Every other package manager is listed as not read yet. Use when the user asks which Python or npm packages are installed, which versions, or what changed in them. Read-only; no package manager runs and nothing goes online, so no package is checked for a newer version.
+description: List the packages the package managers of this Windows machine have installed, read offline from disk - pip for every Python registered in PEP 514, the global npm packages, pipx apps, uv tools and conda environments - with each version and what was added, removed or changed since the last run. A manager none of whose disk locations exists is listed as not present, every other package manager as not read yet. Use when the user asks which Python, npm, pipx, uv or conda packages are installed, which versions, or what changed in them. Read-only; no package manager runs and nothing goes online, so no package is checked for a newer version.
 ---
 
 # ush-packages
 
 Reads the packages of the package managers from the files on disk through
 read-only PowerShell jobs: pip (the metadata of every Python registered in
-PEP 514, in its install and per-user `site-packages` folders) and npm (the
-`package.json` of every global package). No package manager runs (no pip,
-npm or winget command) and nothing goes online. It compares every package
+PEP 514, in its install and per-user `site-packages` folders), npm (the
+`package.json` of every global package), pipx (the `pipx_metadata.json` of
+each venv in the pipx homes), uv (the `dist-info` of each tool in the uv
+tool folder) and conda (the `conda-meta` file names of each environment
+listed in `environments.txt`). No package manager runs (no pip, npm, pipx,
+uv, conda or winget command) and nothing goes online. It compares every package
 with the baseline of the last run. A script counts and compares; you judge
 and write a Markdown report; the user decides what to act on.
 
@@ -37,8 +40,9 @@ another way (a shell command, another folder).
 
 ## When to use
 
-- The user asks which Python (pip) or npm packages are installed, in which
-  version, or for which Python.
+- The user asks which Python (pip), npm, pipx, uv tool or conda packages
+  are installed, in which version, or for which Python, venv or conda
+  environment.
 - The user asks what changed in the packages since the last run, or over a
   longer period ("since last week").
 
@@ -74,8 +78,13 @@ autostart (`ush-inventory`). Say so if the user asks for these.
   `<!-- ush:detail ... -->` line. Do not count packages or changes yourself.
 - **A manager not read is not absent.** A manager with `state` `not_read`
   was not read by this skill yet: write "not read yet", never "not
-  present", "not installed" or "none". npm `status` `empty` is "npm not
-  present" at the prefix read, with the other prefixes not searched.
+  present", "not installed" or "none". A manager with `state` `not_present`
+  (none of its disk locations in `looked_in` exists) is "not present", with
+  the Packages cell an em dash (U+2014, as in
+  `references/report-format.md`), never "not read yet", "could not be read" or 0;
+  `not_present` and `not_read` are never swapped, and `not_present` is no
+  finding. npm `status` `empty` is "npm not present" at the prefix read,
+  with the other prefixes not searched.
 - **A package worth a look only from facts.** Name a package as worth a look
   only for a fact the JSON holds (`unreadable`, a second entry of the same
   name, a version kept from the baseline because its folder could not be

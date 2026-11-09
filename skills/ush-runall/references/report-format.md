@@ -308,6 +308,12 @@ exists yet; the report never calls a package current or outdated.
 A manager of `ush-packages` whose `state` is `not_read` is "not read yet"
 (its `not_checked` entry), never absent or not installed.
 
+In the `h8` item, a manager of `ush-packages` whose `state` is `not_present`
+(none of its disk locations exists) is "not present" (in a Polish report
+„nie ma”), never "not read yet", "could not be read" or 0 packages, and it is
+no finding; one whose `state` is `not_read` stays "not read yet". The two
+are never swapped.
+
 ### 7. Disk clean-up (Porządki)
 
 One line per item of `cleanup` in the `ush-files` summary (`h6`), in its

@@ -15,11 +15,25 @@ Sources (read-only PowerShell jobs, run through an injectable ``run_ps``; see
   ``node_modules`` folder (job ``package_folders``, layout ``npm``); the prefix comes
   from ``NPM_CONFIG_PREFIX``, else the ``prefix=`` line of ``%USERPROFILE%\\.npmrc``
   (job ``npmrc``), else ``%APPDATA%\\npm``. Key ``npm:<install name>``.
+- ``pipx_packages``: the ``venvs\\<venv>\\pipx_metadata.json`` of each pipx home
+  (``PIPX_HOME``, else the homes of pipx 1.5+, before 1.3 and 1.3-1.4; job
+  ``pipx_homes``): the main package and each injected one. Keys ``pipx:<venv>`` and
+  ``pipx:<venv>|<injected>``; a venv name of an earlier home gives ``~2``, ``~3``.
+- ``uv_tools``: each subfolder with ``uv-receipt.toml`` of the uv tool folder
+  (``UV_TOOL_DIR``, else ``%APPDATA%\\uv\\data\\tools``; job ``uv_tools``), its version
+  from the ``dist-info`` of its ``Lib\\site-packages`` (job ``package_folders``). Key
+  ``uv:<tool>``.
+- ``conda_packages``: each prefix listed in ``%USERPROFILE%\\.conda\\environments.txt``
+  and the ``*.json`` file names of its ``conda-meta`` folder, split into
+  ``<name>-<version>-<build>`` (job ``conda_environments``; file contents are not
+  read). Key ``conda:<environment label>|<name>``; the label is the prefix's last folder
+  name, with ``~2``, ``~3`` for later prefixes of the same label.
 
-Both are compared with the baseline ``ush-packages`` on ``version``; the changes
+Each is compared with the baseline ``ush-packages`` on ``version``; the changes
 are ``c`` items. The summary lists every manager of ``data/managers.json`` under
-``managers`` in the file's order: pip and npm with their state, every other one
-``not_read`` and named in not_checked as "not read yet" (never "not present").
+``managers`` in the file's order: the read ones with their state (``not_present``
+when none of their locations exists), every other one ``not_read`` and named in
+not_checked as "not read yet" (never "not present").
 Every package of a read manager is a ``k`` item of the flat ``packages`` list.
 No package is checked for a newer version: that needs an ush-advice lookup.
 
@@ -30,6 +44,7 @@ cut first, then ``c`` items; the detail file keeps them all (``--detail <id>``).
 import argparse
 import copy
 import json
+import ntpath
 import os
 import re
 import sys
@@ -53,13 +68,14 @@ DETAIL_SECTIONS = ("packages", "changes")
 # The managers of B-01 in report order: {name, step, read}; read at run time.
 MANAGERS_FILE = Path(__file__).absolute().parents[1] / "data" / "managers.json"
 # The managers this script reads; every other one is "not_read".
-READ_MANAGERS = {"pip": "pip_packages", "npm": "npm_packages"}
+READ_MANAGERS = {"pip": "pip_packages", "npm": "npm_packages", "pipx": "pipx_packages",
+                 "uv": "uv_tools", "conda": "conda_packages"}
 NOT_READ_YET = "not read yet"
 
 # The sources with items, compared with the baseline, in change order.
-SOURCES = ("pip_packages", "npm_packages")
+SOURCES = ("pip_packages", "npm_packages", "pipx_packages", "uv_tools", "conda_packages")
 READ_STATUSES = ("read", "empty")
-COMPARED_FIELDS = {"pip_packages": ("version",), "npm_packages": ("version",)}
+COMPARED_FIELDS = {source: ("version",) for source in SOURCES}
 CHANGE_ORDER = ("added", "removed", "changed")
 
 
@@ -286,6 +302,199 @@ try {
 $result = [pscustomobject]$row
 """
 
+# Shared by the pipx_homes and uv_tools bodies: the input file, the reason of an
+# error, and one location given raw. Location returns the expanded path and the
+# folder item, or $null as the item when the path does not exist; it throws when
+# the path holds an unknown variable, is not a full path or is a file.
+LOCATION_HELPERS = r"""$in = [System.IO.File]::ReadAllText(__INPUT__, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+function Message($err) {
+  $ex = $err.Exception
+  if ($null -ne $ex.InnerException) { $ex = $ex.InnerException }
+  return S $ex.Message
+}
+function Folder($path) {
+  $item = $null
+  try {
+    $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop
+  } catch [System.Management.Automation.ItemNotFoundException] {
+    $item = $null
+  }
+  if ($null -ne $item -and -not $item.PSIsContainer) { throw 'the path is a file, not a folder' }
+  return $item
+}
+function Location($raw) {
+  $expanded = ([System.Environment]::ExpandEnvironmentVariables($raw)).TrimEnd('\')
+  if ($expanded.Contains('%')) { throw 'the folder holds a variable this account does not know' }
+  if (-not [System.IO.Path]::IsPathRooted($expanded)) { throw 'the folder is not a full path' }
+  return $expanded
+}
+"""
+
+# pipx homes: for each home, the text of each venvs\<venv>\pipx_metadata.json
+# (Python parses it). Read only; pipx does not run. A missing home is "absent"; an
+# existing home without a venvs folder holds no venv; a home or venvs folder that
+# cannot be listed is "unreadable" with venvs null; a metadata file that cannot be
+# read is a venv with status "unreadable" and the reason.
+PIPX_HOMES_BODY = LOCATION_HELPERS + r"""$rows = New-Object System.Collections.Generic.List[object]
+foreach ($h in @($in.homes)) {
+  $raw = S $h
+  if (-not $raw) { continue }
+  $row = [ordered]@{ path = $raw; expanded = $null; status = 'unreadable'; reason = $null
+    venvs = $null }
+  try {
+    $row.expanded = Location $raw
+    $item = Folder $row.expanded
+    if ($null -eq $item) {
+      $row.status = 'absent'
+    } else {
+      $list = New-Object System.Collections.Generic.List[object]
+      $venvs = Folder ([System.IO.Path]::Combine($row.expanded, 'venvs'))
+      if ($null -ne $venvs) {
+        foreach ($c in @(Get-ChildItem -LiteralPath $venvs.FullName -Force -ErrorAction Stop)) {
+          if (-not $c.PSIsContainer) { continue }
+          $v = [ordered]@{ venv = S $c.Name; status = 'unreadable'; reason = $null; metadata = $null }
+          try {
+            $v.metadata = [System.IO.File]::ReadAllText([System.IO.Path]::Combine($c.FullName, 'pipx_metadata.json'), [System.Text.Encoding]::UTF8)
+            $v.status = 'read'
+          } catch {
+            $v.metadata = $null
+            $v.reason = Message $_
+          }
+          $list.Add([pscustomobject]$v)
+        }
+      }
+      $row.venvs = $list.ToArray()
+      $row.status = 'read'
+    }
+  } catch {
+    $row.status = 'unreadable'
+    $row.venvs = $null
+    $row.reason = Message $_
+  }
+  $rows.Add([pscustomobject]$row)
+}
+$result = $rows.ToArray()
+"""
+
+# uv tool folders: each subfolder with whether it holds uv-receipt.toml (receipt
+# true/false; null with the reason when that could not be checked). Read only; uv
+# does not run. A missing folder is "absent"; one that cannot be listed is
+# "unreadable" with entries null.
+UV_TOOLS_BODY = LOCATION_HELPERS + r"""$rows = New-Object System.Collections.Generic.List[object]
+foreach ($f in @($in.folders)) {
+  $raw = S $f
+  if (-not $raw) { continue }
+  $row = [ordered]@{ path = $raw; expanded = $null; status = 'unreadable'; reason = $null
+    entries = $null }
+  try {
+    $row.expanded = Location $raw
+    $item = Folder $row.expanded
+    if ($null -eq $item) {
+      $row.status = 'absent'
+    } else {
+      $list = New-Object System.Collections.Generic.List[object]
+      foreach ($c in @(Get-ChildItem -LiteralPath $row.expanded -Force -ErrorAction Stop)) {
+        if (-not $c.PSIsContainer) { continue }
+        $e = [ordered]@{ name = S $c.Name; receipt = $null; reason = $null }
+        try {
+          $r = $null
+          try {
+            $r = Get-Item -LiteralPath ([System.IO.Path]::Combine($c.FullName, 'uv-receipt.toml')) -Force -ErrorAction Stop
+          } catch [System.Management.Automation.ItemNotFoundException] {
+            $r = $null
+          }
+          $e.receipt = ($null -ne $r -and -not $r.PSIsContainer)
+        } catch {
+          $e.receipt = $null
+          $e.reason = Message $_
+        }
+        $list.Add([pscustomobject]$e)
+      }
+      $row.entries = $list.ToArray()
+      $row.status = 'read'
+    }
+  } catch {
+    $row.status = 'unreadable'
+    $row.entries = $null
+    $row.reason = Message $_
+  }
+  $rows.Add([pscustomobject]$row)
+}
+$result = $rows.ToArray()
+"""
+
+# conda: the file environments.txt read whole, and for each non-blank line (a prefix)
+# the *.json file names of <prefix>\conda-meta (Python splits them; file contents are
+# not read). Read only; conda does not run. A missing file is "absent" with prefixes
+# null; a file that cannot be read is "unreadable" with the reason. A prefix whose
+# folder is missing is "absent"; an existing prefix without conda-meta is "read" with
+# no file; a prefix that is not a full path or whose conda-meta cannot be listed is
+# "unreadable" with files null and the reason.
+CONDA_ENVIRONMENTS_BODY = LOCATION_HELPERS + r"""$raw = S $in.file
+$row = [ordered]@{ path = $raw; expanded = $null; status = 'unreadable'; reason = $null
+  prefixes = $null }
+try {
+  if (-not $raw) { throw 'no environments.txt path was given' }
+  $row.expanded = Location $raw
+  $item = $null
+  try {
+    $item = Get-Item -LiteralPath $row.expanded -Force -ErrorAction Stop
+  } catch [System.Management.Automation.ItemNotFoundException] {
+    $item = $null
+  }
+  if ($null -eq $item) {
+    $row.status = 'absent'
+  } else {
+    if ($item.PSIsContainer) { throw 'environments.txt is a folder, not a file' }
+    # conda writes UTF-8, older versions the ANSI code page: strict UTF-8 first, so a
+    # prefix with non-ASCII letters is not garbled into an absent folder.
+    $bytes = [System.IO.File]::ReadAllBytes($row.expanded)
+    try {
+      $all = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($bytes)
+    } catch {
+      $all = [System.Text.Encoding]::Default.GetString($bytes)
+    }
+    $lines = $all.TrimStart([char]0xFEFF) -split '\r?\n'
+    $list = New-Object System.Collections.Generic.List[object]
+    foreach ($line in $lines) {
+      $prefix = ([string]$line).Trim()
+      if (-not $prefix) { continue }
+      $p = [ordered]@{ prefix = $prefix; status = 'unreadable'; reason = $null; files = $null }
+      try {
+        $path = $prefix.TrimEnd('\')
+        if (-not [System.IO.Path]::IsPathRooted($path)) { throw 'the line is not a full path' }
+        if ($null -eq (Folder $path)) {
+          $p.status = 'absent'
+        } else {
+          $names = New-Object System.Collections.Generic.List[string]
+          $meta = Folder ([System.IO.Path]::Combine($path, 'conda-meta'))
+          if ($null -ne $meta) {
+            foreach ($c in @(Get-ChildItem -LiteralPath $meta.FullName -Force -ErrorAction Stop)) {
+              if ($c.PSIsContainer) { continue }
+              $n = S $c.Name
+              if ($n.ToLowerInvariant().EndsWith('.json')) { $names.Add($n) }
+            }
+          }
+          $p.files = $names.ToArray()
+          $p.status = 'read'
+        }
+      } catch {
+        $p.status = 'unreadable'
+        $p.files = $null
+        $p.reason = Message $_
+      }
+      $list.Add([pscustomobject]$p)
+    }
+    $row.prefixes = $list.ToArray()
+    $row.status = 'read'
+  }
+} catch {
+  $row.status = 'unreadable'
+  $row.prefixes = $null
+  $row.reason = Message $_
+}
+$result = [pscustomobject]$row
+"""
 
 
 # --- values ----------------------------------------------------------------
@@ -330,6 +539,14 @@ class Collector:
         self.pip_summary = None
         # set by collect_npm: the summary part managers.npm (without state)
         self.npm_summary = None
+        # set by collect_pipx / collect_uv: the summary parts managers.pipx / managers.uv
+        # (without state)
+        self.pipx_summary = None
+        self.uv_summary = None
+        # set by collect_conda: the summary part managers.conda (without state)
+        self.conda_summary = None
+        # the managers none of whose disk locations exists (state not_present)
+        self.not_present = set()
 
     def job(self, job: str, body: str, depth: int = 4, file_name: str | None = None) -> dict:
         """Run one job; its output file is named by ``file_name`` (default: ``job``)."""
@@ -471,24 +688,23 @@ def pip_key_name(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name.strip()).casefold()
 
 
-def read_package_folders(col: Collector, paths: list, layout: str = "python") -> dict:
-    """Run ``package_folders`` for the raw ``paths`` of one ``layout``: ``{path
-    case-folded: {status, reason, packages}}``; a job that failed (or whose input could
-    not be written), or a path without a row, is ``unreadable`` with the reason. Each
-    layout has its own input and output file."""
-    file_name = "package_folders" if layout == "python" else f"package_folders-{layout}"
+def read_locations(col: Collector, job: str, body: str, file_name: str, input_data: dict,
+                   paths: list, list_key: str, list_name: str, depth: int = 4) -> dict:
+    """Write ``input_data`` to the job's input file and run ``job`` (``body`` reads it
+    through ``__INPUT__``): ``{path case-folded: {status, reason, <list_key>}}`` for each
+    raw path. ``absent`` has an empty list; a job that failed (or whose input could not
+    be written), or a path without a row, is ``unreadable`` with the reason and the list
+    null. The input and output files are named by ``file_name``."""
     input_path = col.work / f"packages-{col.stamp}.{file_name}.input.json"
-    folders = [{"path": path, "layout": layout} for path in paths]
     try:
-        input_path.write_text(json.dumps({"folders": folders}, ensure_ascii=True),
-                              encoding="utf-8")
+        input_path.write_text(json.dumps(input_data, ensure_ascii=True), encoding="utf-8")
     except OSError as exc:
         result = {"status": "unreadable", "rows": [],
                   "reason": f"the folder list could not be written: "
                             f"{type(exc).__name__}: {exc}"}
     else:
-        body = PACKAGE_FOLDERS_BODY.replace("__INPUT__", psrun.ps_quote(input_path))
-        result = col.job("package_folders", body, depth=5, file_name=file_name)
+        result = col.job(job, body.replace("__INPUT__", psrun.ps_quote(input_path)),
+                         depth=depth, file_name=file_name)
     rows = {}
     for row in result["rows"]:
         if isinstance(row, dict) and text(row.get("path")) is not None:
@@ -496,21 +712,34 @@ def read_package_folders(col: Collector, paths: list, layout: str = "python") ->
     answers = {}
     for path in paths:
         row = rows.get(path.casefold())
-        answer = {"status": "unreadable", "reason": None, "packages": None}
+        answer = {"status": "unreadable", "reason": None, list_key: None}
         if row is None:
             answer["reason"] = (result["reason"] if result["status"] == "unreadable"
-                                else "the package_folders job gave no row for this folder")
+                                else f"the {job} job gave no row for this folder")
         elif row.get("status") == "absent":
-            answer.update(status="absent", packages=[])
-        elif row.get("status") == "read" and isinstance(row.get("packages"), (list, dict)):
-            answer.update(status="read", packages=as_list(row["packages"]))
+            answer.update({"status": "absent", list_key: []})
+        elif row.get("status") == "read" and isinstance(row.get(list_key), (list, dict)):
+            answer.update({"status": "read", list_key: as_list(row[list_key])})
         elif row.get("status") == "read":
-            answer["reason"] = "the package_folders row says read but gives no package list"
+            answer["reason"] = f"the {job} row says read but gives no {list_name} list"
         else:
-            answer["reason"] = (text(row.get("reason"))
-                                or "the package_folders job gave no reason")
+            answer["reason"] = text(row.get("reason")) or f"the {job} job gave no reason"
         answers[path.casefold()] = answer
     return answers
+
+
+def read_package_folders(col: Collector, paths: list, layout: str = "python",
+                         file_name: str | None = None) -> dict:
+    """Run ``package_folders`` for the raw ``paths`` of one ``layout``: ``{path
+    case-folded: {status, reason, packages}}``; a job that failed (or whose input could
+    not be written), or a path without a row, is ``unreadable`` with the reason. Each
+    layout has its own input and output file; ``file_name`` names another pair (the uv
+    tools' site-packages, so pip's files are not overwritten)."""
+    file_name = file_name or ("package_folders" if layout == "python"
+                              else f"package_folders-{layout}")
+    folders = [{"path": path, "layout": layout} for path in paths]
+    return read_locations(col, "package_folders", PACKAGE_FOLDERS_BODY, file_name,
+                          {"folders": folders}, paths, "packages", "package", depth=5)
 
 
 def pip_item(python: str, kind: str, package) -> tuple[str, dict, str]:
@@ -541,14 +770,20 @@ def pip_item(python: str, kind: str, package) -> tuple[str, dict, str]:
     return f"pip:{python}|{kind}|{label}", item, (entry or "?").strip().casefold()
 
 
+def carry(col: Collector, source: str, previous: dict, items: dict, keep) -> None:
+    """Keep the previous baseline's items of ``source`` for whose key ``keep`` is true
+    (not read in this run), marked ``from_baseline``."""
+    for key, item in (previous or {}).items():
+        if keep(key) and isinstance(item, dict):
+            items[key] = copy.deepcopy(item)
+            items[key]["from_baseline"] = True  # not read in this run
+            col.unread_keys.add((source, key))
+
+
 def carry_pip(col: Collector, previous: dict, prefix: str, items: dict) -> None:
     """Keep the previous baseline's pip items whose key starts with ``prefix`` (a
     Python or one of its folders not read in this run), marked ``from_baseline``."""
-    for key, item in (previous or {}).items():
-        if key.startswith(prefix) and isinstance(item, dict):
-            items[key] = copy.deepcopy(item)
-            items[key]["from_baseline"] = True  # not read in this run
-            col.unread_keys.add(("pip_packages", key))
+    carry(col, "pip_packages", previous, items, lambda key: key.startswith(prefix))
 
 
 def collect_pip(col: Collector, previous: dict) -> tuple[str, dict]:
@@ -783,6 +1018,407 @@ def collect_npm(col: Collector, previous: dict) -> tuple[str, dict]:
     return status, items
 
 
+def not_present(col: Collector, manager: str, source: str, looked_in: list) -> tuple:
+    """Record a manager none of whose locations exists: the source is ``empty`` (its old
+    items are removed from the baseline), the manager ``not_present``."""
+    col.record(source, "empty", None)
+    col.not_present.add(manager)
+    return "empty", {}, {"status": "empty", "looked_in": list(looked_in)}
+
+
+def carry_source(col: Collector, source: str, previous: dict, reason: str) -> dict:
+    """Record ``source`` as ``unreadable`` (named in not_checked) and keep every item of
+    the previous baseline, marked ``from_baseline``."""
+    col.record(source, "unreadable", reason)
+    items = {}
+    carry(col, source, previous, items, lambda key: True)
+    return items
+
+
+def unreadable_item(item: dict, reason: str) -> dict:
+    """``item`` as one whose metadata could not be read: no version, the reason."""
+    item.update(version=None, status="unreadable", reason=reason, unread_fields=["version"])
+    return item
+
+
+# pipx: the pipx_metadata.json of each venv of the pipx homes (pipx does not run).
+PIPX_HOME_VARIABLE = "PIPX_HOME"
+# pipx 1.5+, before 1.3, 1.3-1.4.
+PIPX_DEFAULT_HOMES = ("%USERPROFILE%\\pipx", "%USERPROFILE%\\.local\\pipx",
+                      "%LOCALAPPDATA%\\pipx\\pipx")
+PIPX_OUTSIDE = ("pipx homes outside looked_in",
+                ("a pipx home set by another account's PIPX_HOME, or the default of "
+                 "another pipx version, is not searched"))
+PIPX_SHARED = ("pipx shared libraries",
+               ("the shared folder of each pipx home (the pip that the venvs share) is "
+                "no venv and is not read"))
+
+
+def pipx_homes() -> list:
+    """The raw pipx homes: a non-blank ``PIPX_HOME`` alone, else the defaults."""
+    value = environment_value(PIPX_HOME_VARIABLE)
+    if value is not None:
+        return [value.rstrip("\\/")]
+    return list(PIPX_DEFAULT_HOMES)
+
+
+def same_folder(folder: str) -> str:
+    """One spelling of a Windows folder: case, slashes and doubled separators folded."""
+    return ntpath.normcase(ntpath.normpath(folder.strip().rstrip("\\/")))
+
+
+def stable_labels(rows: list, previous: dict) -> list:
+    """The label of each ``(name, folder)`` row, in order: ``name``, else ``name~2``,
+    ``name~3``... A folder whose items of the previous baseline had a label of this
+    name keeps it while no earlier row took it, so a same-named folder that goes away
+    does not hand its key to another one (no false ``changed``); the other rows take
+    the first free label in order."""
+    old = {}
+    for key, item in (previous or {}).items():
+        folder = text(item.get("folder")) if isinstance(item, dict) else None
+        if folder is not None:
+            label = key.split(":", 1)[-1].split("|", 1)[0]
+            old.setdefault(same_folder(folder), label)
+    labels, taken = [None] * len(rows), set()
+    for index, (name, folder) in enumerate(rows):
+        label = old.get(same_folder(folder))
+        if label is not None and label not in taken and (
+                label == name or re.fullmatch(re.escape(name) + r"~[2-9]\d*", label)):
+            labels[index] = label
+            taken.add(label)
+    for index, (name, _folder) in enumerate(rows):
+        if labels[index] is None:
+            label, number = name, 1
+            while label in taken:
+                number += 1
+                label = f"{name}~{number}"
+            labels[index] = label
+            taken.add(label)
+    return labels
+
+
+def pipx_venv_items(home: str, label: str, venv) -> list:
+    """``[(key, item)]`` of one venv row: the main package and each injected one.
+
+    A metadata file that could not be read or parsed, or whose main package lacks a
+    string ``package_version``, is one unreadable item; an injected entry without a
+    string ``package_version`` is an unreadable item of its own."""
+    venv = venv if isinstance(venv, dict) else {}
+    name = text(venv.get("venv")) or "?"
+    base = {"name": name, "version": None, "venv": name, "injected": False,
+            "folder": f"{home}\\venvs\\{name}", "status": "read", "reason": None}
+    key = f"pipx:{label}"
+    status, reason = venv.get("status"), text(venv.get("reason"))
+    if status == "unreadable":
+        return [(key, unreadable_item(base, reason or "the pipx_homes job gave no reason"))]
+    if status != "read":
+        return [(key, unreadable_item(
+            base, reason or "the pipx_homes job did not say whether the file was read"))]
+    try:
+        data = json.loads(venv.get("metadata") or "")
+    except (TypeError, ValueError) as exc:
+        return [(key, unreadable_item(
+            base, f"pipx_metadata.json is not JSON: {type(exc).__name__}: {exc}"))]
+    main = data.get("main_package") if isinstance(data, dict) else None
+    injected = data.get("injected_packages") if isinstance(data, dict) else None
+    if not isinstance(main, dict) or not isinstance(main.get("package_version"), str) \
+            or not main["package_version"].strip():
+        return [(key, unreadable_item(
+            base, "pipx_metadata.json has no string main_package.package_version"))]
+    if injected is not None and not isinstance(injected, dict):
+        return [(key, unreadable_item(
+            base, "pipx_metadata.json has an injected_packages that is not an object"))]
+    base.update(name=text(main.get("package")) or name, version=main["package_version"])
+    found = [(key, base)]
+    for injected_name, entry in sorted((injected or {}).items()):
+        item = {"name": injected_name, "version": None, "venv": name, "injected": True,
+                "folder": base["folder"], "status": "read", "reason": None}
+        version = entry.get("package_version") if isinstance(entry, dict) else None
+        if isinstance(version, str) and version.strip():
+            item["version"] = version
+        else:
+            unreadable_item(item, "pipx_metadata.json gives this injected package no "
+                                  "string package_version")
+        found.append((f"{key}|{injected_name.strip().casefold()}", item))
+    return found
+
+
+def collect_pipx(col: Collector, previous: dict) -> tuple[str, dict]:
+    """``(status, {key: item})`` of the source ``pipx_packages``; the summary part is
+    kept in ``col.pipx_summary``.
+
+    No home exists: ``not_present`` (source ``empty``). A home that exists but could
+    not be listed: ``unreadable`` (count null, named in not_checked), the previous
+    baseline's items kept ``from_baseline``. Else ``read`` with at least one item,
+    ``empty`` with none. A venv name already seen in an earlier home gets ``~2``,
+    ``~3``... A venv whose metadata could not be read keeps its previous injected
+    items ``from_baseline``.
+    """
+    homes = pipx_homes()
+    answers = read_locations(col, "pipx_homes", PIPX_HOMES_BODY, "pipx_homes",
+                             {"homes": homes}, homes, "venvs", "venv")
+    if all(answers[home.casefold()]["status"] == "absent" for home in homes):
+        col.skip(*PIPX_OUTSIDE)
+        status, items, col.pipx_summary = not_present(col, "pipx", "pipx_packages", homes)
+        return status, items
+    unread = [(home, answers[home.casefold()]["reason"]) for home in homes
+              if answers[home.casefold()]["status"] == "unreadable"]
+    if unread:
+        reason = "; ".join(f"the pipx home {home} could not be listed: {why}"
+                           for home, why in unread)
+        items = carry_source(col, "pipx_packages", previous, reason)
+        col.pipx_summary = {
+            "status": "unreadable",
+            "homes": [{"folder": home, "status": answers[home.casefold()]["status"]}
+                      for home in homes],
+            "count": None, "unreadable": None}
+        return "unreadable", items
+    items, count, unreadable = {}, 0, 0
+    rows = []
+    for home in homes:
+        venvs = sorted(answers[home.casefold()]["venvs"],
+                       key=lambda v: (text(v.get("venv")) or "?").casefold()
+                       if isinstance(v, dict) else "?")
+        for venv in venvs:
+            name = (text(venv.get("venv")) if isinstance(venv, dict) else None) or "?"
+            rows.append((home, venv, name.casefold(), f"{home}\\venvs\\{name}"))
+    labels = stable_labels([(name, folder) for _h, _v, name, folder in rows],
+                           previous)
+    for (home, venv, _name, _folder), label in zip(rows, labels):
+        found = pipx_venv_items(home, label, venv)
+        if len(found) == 1 and found[0][1]["status"] == "unreadable":
+            carry(col, "pipx_packages", previous, items,
+                  lambda key, label=label: key.startswith(f"pipx:{label}|"))
+        for key, item in found:
+            items[key] = item
+            if item["status"] == "read":
+                count += 1
+            else:
+                unreadable += 1
+    status = "read" if items else "empty"
+    col.record("pipx_packages", status, None)
+    col.skip(*PIPX_OUTSIDE)
+    col.skip(*PIPX_SHARED)
+    col.pipx_summary = {
+        "status": status,
+        "homes": [{"folder": home, "status": answers[home.casefold()]["status"]}
+                  for home in homes],
+        "count": count, "unreadable": unreadable}
+    return status, items
+
+
+# uv tools: each tool's dist-info in its own venv (uv does not run).
+UV_TOOL_VARIABLE = "UV_TOOL_DIR"
+UV_DEFAULT_FOLDER = "%APPDATA%\\uv\\data\\tools"
+UV_OUTSIDE = ("uv tools outside looked_in",
+              ("a tool folder set by UV_TOOL_DIR in another environment, or under "
+               "XDG_DATA_HOME, is not searched"))
+UV_PYTHONS = ("Python installs managed by uv",
+              "the Pythons that uv installs are not read; their packages are not listed")
+UV_NO_DIST_INFO = "no dist-info of the tool's package"
+
+
+def uv_tool_item(tool: str, folder: str, packages: list) -> dict:
+    """The item of uv tool ``tool``: the version of the ``dist-info`` (or ``egg-info``)
+    whose PEP 503 name is the tool folder's name, the highest when there are several;
+    unreadable when there is none or only one whose metadata could not be read."""
+    wanted = pip_key_name(tool)
+    matches = []
+    for package in packages:
+        key, item, entry = pip_item("", "", package)
+        if key.rsplit("|", 1)[1] == wanted:
+            matches.append((version_key(item["version"] or entry_version(entry)), entry,
+                            item))
+    base = {"name": tool, "version": None, "folder": f"{folder}\\{tool}", "status": "read",
+            "reason": None}
+    if not matches:
+        return unreadable_item(base, UV_NO_DIST_INFO)
+    _, _, best = max(matches, key=lambda match: match[:2])
+    if best["status"] != "read" or best["version"] is None:
+        return unreadable_item(base, best["reason"] or "the dist-info gives no Version header")
+    base.update(name=best["name"], version=best["version"])
+    return base
+
+
+def collect_uv(col: Collector, previous: dict) -> tuple[str, dict]:
+    """``(status, {key: item})`` of the source ``uv_tools``; the summary part is kept in
+    ``col.uv_summary``.
+
+    No tool folder: ``not_present`` (source ``empty``). A tool folder that could not be
+    listed: ``unreadable`` (count null), the previous items kept ``from_baseline``.
+    Else each subfolder holding ``uv-receipt.toml`` is a tool, read from its
+    ``Lib\\site-packages`` (job ``package_folders``, layout ``python``, work files
+    ``package_folders-uv``). A tool whose folder could not be listed or checked keeps
+    its previous item ``from_baseline``, is named in not_checked, and makes the count
+    null.
+    """
+    value = environment_value(UV_TOOL_VARIABLE)
+    folder = value.rstrip("\\/") if value is not None else UV_DEFAULT_FOLDER
+    answer = read_locations(col, "uv_tools", UV_TOOLS_BODY, "uv_tools", {"folders": [folder]},
+                            [folder], "entries", "entry")[folder.casefold()]
+    if answer["status"] == "absent":
+        col.skip(*UV_OUTSIDE)
+        status, items, col.uv_summary = not_present(col, "uv", "uv_tools", [folder])
+        return status, items
+    if answer["status"] == "unreadable":
+        items = carry_source(col, "uv_tools", previous,
+                             f"the uv tool folder {folder} could not be listed: "
+                             f"{answer['reason']}")
+        col.uv_summary = {"status": "unreadable", "folder": folder, "count": None,
+                          "unreadable": None}
+        return "unreadable", items
+    items, tools, count, unreadable, unread_tools = {}, [], 0, 0, 0
+    for entry in answer["entries"]:
+        name = text(entry.get("name")) if isinstance(entry, dict) else None
+        if name is None:
+            continue
+        receipt = entry.get("receipt")
+        if receipt is True:
+            tools.append(name)
+        elif receipt is not False:
+            unread_tools += 1
+            col.skip(f"uv_tools {name}",
+                     "whether the folder holds uv-receipt.toml could not be checked: "
+                     f"{text(entry.get('reason')) or 'no reason given'}")
+            carry(col, "uv_tools", previous, items,
+                  lambda key, name=name: key == f"uv:{name.casefold()}")
+    tools.sort(key=str.casefold)
+    paths = {tool: f"{folder}\\{tool}\\Lib\\site-packages" for tool in tools}
+    folders = (read_package_folders(col, list(paths.values()), file_name="package_folders-uv")
+               if tools else {})
+    for tool in tools:
+        site = folders[paths[tool].casefold()]
+        key = f"uv:{tool.casefold()}"
+        if site["packages"] is None:
+            unread_tools += 1
+            col.skip(f"uv_tools {tool}", f"{paths[tool]} could not be listed: {site['reason']}")
+            carry(col, "uv_tools", previous, items, lambda k, key=key: k == key)
+            continue
+        items[key] = uv_tool_item(tool, folder, site["packages"])
+        if items[key]["status"] == "read":
+            count += 1
+        else:
+            unreadable += 1
+    status = "read" if tools or unread_tools else "empty"
+    col.record("uv_tools", status, None)
+    col.skip(*UV_OUTSIDE)
+    col.skip(*UV_PYTHONS)
+    col.uv_summary = {"status": status, "folder": folder,
+                      "count": None if unread_tools else count, "unreadable": unreadable}
+    return status, items
+
+
+# conda: the conda-meta file names of each environment of environments.txt (conda
+# does not run, no file content is read).
+CONDA_ENVIRONMENTS_FILE = "%USERPROFILE%\\.conda\\environments.txt"
+CONDA_OUTSIDE = (("conda environments outside environments.txt (.condarc envs_dirs, "
+                  "CONDA_ENVS_PATH)"), "not searched")
+CONDA_META_SUFFIX = ".json"
+
+
+def conda_item(label: str, folder: str, file_name: str) -> tuple[str, dict]:
+    """``(key, item)`` of one ``conda-meta`` file name ``<name>-<version>-<build>.json``,
+    split at the last two ``-``. A name that does not split into three non-empty parts
+    is an unreadable item, never guessed."""
+    stem = file_name.strip()
+    if stem.casefold().endswith(CONDA_META_SUFFIX):
+        stem = stem[:-len(CONDA_META_SUFFIX)]
+    parts = stem.rsplit("-", 2)
+    item = {"name": stem, "version": None, "build": None, "environment": label,
+            "folder": folder, "status": "read", "reason": None}
+    if len(parts) == 3 and all(part.strip() for part in parts):
+        item.update(name=parts[0], version=parts[1], build=parts[2])
+    else:
+        unreadable_item(item, f"the conda-meta file name {file_name} does not split into "
+                              f"<name>-<version>-<build>")
+    return f"conda:{label}|{item['name'].strip().casefold()}", item
+
+
+def collect_conda(col: Collector, previous: dict) -> tuple[str, dict]:
+    """``(status, {key: item})`` of the source ``conda_packages``; the summary part is
+    kept in ``col.conda_summary``.
+
+    No ``environments.txt``: ``not_present`` (source ``empty``). A file that could not
+    be read: ``unreadable`` (count null), the previous items kept ``from_baseline``.
+    Else each prefix is an environment labelled by its last folder name (``~2``,
+    ``~3``... for a later prefix of the same label): a prefix whose folder is absent
+    gives no item; one whose ``conda-meta`` could not be listed keeps its previous items
+    ``from_baseline``, is named in not_checked, and makes the count null.
+    """
+    file = CONDA_ENVIRONMENTS_FILE
+    answer = read_locations(col, "conda_environments", CONDA_ENVIRONMENTS_BODY,
+                            "conda_environments", {"file": file}, [file], "prefixes",
+                            "prefix", depth=5)[file.casefold()]
+    if answer["status"] == "absent":
+        col.skip(*CONDA_OUTSIDE)
+        status, items, col.conda_summary = not_present(col, "conda", "conda_packages", [file])
+        return status, items
+    if answer["status"] == "unreadable":
+        items = carry_source(col, "conda_packages", previous,
+                             f"{file} could not be read: {answer['reason']}")
+        col.conda_summary = {"status": "unreadable", "file": file, "environments": None,
+                             "count": None, "unreadable": None}
+        return "unreadable", items
+    items, environments, count, unreadable, unread_envs = {}, [], 0, 0, 0
+    # one prefix may be written twice (case, slashes, trailing separator): read it once
+    done, rows = set(), []
+    for row in answer["prefixes"]:
+        row = row if isinstance(row, dict) else {}
+        prefix = text(row.get("prefix"))
+        if prefix is None:
+            unread_envs += 1
+            col.skip("conda_packages environment",
+                     "the conda_environments job gave a line without a prefix, so its "
+                     "packages are not read")
+            continue
+        prefix = prefix.strip().rstrip("\\/")
+        same = same_folder(prefix)
+        if same in done:
+            continue
+        done.add(same)
+        rows.append((row, prefix, re.split(r"[\\/]", prefix)[-1].casefold() or "?"))
+    labels = stable_labels([(name, prefix + "\\conda-meta") for _r, prefix, name in rows],
+                           previous)
+    for (row, prefix, _name), label in zip(rows, labels):
+        folder = prefix + "\\conda-meta"
+        status, files = row.get("status"), row.get("files")
+        if status == "absent":
+            environments.append({"label": label, "folder": prefix, "status": "absent"})
+            continue
+        if status != "read" or not isinstance(files, (list, str)):
+            reason = text(row.get("reason")) or (
+                "the conda_environments job gave no reason" if status == "unreadable"
+                else "the conda_environments job gave no file list")
+            environments.append({"label": label, "folder": prefix, "status": "unreadable"})
+            unread_envs += 1
+            col.skip(f"conda_packages {label}", f"{folder} could not be listed: {reason}")
+            carry(col, "conda_packages", previous, items,
+                  lambda key, label=label: key.startswith(f"conda:{label}|"))
+            continue
+        environments.append({"label": label, "folder": prefix, "status": "read"})
+        # Two files of one name (not written by conda): the plain key goes to the
+        # highest version, the others keep "|<file name>".
+        rows = sorted((conda_item(label, folder, file_name) + (file_name,)
+                       for file_name in as_list(files) if text(file_name) is not None),
+                      key=lambda found: (version_key(found[1]["version"]),
+                                         found[2].casefold()),
+                      reverse=True)
+        for key, item, file_name in rows:
+            if key in items:
+                key = f"{key}|{file_name.strip().casefold()}"
+            items[key] = item
+            if item["status"] == "read":
+                count += 1
+            else:
+                unreadable += 1
+    status = "read" if items or unread_envs else "empty"
+    col.record("conda_packages", status, None)
+    col.skip(*CONDA_OUTSIDE)
+    col.conda_summary = {"status": status, "file": file, "environments": environments,
+                         "count": None if unread_envs else count, "unreadable": unreadable}
+    return status, items
+
+
 # --- managers ----------------------------------------------------------------
 def load_managers(path: Path) -> tuple[list | None, str | None]:
     """``(entries, None)`` of ``data/managers.json`` (``{name, step, read}`` each, in
@@ -802,17 +1438,25 @@ def load_managers(path: Path) -> tuple[list | None, str | None]:
     return data, None
 
 
-def manager_state(status: str | None) -> str:
-    """``read`` for a source read (with or without packages), else ``unreadable``."""
+def manager_state(status: str | None, present: bool = True) -> str:
+    """``not_present`` when the collector found none of the manager's locations
+    (``present`` false), else ``read`` for a source read (with or without packages),
+    else ``unreadable``. The status alone never gives ``not_present``: a source read
+    with no package is ``empty`` too."""
+    if not present:
+        return "not_present"
     return "read" if status in READ_STATUSES else "unreadable"
 
 
 def build_managers(col: Collector) -> dict:
-    """``{name: entry}`` in the order of ``data/managers.json``: pip and npm with
-    their state and summary part, every other manager ``{state: "not_read"}`` with one
-    not_checked entry ``<name>: not read yet``. Without a readable file, pip and npm
-    only, and the file is named in not_checked."""
-    read_parts = {"pip": col.pip_summary, "npm": col.npm_summary}
+    """``{name: entry}`` in the order of ``data/managers.json``: each read manager
+    with its state and summary part (``{state: "not_present", looked_in}`` when none of
+    its locations exists), every other manager ``{state: "not_read"}`` with one
+    not_checked entry ``<name>: not read yet``. Without a readable file, the read
+    managers only, and the file is named in not_checked."""
+    read_parts = {"pip": col.pip_summary, "npm": col.npm_summary,
+                  "pipx": col.pipx_summary, "uv": col.uv_summary,
+                  "conda": col.conda_summary}
     entries, reason = load_managers(MANAGERS_FILE)
     if entries is None:
         col.skip(MANAGERS_FILE.name, f"the managers not read by this skill are not "
@@ -825,6 +1469,9 @@ def build_managers(col: Collector) -> dict:
         if part is None:
             managers[name] = {"state": "not_read"}
             col.skip(name, NOT_READ_YET)
+        elif name in col.not_present:
+            managers[name] = {"state": manager_state(part["status"], present=False),
+                              "looked_in": part["looked_in"]}
         else:
             managers[name] = {"state": manager_state(part["status"]), **part}
     return managers
@@ -838,6 +1485,12 @@ def collect(run_ps, work: Path, stamp: str, previous: dict):
         col, previous.get("pip_packages") or {})
     statuses["npm_packages"], current["npm_packages"] = collect_npm(
         col, previous.get("npm_packages") or {})
+    statuses["pipx_packages"], current["pipx_packages"] = collect_pipx(
+        col, previous.get("pipx_packages") or {})
+    statuses["uv_tools"], current["uv_tools"] = collect_uv(
+        col, previous.get("uv_tools") or {})
+    statuses["conda_packages"], current["conda_packages"] = collect_conda(
+        col, previous.get("conda_packages") or {})
     return statuses, current, col
 
 
@@ -868,7 +1521,7 @@ def compare_view(current: dict, unread_keys: set = frozenset(),
 
 
 def build_changes(previous: dict, current: dict, comparison: dict, numbering) -> list:
-    """Every change of a compared source, pip first, each source added, removed,
+    """Every change of a compared source in ``SOURCES`` order, each source added, removed,
     changed and then by key; ids ``c<n>`` from ``numbering`` (by key)."""
     changes = []
     for source in SOURCES:
@@ -887,6 +1540,10 @@ def build_changes(previous: dict, current: dict, comparison: dict, numbering) ->
                      "name": item.get("name")}
             if source == "pip_packages":
                 entry["python"] = item.get("python")
+            elif source == "pipx_packages":
+                entry["venv"] = item.get("venv")
+            elif source == "conda_packages":
+                entry["environment"] = item.get("environment")
             if fields is not None:
                 entry["fields"] = fields
             else:
@@ -898,7 +1555,7 @@ def build_changes(previous: dict, current: dict, comparison: dict, numbering) ->
 
 # --- packages ------------------------------------------------------------------
 def build_packages(current: dict, numbering) -> list:
-    """Every package of the read managers, pip then npm, each by key; ids ``k<n>``
+    """Every package of the read managers (pip, npm, pipx, uv, conda), each by key; ids ``k<n>``
     from ``numbering``. The full item of the source, with ``manager`` and ``key``."""
     packages = []
     for manager, source in READ_MANAGERS.items():
@@ -910,13 +1567,19 @@ def build_packages(current: dict, numbering) -> list:
 
 def summary_package(item: dict) -> dict:
     """The summary form of a package: ``id``, ``manager``, ``key``, ``name``,
-    ``version``, the Python (pip) and ``folder``; ``unreadable`` and ``reason`` when
+    ``version``, the Python (pip), the venv and ``injected`` (pipx), the environment
+    (conda) and ``folder``; ``unreadable`` and ``reason`` when
     its metadata could not be read, ``from_baseline`` when it was kept from the
     baseline because its folder could not be listed."""
     out = {"id": item["id"], "manager": item["manager"], "key": item["key"],
            "name": item.get("name"), "version": item.get("version")}
     if item["manager"] == "pip":
         out["python"] = item.get("python")
+    elif item["manager"] == "pipx":
+        out["venv"] = item.get("venv")
+        out["injected"] = item.get("injected")
+    elif item["manager"] == "conda":
+        out["environment"] = item.get("environment")
     out["folder"] = item.get("folder")
     if item.get("status") == "unreadable":
         out["unreadable"] = True
@@ -1097,10 +1760,8 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
         "comparison": comparison,
         "packages": packages,
         "changes": changes,
-        "pip_packages": [{"key": key, **item}
-                         for key, item in sorted(current["pip_packages"].items())],
-        "npm_packages": [{"key": key, **item}
-                         for key, item in sorted(current["npm_packages"].items())],
+        **{source: [{"key": key, **item} for key, item in sorted(current[source].items())]
+           for source in SOURCES},
         "summary_file": str(summary_file),
     }
     detail_file.write_text(dump(detail) + "\n", encoding="utf-8")
