@@ -181,6 +181,9 @@ sys.path.insert(0, str(Path(__file__).absolute().parents[2] / "ush-common" / "sc
 
 import baseline  # called as baseline.save(...), so tests can patch it
 import datadir
+
+sys.path.insert(0, str(Path(__file__).absolute().parent))
+import footprints
 import ids
 import psrun
 from psrun import dump, ps_script, run_job
@@ -343,6 +346,12 @@ MISSING_REASON = "target file does not exist"
 KEYS_NOT_READ = "its registry keys were not read"
 HKCU_ELEVATED = ("its HKCU keys were read from the elevated account, which may not be "
                  "the account that used the program; a non-elevated run reads them")
+# The program and autostart key prefixes an elevated run reads from its own account
+# (HKCU, the user Startup folder, the current account's MSIX packages): for the
+# program footprints they are not read in such a run.
+PER_USER_KEYS = {"win32_programs": ("win32:hkcu:",), "msix_programs": ("msix:",),
+                 "run_keys": ("run:hkcu\\",), "startup_folders": ("startup:user:",)}
+PER_USER_PREFIXES = tuple(prefix for prefixes in PER_USER_KEYS.values() for prefix in prefixes)
 # The roots under which leftover_keys looks for SOFTWARE\<publisher>\<display name>.
 LEFTOVER_KEY_ROOTS = ("HKLM\\SOFTWARE", "HKLM\\SOFTWARE\\WOW6432Node", "HKCU\\SOFTWARE")
 # A full local or network path: a drive letter and a backslash, or a UNC share.
@@ -2090,35 +2099,39 @@ def hash_reason(fact: dict, default: str) -> dict:
 
 
 def null_fact(path) -> dict:
-    return {"path": path, **{field: None for field in FACT_FIELDS}, "program": None}
+    return {"path": path, **{field: None for field in FACT_FIELDS}, "program": None,
+            "linked_by": None}
 
 
 def program_matcher(programs: dict, dirs: dict):
-    """``match(expanded path) -> program key or None``: the longest ``install_location``
-    that is a folder prefix of the path, case-insensitively.
+    """``match(expanded path, unique=False) -> program key or None``: the longest
+    ``install_location`` that is a folder prefix of the path, case-insensitively;
+    of several programs with that location the first key. With ``unique`` a
+    location several programs share gives None: the path is not one program's.
 
     A drive root and the four directories of ``dirs`` (``%ProgramFiles%`` and the
     others) never match.
     """
     skipped = {d.rstrip("\\/").casefold() for d in dirs.values() if text(d)}
-    locations = []
+    owners = {}
     for source in PROGRAM_SOURCES:
         for key, item in (programs.get(source) or {}).items():
             location = clean_path(item.get("install_location") if isinstance(item, dict) else None)
             location = location.rstrip("\\/") if location else None
             if not location or DRIVE_ROOT.match(location) or location.casefold() in skipped:
                 continue
-            locations.append((location.casefold() + "\\", key))
-    locations.sort(key=lambda entry: (-len(entry[0]), entry[1]))
+            owners.setdefault(location.casefold() + "\\", set()).add(key)
+    locations = sorted(((prefix, sorted(keys)) for prefix, keys in owners.items()),
+                       key=lambda entry: -len(entry[0]))
 
-    def match(expanded):
+    def match(expanded, unique=False):
         expanded = text(expanded)
         if expanded is None:
             return None
         folded = expanded.strip().casefold()
-        for prefix, key in locations:
+        for prefix, keys in locations:
             if folded.startswith(prefix):
-                return key
+                return None if unique and len(keys) > 1 else keys[0]
         return None
 
     return match
@@ -2231,6 +2244,7 @@ def collect_facts(col: Collector, current: dict, previous: dict, programs: dict,
                     fact["sha256_error"] = "the job gave no row for this file"
                     unread.add("facts")
                 fact["program"] = match(fact["expanded_path"])
+                fact["linked_by"] = "path" if match(fact["expanded_path"], True) else None
                 facts.append(hash_reason(fact, "the file could not be checked"))
         else:
             for target in item["targets"]:
@@ -2238,6 +2252,7 @@ def collect_facts(col: Collector, current: dict, previous: dict, programs: dict,
                 if target in known:
                     fact.update(carried_fact(known[target]))
                     fact["program"] = match(fact["expanded_path"])
+                    fact["linked_by"] = "path" if match(fact["expanded_path"], True) else None
                     item["facts_from_baseline"] = True
                     col.carried_facts.setdefault((source, key), set()).add(target)
                 elif target is not None:
@@ -2622,7 +2637,7 @@ def collect_firewall(col: Collector, builtin) -> tuple[str, dict]:
     return result["status"], items
 
 
-def apply_firewall_apps(col: Collector, items: dict) -> None:
+def apply_firewall_apps(col: Collector, items: dict, match=None) -> None:
     """Set ``app_exists`` of every rule with a program from the ``firewall_apps`` job.
 
     A rule without ``App``, with an empty one or with ``System`` (any case) gets no
@@ -2634,7 +2649,9 @@ def apply_firewall_apps(col: Collector, items: dict) -> None:
     The rules with a null ``app_exists`` are named in one ``not_checked`` item
     ``firewall_rules app_exists`` per reason (``APP_UNREAD_REASONS``). The expanded
     path of each value without a ``%`` left goes to ``col.firewall_expanded``, for
-    the leftovers.
+    the leftovers. With ``match`` (``program_matcher``), a rule with such an expanded
+    path also gets ``program`` (the key, or null) and ``linked_by`` (``"path"`` when
+    linked, else null); any other rule gets neither field.
     """
     rules, apps, seen = [], [], set()
     for item in items.values():
@@ -2686,6 +2703,9 @@ def apply_firewall_apps(col: Collector, items: dict) -> None:
         expanded = row.get("expanded") if row is not None else None
         if isinstance(app, str) and isinstance(expanded, str) and "%" not in expanded:
             col.firewall_expanded.setdefault(app.casefold(), expanded)
+            if match is not None:
+                item["program"] = match(expanded, True)
+                item["linked_by"] = "path" if item["program"] else None
         if not isinstance(app, str):
             reason = APP_UNREAD_REASONS["list"]
         elif row is None:
@@ -3185,7 +3205,8 @@ def collect(run_ps, work: Path, stamp: str, previous: dict, config: dict, admin:
 
     statuses["firewall_rules"], current["firewall_rules"] = collect_firewall(
         col, config["firewall_builtin"])
-    apply_firewall_apps(col, current["firewall_rules"])
+    apply_firewall_apps(col, current["firewall_rules"], program_matcher(
+        programs, {n: v.get("path") for n, v in current["file_facts"].items()}))
     statuses["root_certificates"], current["root_certificates"] = collect_certificates(
         col, config, first_run)
     statuses["hosts"], current["hosts"] = collect_hosts(col, config["hosts_default_dir"])
@@ -3666,12 +3687,13 @@ def summary_program(program: dict) -> dict:
 
 
 def summary_fact(fact):
-    """One file fact as it goes to the summary: without ``company`` and
-    ``check_error``, and without ``expanded_path`` when it equals ``path``."""
+    """One file fact as it goes to the summary: without ``company``,
+    ``check_error``, the hash fields and ``linked_by``, and without
+    ``expanded_path`` when it equals ``path``."""
     if not isinstance(fact, dict):
         return fact
     return {k: v for k, v in fact.items()
-            if k not in ("company", "check_error", "sha256", "sha256_error")
+            if k not in ("company", "check_error", "sha256", "sha256_error", "linked_by")
             and not (k == "expanded_path" and v == fact.get("path"))}
 
 
@@ -4076,7 +4098,8 @@ def collect_vendor_folders(col: Collector, roots: list) -> list:
     return rows
 
 
-def vendor_children(col: Collector, config: dict, rows: list) -> tuple[list, int, int]:
+def vendor_children(col: Collector, config: dict, rows: list,
+                    dropped: dict | None = None) -> tuple[list, int, int]:
     """``(folders, reparse points, installer GUID folders)``: the child folders of the
     read roots after the skips, each ``{id, key, name, path, root, has_entries,
     reason, last_write, matched, matched_by}``, by root and then by name.
@@ -4085,8 +4108,22 @@ def vendor_children(col: Collector, config: dict, rows: list) -> tuple[list, int
     name of ``windows_names``. A row that is not a direct child of its root, or does
     not say whether it is a reparse point, is not judged and is named in not_checked.
     A folder whose entries were not listed has ``has_entries`` None and a reason.
+    ``dropped``, when given, gets ``keys`` (the folder keys of the skipped rows that
+    name a path) and ``roots`` (the case-folded expansions of the roots with a row not
+    judged): their presence was not read.
     """
     folders, reparse, guid, malformed = [], 0, 0, 0
+    if dropped is not None:
+        dropped.setdefault("keys", set())
+        dropped.setdefault("roots", set())
+
+    def drop(path, root=None):
+        if dropped is not None:
+            if path is not None:
+                dropped["keys"].add(f"vendor_folder:{path.casefold()}")
+            if root is not None:
+                dropped["roots"].add(root.casefold())
+
     for place, row in enumerate(rows):
         if row["status"] != "read":
             continue
@@ -4098,14 +4135,18 @@ def vendor_children(col: Collector, config: dict, rows: list) -> tuple[list, int
             if name is None or path is None or not isinstance(child.get("reparse_point"), bool) \
                     or path.rstrip("\\/").rsplit("\\", 1)[0].casefold() != expanded.casefold():
                 malformed += 1
+                drop(path, expanded)
                 continue
             if child["reparse_point"]:
                 reparse += 1
+                drop(path)
                 continue
             if installer and GUID_NAME.match(name.strip()):
                 guid += 1
+                drop(path)
                 continue
             if name.strip().casefold() in config["windows_names"]:
+                drop(path)
                 continue
             has_entries = child.get("has_entries")
             has_entries = has_entries if isinstance(has_entries, bool) else None
@@ -4157,7 +4198,8 @@ def find_vendor_folders(col: Collector, config, rows: list, programs: dict, auto
                 for row in rows], "folders": None}
     if config is None or not any(row["status"] == "read" for row in rows):
         return None, counts, section
-    folders, reparse, guid = vendor_children(col, config, rows)
+    section["dropped"] = {}
+    folders, reparse, guid = vendor_children(col, config, rows, section["dropped"])
     counts.update(vendor_folders_read=len(folders), reparse_points=reparse,
                   installer_guid_folders=guid)
 
@@ -4177,12 +4219,12 @@ def find_vendor_folders(col: Collector, config, rows: list, programs: dict, auto
     system_root = text(dir_paths.get("SystemRoot"))
     locations, publishers = [], set()
     for source in PROGRAM_SOURCES:
-        for item in (programs.get(source) or {}).values():
+        for key, item in (programs.get(source) or {}).items():
             if not isinstance(item, dict):
                 continue
             location = usable_folder(item.get("install_location"), skipped, system_root)
             if location:
-                locations.append(location)
+                locations.append((location, key))
             publisher = publisher_of(item)
             if publisher:
                 publishers.add(publisher)
@@ -4214,7 +4256,9 @@ def find_vendor_folders(col: Collector, config, rows: list, programs: dict, auto
 
     for folder in folders:
         by = []
-        if any(under(location, folder["path"]) for location in locations):
+        folder["programs"] = sorted({key for location, key in locations
+                                     if under(location, folder["path"])})
+        if folder["programs"]:
             by.append("install_location")
         if any(under(target, folder["path"]) for target in targets):
             by.append("target")
@@ -4655,6 +4699,115 @@ def save_removed(state_dir: Path, kept: list, had_file: bool):
                          "hkcu_absent": entry.get("hkcu_absent") is True}
                         for entry in kept]}
     return baseline.save_json(state_dir, REMOVED_STATE, data, removed_state_reason)
+
+
+def footprint_presence(col: Collector, current: dict, statuses: dict,
+                       vendor_section: dict, admin: bool = False) -> dict:
+    """``{kind: {present, unread, prefixes[, within]}}`` for ``footprints.update``: the
+    program and trace keys read in this run and the ones whose presence was not read.
+    A kind whose source was not read has the prefix ``""``; an item kept from the
+    baseline is not read; an elevated run does not read the per-user keys
+    (``PER_USER_KEYS``, as ``HKCU_ELEVATED``): they are neither present nor absent there,
+    so their entries and traces are kept as they were. A vendor folder is read only
+    under a root read and listed completely (``within``), and not when its row was
+    skipped."""
+    presence = {}
+    for kind in PROGRAM_SOURCES + AUTOSTART_SOURCES + ("firewall_rules",):
+        if statuses.get(kind) not in READ_STATUSES:
+            presence[kind] = {"present": set(), "unread": set(), "prefixes": ("",)}
+            continue
+        items = current.get(kind) or {}
+        per_user = PER_USER_KEYS.get(kind, ()) if admin else ()
+        presence[kind] = {
+            "present": {k for k, item in items.items()
+                        if not item.get("from_baseline") and not k.startswith(per_user)},
+            "unread": {k for source, k in col.unread_keys if source == kind}
+            | {k for k, item in items.items() if item.get("from_baseline")},
+            "prefixes": per_user,
+        }
+    programs = [presence.pop(kind) for kind in PROGRAM_SOURCES]
+    presence["programs"] = {
+        "present": set().union(*(p["present"] for p in programs)),
+        "unread": set().union(*(p["unread"] for p in programs)),
+        "prefixes": tuple(prefix for kind, p in zip(PROGRAM_SOURCES, programs)
+                          for prefix in ((f"{kind.split('_')[0]}:",) if "" in p["prefixes"]
+                                         else p["prefixes"])),
+    }
+    if vendor_section["folders"] is not None:
+        dropped = vendor_section.get("dropped") or {}
+        roots = {row["expanded"].rstrip("\\/").casefold()
+                 for row in vendor_section["roots"] or []
+                 if row["status"] == "read" and row["expanded"] is not None}
+        presence["vendor_folders"] = {
+            "present": {folder["key"] for folder in vendor_section["folders"]},
+            "unread": set(dropped.get("keys") or ()), "prefixes": (),
+            "within": tuple(f"vendor_folder:{root}\\"
+                            for root in sorted(roots - set(dropped.get("roots") or ())))}
+    return presence
+
+
+def footprint_links(current: dict, statuses: dict, autostart: list,
+                    vendor_section: dict, admin: bool = False) -> list:
+    """``[(program key, kind, trace key, linked_by)]``: the explicit links of this run.
+    An autostart fact links only when ``file_facts`` was read and the entry is not kept
+    from the baseline. An elevated run links no per-user program or trace
+    (``PER_USER_KEYS``)."""
+    links = []
+    if statuses.get("file_facts") in READ_STATUSES:
+        for entry in autostart:
+            if entry.get("from_baseline"):
+                continue
+            for fact in entry.get("facts") or []:
+                if fact.get("program") and fact.get("linked_by") == "path":
+                    links.append((fact["program"], entry["source"], entry["key"], "path"))
+    if statuses.get("firewall_rules") in READ_STATUSES:
+        for key, item in (current.get("firewall_rules") or {}).items():
+            if item.get("program") and item.get("linked_by") == "path":
+                links.append((item["program"], "firewall_rules", key, "path"))
+    for folder in vendor_section["folders"] or []:
+        for program in folder.get("programs") or []:
+            links.append((program, "vendor_folders", folder["key"], "install_location"))
+    if admin:
+        links = [link for link in links if not link[0].startswith(PER_USER_PREFIXES)
+                 and not link[2].startswith(PER_USER_PREFIXES)]
+    return links
+
+
+def save_footprints(col: Collector, state: Path, merged_sources: dict, current: dict,
+                    statuses: dict, autostart: list, vendor_section: dict, admin: bool,
+                    today: str) -> dict | None:
+    """Load, update and save ``state/footprints.json``; the saved content, or None with
+    a not_checked item naming the file when it could not be read (then it is left as
+    it was) or saved."""
+    loaded = footprints.load(state.parent)
+    if loaded["status"] == "unreadable":
+        col.skip(f"state/{footprints.FILE_NAME}",
+                 f"the program footprints were not updated and the file was left as it "
+                 f"was: {loaded['reason']}")
+        return None
+    programs = {key: (item.get("name") if isinstance(item, dict) else None)
+                for source in PROGRAM_SOURCES
+                for key, item in (merged_sources.get(source) or {}).items()
+                if not (admin and key.startswith(PER_USER_PREFIXES))}
+    data = footprints.update(loaded, programs,
+                             footprint_links(current, statuses, autostart, vendor_section,
+                                             admin),
+                             footprint_presence(col, current, statuses, vendor_section,
+                                                admin),
+                             admin, today)
+    reason = baseline.save_json(state, footprints.NAME, data, footprints.check)
+    if reason is not None:
+        # save_json also gives a reason when the new file is in place and only the
+        # previous copy was not rotated: then this run's footprints were saved.
+        if reason.startswith(f"the new {footprints.FILE_NAME} is saved, but "):
+            col.skip(f"state/{footprints.NAME}.previous.json",
+                     f"the program footprints of this run were saved, but the previous "
+                     f"copy was not kept: {reason}")
+            return data
+        col.skip(f"state/{footprints.FILE_NAME}",
+                 f"the program footprints of this run were not saved: {reason}")
+        return None
+    return data
 
 
 # --- summary and detail ------------------------------------------------------
@@ -6268,6 +6421,10 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
         col, vendor_config, vendor_rows, merged_sources, autostart, current["file_facts"],
         statuses, previous, numbering)
     component_counts.update(vendor_counts)
+    # Program footprints, saved before the detail file is written.
+    footprint_data = save_footprints(col, state, merged_sources, current, statuses,
+                                     autostart, vendor_section, admin,
+                                     now.date().isoformat())
 
     detail = {
         "schema_version": SCHEMA_VERSION,
@@ -6286,6 +6443,7 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
         "leftovers": leftovers,
         "vendor_folders": vendor_section["folders"],
         "vendor_folder_roots": vendor_section["roots"],
+        "footprints": footprint_data,
         "hosts_file": col.hosts_file,
         "current_sid": col.current_sid,
         "changes": changes,
@@ -6366,6 +6524,8 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
         "additions": listed_additions,
         "leftovers": leftovers,
         "vendor_folders": listed_vendor_folders,
+        "footprint_counts": (footprints.counts(footprint_data)
+                             if footprint_data is not None else None),
         "hosts_file": hosts_file,
         "own_counts": {"programs": own_count, "autostart": own_autostart,
                        "unknown": unknown,

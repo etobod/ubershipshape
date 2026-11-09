@@ -211,7 +211,8 @@ Say so if the user asks for these.
    ```
 
    It prints the summary JSON on stdout and writes it, with a detail file, to
-   `<data dir>/work/`, and saves the new baseline to `<data dir>/state/`.
+   `<data dir>/work/`, and saves the new baseline and the program footprints
+   (`state/footprints.json`) to `<data dir>/state/`.
    The field meanings are in `references/summary-contract.md`.
 
    When the user asks about changes over a longer period ("what changed this
@@ -367,7 +368,8 @@ Say so if the user asks for these.
    ```
    # Runs the same read-only inventory with administrator rights. It changes
    # nothing on the machine and writes only to <data dir>\work\ and
-   # <data dir>\state\ (a separate elevated baseline and the id map).
+   # <data dir>\state\ (a separate elevated baseline, the id map and the
+   # program footprints).
    Set-Location "<absolute plugin root>"
    python -B skills/ush-inventory/scripts/inventory.py --data-dir "<absolute data dir>"
    ```

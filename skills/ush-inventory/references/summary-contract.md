@@ -19,7 +19,9 @@ contract):
   `schema_version`, `skill`, `generated_at`, `elevated`, `sources`,
   `comparison` and the full lists `programs`, `autostart`, `components`,
   `drivers`, `driver_packages`, `additions`, `leftovers`, `vendor_folders` (every folder read, see "Vendor folders") and `changes` (never truncated), with the same ids
-  as the summary, plus `vendor_folder_roots`, `hosts_file` (with `raw_dir`, `expanded_dir` and
+  as the summary, plus `vendor_folder_roots`, `footprints` (the content saved to
+  `state/footprints.json` in this run, `null` when the file could not be read or
+  saved; see "Program footprints"), `hosts_file` (with `raw_dir`, `expanded_dir` and
   `path`), `current_sid` and `drivers_without_inf_items` (see "Drivers").
   It also holds what the summary leaves out: the
   programs, autostart entries, drivers, firewall rules and certificates
@@ -34,7 +36,9 @@ contract):
   the full items, and the comparison and `own` are computed from them.
 - `state/ush-inventory.json`, or `state/ush-inventory.elevated.json` for a
   run with administrator rights - the baseline (shared contract,
-  "Baseline"). It is the only file the script keeps between runs.
+  "Baseline"). Beside it the script keeps the id map, the first-run decisions,
+  `state/inventory-removed.json` and `state/footprints.json` (see "Program
+  footprints"), one file for the normal and the elevated run.
   A baseline saved before pip and npm moved to `ush-packages` still holds
   the sources `pip_packages` and `npm_packages`: they stay in the file
   (`merge_sources` keeps a source this skill no longer reads), and nothing
@@ -214,6 +218,7 @@ Besides the shared fields (`schema_version`, `skill` = `"ush-inventory"`,
 | `additions` | list or `null` | the items of the five added-to-the-system sources whose `own` is not `true`: first those with a change block, then those without, each group by kind in this order: `administrator`, `defender_exclusion`, `root_certificate`, `firewall_rule`, `hosts_entry`; ids `x..` (see "Additions"). `null` when none of the five sources was read. Cut to the budget (`truncated_additions`) |
 | `leftovers` | list | what removed programs left, never cut (see "Leftovers"); ids `l..`; `[]` when nothing is left |
 | `vendor_folders` | list or `null` | the top-level folders of the vendor roots that no rule matches, cut to the budget like `driver_packages` (`truncated_vendor_folders`, see "Files and output" and "Vendor folders"): `matched` `false` (no installed program matches) or `matched` `null` with `not_judged` (not judged, because something was not read); ids `v..`; `[]` with `truncated_vendor_folders` `0` when every folder read is matched or a Windows name (with `truncated_vendor_folders` above `0` the folders were cut: give the count, never call the list clean) |
+| `footprint_counts` | object or `null` | the counts of `state/footprints.json` as saved by this run (see "Program footprints"): `programs` (entries), `programs_gone` (entries with `gone_since`), `traces` and `traces_present` (the traces in the entries' `traces` lists, and those with `present` `true`), `shared` (items of `shared`), `gone_with_present_traces` (entries with `gone_since` that have a trace with `present` `true`; a shared folder is not counted). Fixed size, never cut. `null` when the file could not be read or saved; `not_checked` then has the item `state/footprints.json`. Counts, never a verdict |
 | `hosts_file` | object | `{exists, path_is_default}` and, when any is `null`, `unread_fields` naming it (see "hosts_file") |
 | `own_counts` | object | `programs`: the number of programs with `own: true`; `autostart`: `{kind: number}` of the entries with `own: true`, per `kind`; `unknown`: the number of entries with `own: null`; `drivers`: the drivers with `own: true` (`null` when not read); `firewall_rules`: `{local, app_iso, policy}` numbers of rules with `own: true` per store (`null` when not read); `root_certificates`: the certificates with `own: true` (`null` when not read) |
 | `changes` | list | the changes since the baseline whose item is not own on at least one side; ids `c..`. The changes named by a rule of `data/collapsed_names.json` (a list of `{source, collapsed, prefix}`; today the firewall rules whose `name` starts with `ms-resource:`, an unresolved resource string, case-insensitive) are collapsed: one entry `{collapsed, source, change, count}` (e.g. `{collapsed: "ms-resource", source: "firewall_rules", change, count}`) per rule and change type, without an id, ahead of the other changes, so the budget cuts the other changes first; the detail file keeps each with its id. Cut to the budget (`truncated_changes`, `change_counts`) |
@@ -283,7 +288,7 @@ checked", not "no pairs".
 | `state` | `task` and `service`: as read (`Ready`, `Disabled`, `Running`, `Stopped`, ...). For a per-user service `Running` when any instance runs, else the state of the first instance by name. Not compared |
 | `display_name`, `delayed`, `user_service`, `template_start` | `service` only: the display name (only in the detail file); `delayed` `true` when `DelayedAutostart` = 1; `user_service` `true` for a per-user service; `template_start` the `Start` value of the template key (per-user services only; `null` when not read). A service whose registry values could not be read and that the previous baseline does not have names in `unread_fields` only the fields whose values were not read before the error: `delayed` (then `null`) when `DelayedAutostart` was not read, `user_service` when `Type` was not read; when it runs in `svchost.exe` (its target is a registry value) and its `ServiceDll` is unknown also `targets` and `facts`, and `own` `null`: then it is counted in `own_counts.unknown` and listed only in the detail file (see "Values not read") |
 | `targets` | the target files as text, in action order, as taken from `command` before variables are expanded; `null` for a target that cannot be named. Only in the detail file: in the summary each target is the `path` of its fact |
-| `facts` | one fact per target, in the same order: `{path, expanded_path, exists, signature_status, signer, company, sha256, sha256_error, program}`. `sha256` is the lower-case SHA-256 of the file's bytes, or `null` with `sha256_error` saying why (the file does not exist, its existence is not confirmed, the read failed, the job gave no row or no valid hash for it, or the fact was carried from a baseline that holds no hash); it is not compared between runs and is carried from the baseline like the other facts. A fact of a file that could not be checked also has `check_error`, the reason. In the summary a fact has no `company`, `check_error`, `sha256` or `sha256_error`, and no `expanded_path` when it equals `path`; the detail file has every field |
+| `facts` | one fact per target, in the same order: `{path, expanded_path, exists, signature_status, signer, company, sha256, sha256_error, program, linked_by}`; `linked_by` is `"path"` when `program` is a key and no other program has the same `install_location`, else `null`. `sha256` is the lower-case SHA-256 of the file's bytes, or `null` with `sha256_error` saying why (the file does not exist, its existence is not confirmed, the read failed, the job gave no row or no valid hash for it, or the fact was carried from a baseline that holds no hash); it is not compared between runs and is carried from the baseline like the other facts. A fact of a file that could not be checked also has `check_error`, the reason. In the summary a fact has no `company`, `check_error`, `sha256`, `sha256_error` or `linked_by`, and no `expanded_path` when it equals `path`; the detail file has every field |
 | `facts_from_baseline` | `true` when facts are the previous baseline's, because `file_facts` (or one file) could not be read |
 | `own` | see "own and windows-own.json"; always `false` in the summary list |
 | `unread_fields` | the fields whose value is unknown in this run (`["approved", "enabled"]`, `["enabled"]` for an `unknown` `approved`, `["facts"]`); they are never compared |
@@ -317,7 +322,8 @@ named in a `not_checked` item `file_facts exists`, one per cause);
 `O=` of the signing certificate; `company`, `CompanyName` of the file's
 version info; `program`, the key of the program (`win32:...` or `msix:...`)
 whose `install_location` is the **longest** folder prefix of
-`expanded_path`, case-insensitively, else `null`. An `install_location` that
+`expanded_path`, case-insensitively (of several programs with that location
+the first key), else `null`. An `install_location` that
 is a drive root, `%ProgramFiles%`, `%ProgramFiles(x86)%`, `%SystemRoot%` or
 `System32` never matches. `program` is a match of facts, not a verdict: a
 target with `exists: false` and `program: null` is what the model may call
@@ -478,6 +484,7 @@ and in `unread_fields`.
 | `lport2` | the values of every other key of the rule text that starts with `LPort` (`LPort2_10`, `LPort2_20`, ...), in key order and in value order within a key, as a list of text; `null` when there is none. Detail file only, not compared |
 | `version` | the rule text's version (`v2.xx`, detail file only) |
 | `app_exists` | only on a rule whose `app` is not `null`, empty or `System` (any case): `true` when the job `firewall_apps` found a file at the expanded path, `false` only when `Get-Item` said "not found" and listing the parent folder confirms it (Windows PowerShell 5.1 also says "not found" for a file in a folder the account may not read, which gives `null`) (no file at this path in the profile of the running account; a path into another account's profile can give `false`). `null` in `unread_fields` when `app` is a list (the key repeated), the job failed or gave no row for the value, the expanded value still holds a `%` (a variable this account does not know; a raw `%SystemRoot%` is fine), the path is not on a local drive (UNC paths and network drives are not checked, so nothing leaves the machine), or `Get-Item` failed otherwise (e.g. access denied in `WindowsApps`). Not compared |
+| `program`, `linked_by` | only on a rule whose `app` the job `firewall_apps` expanded to a path without a `%`: `program` the key of the program whose `install_location` is the longest folder prefix of the expanded path (the matcher of the autostart facts' `program`), else `null`, also when several programs have that location; `linked_by` `"path"` when `program` is a key, else `null`. A rule whose `app` is `null`, empty, `System` or a list, or whose expansion failed or was not read, has neither field. Detail file only, not compared |
 
 A value that is not a `v2.` rule text has every field `null` and
 `unread_fields` `["rule"]` plus every compared field (`action`, `dir`,
@@ -687,8 +694,11 @@ given as a count, its id is never named unless it was fetched with `--detail`.
 
 The detail file's list `vendor_folders` holds every folder read after the
 skips, matched ones included, with `id` (`null` unless listed), `key`, `name`,
-`path`, `root`, `has_entries`, `reason`, `last_write`, `matched` and
-`matched_by`; a report may name a `v..` id from it in an `ush:detail` line.
+`path`, `root`, `has_entries`, `reason`, `last_write`, `matched`,
+`matched_by` and `programs`: the sorted keys of the programs whose
+`install_location` (as the `install_location` rule takes it) is the folder or
+lies under it (linked by `install_location`), `[]` when none; the `target` and
+`vendor` rules add no key. A report may name a `v..` id from it in an `ush:detail` line.
 It is `null` whenever the summary list `vendor_folders` is `null`, never `[]`.
 Beside it, `vendor_folder_roots` gives each root of the data file, in its
 order, as `{root, expanded, status, reason}` (`status` `read` or
@@ -697,6 +707,79 @@ reason and `expanded` `null`. `vendor_folder_roots` is `null` only when the
 data file could not be used (the roots are then unknown).
 
 This skill has no block for a folder (`--block v<n>` says so).
+
+### Program footprints
+
+Every run (normal or elevated) keeps the traces it can tie to a program
+explicitly in `<data dir>/state/footprints.json` (written by this script
+only, saved verified through the shared `save_json`, before the detail file
+is written):
+
+```
+{"schema_version": 1,
+ "entries": [{"key", "name", "first_seen", "gone_since",
+              "traces": [{"kind", "key", "linked_by", "first_seen", "present",
+                          "gone_since", "seen_elevated"}]}],
+ "shared": [{"kind", "key", "linked_by", "programs", "first_seen", "present",
+             "gone_since", "seen_elevated"}]}
+```
+
+- `entries`: one per program key the run lists (`win32:...`, `msix:...`,
+  also the baseline's programs of a source not read), with or without
+  traces, by key. `first_seen` is the UTC date (`YYYY-MM-DD`) the program
+  was first listed, carried from the file; `gone_since` is `null` while the
+  program is listed, else the first day its read source no longer had it (a
+  program of a source or key not read keeps its value). `name` is the
+  program's name as last listed.
+- An elevated run neither reads nor changes the per-user programs and traces
+  (`win32:hkcu:...`, every `msix:...`, `run:hkcu\...`, `startup:user:...`),
+  whether the elevated account has them or not, since that account may not
+  be the user's (as for `hkcu_absent` of the leftovers): the per-user
+  program entries (`gone_since`, `name`) and the per-user traces (`present`,
+  `gone_since`, `seen_elevated`) keep every value, and the run adds no entry
+  for a per-user program of its own and no link from or to a per-user
+  program or trace. A machine-level trace of a per-user program (a vendor
+  folder, firewall rule, service or scheduled task) is not per-user: the
+  elevated run stamps it like any other trace (`present`, `gone_since`,
+  `seen_elevated` `true` when seen), and a vendor folder it links to a
+  second program becomes shared.
+- A trace is linked explicitly: an autostart entry (`kind` the source:
+  `run_keys`, `startup_folders`, `scheduled_tasks`, `services`) through a
+  fact's `program` with `linked_by` `"path"`, only when `file_facts` was read
+  and the entry was read in this run; a firewall rule (`kind`
+  `firewall_rules`) through its `program` with `linked_by` `"path"`; a vendor
+  folder (`kind` `vendor_folders`) through its `programs` (`linked_by`
+  `"install_location"`). `key` is the trace's own key (`run:...`, `task:...`,
+  `firewall:<store>:<name>`, `vendor_folder:<case-folded path>`).
+- A link, once recorded, is kept. `present` says whether the trace's own key
+  is in its read source in this run, never whether the link was found again,
+  so the traces of a removed program still on the machine stay `present`
+  `true`. A trace whose key is missing from its read source gets `present`
+  `false` and `gone_since` that day; `present` `true` again clears it. A
+  trace keeps its values when its presence was not read: its source not
+  read, the item kept from the baseline, a per-user trace in an elevated
+  run, the list
+  `vendor_folders` of the detail file `null`, or a trace an elevated run saw
+  (`seen_elevated` `true`) checked by a normal run. A vendor folder is
+  `present` `false` only when its root was read and listed completely and the
+  folder is not among the root's folders after the skips; it keeps its values
+  when its root was not read or is no longer one of the data file's roots,
+  when the root had a row that is not judged (`vendor_folders rows`), or
+  when its own row was skipped (a reparse point, an `Installer` GUID folder,
+  a name of `windows_names`).
+- A vendor folder that holds the locations of several programs (in one run,
+  or a folder already one program's trace that another program's location
+  joins) is one item of `shared` with `programs`, the sorted keys of every
+  program ever linked to it, and is in no entry's `traces`; it stays shared.
+  Its `first_seen` is the earliest of the trace dates it replaced.
+- Nothing is removed and no block is printed from this file. A file that
+  cannot be read (bad JSON, a wrong `schema_version`, a bad date, a
+  `linked_by` other than `path` or `install_location`, two entries or traces
+  with one key) is left as it was: nothing is updated,
+  `footprint_counts` and the detail file's `footprints` are `null` and
+  `not_checked` has the item `state/footprints.json` with the reason. A
+  failed save gives the same item with the save's reason; the run still
+  exits 0 with its other results.
 
 ### Package managers
 
@@ -945,6 +1028,8 @@ Besides one item per `unreadable` source (`what` = the source name):
 | `firewall_rules app_exists` | rules whose `app_exists` is `null` (their `unread_fields` name `app_exists`), one item per reason: the App value repeated, no answer of `firewall_apps`, a variable this account does not know, or a file that could not be checked; the reason names up to 20 rule keys |
 | `install_folders`, `install_folders <folder>` | the job failed, or one removed program's folder could not be read; that folder part is `unreadable` |
 | `state/inventory-removed.json` | the state file of removed programs could not be read or saved (see "Leftovers") |
+| `state/footprints.json` | the program footprints could not be read (the file is left as it was) or this run's could not be saved; the reason says which and why; `footprint_counts` is `null` (see "Program footprints") |
+| `state/footprints.previous.json` | this run's program footprints were saved, but the previous copy of the file was not kept; `footprint_counts` and the detail `footprints` hold this run's values |
 | `leftovers <name>` | a removed program with no leftover found is kept in the state file because this run did not read everything that could hold one; the reason says what |
 | `leftovers of missing targets` | `%SystemRoot%` is not known in this run, so entries with missing targets were not grouped |
 | `summary budget` | the summary is over the budget even with all eight cut lists empty |

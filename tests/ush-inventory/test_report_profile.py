@@ -932,5 +932,43 @@ class TestNoPackageManagersProfile(unittest.TestCase):
         self.assertNotIn("package_managers", output)
 
 
+# Plan 064 M2 (K7): until part 7b gives it report wording, footprint_counts sits in the
+# inventory summary, and a report in the current format must still pass the profile.
+FOOTPRINT_COUNTS = {
+    "programs": 41,
+    "programs_gone": 3,
+    "traces": 57,
+    "traces_present": 52,
+    "shared": 7,
+    "gone_with_present_traces": 2,
+}
+
+
+class TestFootprintCountsProfile(unittest.TestCase):
+    # The helpers of TestProfile, without running its tests a second time.
+    setUp = TestProfile.setUp
+    _assert_real_profile = TestProfile._assert_real_profile
+    _write_summary = TestProfile._write_summary
+    _write_report = TestProfile._write_report
+    _run = TestProfile._run
+    _run_guarded = TestProfile._run_guarded
+    _write_vendor_summary = TestVendorFoldersProfile._write_vendor_summary
+
+    def test_summary_with_footprint_counts_passes(self):
+        self._assert_real_profile()
+        summary_file = self._write_vendor_summary("inventory-trace-counts")
+        summary = json.loads(Path(summary_file).read_text(encoding="utf-8"))
+        summary["footprint_counts"] = dict(FOOTPRINT_COUNTS)
+        Path(summary_file).write_text(json.dumps(summary), encoding="utf-8")
+
+        lines = _report_vendor_folders_lines(summary_file)
+        self.assertFalse(any("footprint" in line for line in lines))
+        code, output = self._run_guarded(
+            self._write_report(lines, "inventory-2026-11-09-1400.md"))
+        self.assertEqual(code, 0,
+                         f"the report with footprint_counts should pass; output:\n{output}")
+        self.assertIn("OK", output)
+
+
 if __name__ == "__main__":
     unittest.main()
