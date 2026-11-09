@@ -366,8 +366,8 @@ class TestRunMe(unittest.TestCase):
 # section check_report.py printed after its OK line, plus the report path, nothing added.
 # Assumptions beyond the plan: the step names "chat", `check_report.py`, "print",
 # "OK", "path", and "nothing added" or "nothing else".
-REPORT_SKILLS = ("advice", "events", "files", "health", "inventory", "processes",
-                 "runall", "settings")
+REPORT_SKILLS = ("advice", "events", "files", "health", "inventory", "packages",
+                 "processes", "runall", "settings")
 
 
 class TestPlugin(unittest.TestCase):

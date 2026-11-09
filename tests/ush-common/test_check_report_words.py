@@ -21,7 +21,7 @@ from tests.skill_loader import REPO_ROOT, load_script
 NOT_CHECKED = ["## Nie sprawdzono", "<!-- ush:not-checked -->", "Nic."]
 REAL_WORDS_FILE = REPO_ROOT / "skills" / "ush-common" / "data" / "number-words.json"
 SKILLS = ("ush-advice", "ush-events", "ush-files", "ush-health", "ush-inventory",
-          "ush-processes", "ush-runall", "ush-settings")
+          "ush-packages", "ush-processes", "ush-runall", "ush-settings")
 EXIT_ERROR = 2  # "the report, its JSON or its profile could not be checked"
 
 
@@ -323,6 +323,12 @@ def _inventory_data(summary_file, detail_file):
     return summary, {section: summary.get(section) or [] for section in mod.DETAIL_SECTIONS}
 
 
+def _packages_data(summary_file, detail_file):
+    mod = _skill_tests("ush-packages", "test_report_profile")
+    summary = mod.clean_summary(summary_file, detail_file)
+    return summary, {section: summary[section] for section in ("packages", "changes")}
+
+
 def _processes_data(summary_file, detail_file):
     mod = _skill_tests("ush-processes", "test_report_profile")
     summary = mod._clean_summary(summary_file, detail_file)
@@ -483,6 +489,44 @@ def _inventory_body():
     ]
 
 
+def _packages_body():
+    not_updated = "nie sprawdzono pod kątem aktualizacji"
+    return [
+        "# Raport pakietów, 2026-11-09 10:00",
+        "",
+        "## Przegląd",
+        "| Menedżer | Stan | Pakiety |",
+        "|----------|------|---------|",
+        "| pip | odczytany | 2 |",
+        "| npm | odczytany | 2 |",
+        "| winget | jeszcze nie odczytany | brak danych |",
+        "| go | jeszcze nie odczytany | brak danych |",
+        "| vscode | jeszcze nie odczytany | brak danych |",
+        "",
+        "## Zmiany od poprzedniego przebiegu",
+        "Porównano z punktem odniesienia z 2026-11-02, sprzed 7.0 dnia.",
+        "- c1: requests (Python PythonCore/3.12, folder instalacji) zmienił wersję z 2.31.0 na 2.32.0.",
+        "- c2: dodano @contoso/tool w wersji 2.1.0.",
+        "",
+        "## Zainstalowane pakiety",
+        "### pip",
+        f"- k1: requests 2.32.0, Python PythonCore/3.12, folder instalacji; {not_updated}.",
+        f"- k2: idna 3.6, Python PythonCore/3.12, folder użytkownika; {not_updated}.",
+        "",
+        "### npm",
+        f"- k3: left-pad 1.3.0, folder globalny; {not_updated}.",
+        f"- k4: @contoso/tool 2.1.0, folder globalny; {not_updated}.",
+        "",
+        "## Nie sprawdzono",
+        "<!-- ush:not-checked -->",
+        "- winget: jeszcze nie odczytany.",
+        "- go: jeszcze nie odczytany.",
+        "- vscode: jeszcze nie odczytany.",
+        "- Instalacje Pythona spoza rejestru PEP 514 (venv, wersje przenośne): nie przeszukano.",
+        "- Nowsze wersje: żadnego pakietu nie sprawdzono, nie ma jeszcze wyszukiwania ush-advice.",
+    ]
+
+
 def _processes_body(total_bytes):
     return [
         "# Raport procesów, 2026-09-30 08:10",
@@ -528,6 +572,7 @@ def _runall_body():
         "- h5 ush-processes: ok, 1.5 s.",
         "- h6 ush-files: ok, 1.5 s.",
         "- h7 ush-advice: ok, 1.5 s.",
+        "- h8 ush-packages: ok, 1.5 s.",
         "- Cały przebieg trwał 10.5 s.",
         "",
         "## Zalecenia",
@@ -639,6 +684,7 @@ class TestPolishSkillReports(_CheckerCase):
             "ush-files": (_files_data, _files_body(files.TEMP_BLOCK, files.RECYCLE_BLOCK)),
             "ush-health": (_health_data, _health_body()),
             "ush-inventory": (_inventory_data, _inventory_body()),
+            "ush-packages": (_packages_data, _packages_body()),
             "ush-processes": (_processes_data, _processes_body(processes.TOTAL_BYTES)),
             "ush-runall": (_runall_data, _runall_body()),
             "ush-settings": (_settings_data, _settings_body(settings._block_lines())),

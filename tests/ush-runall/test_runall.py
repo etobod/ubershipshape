@@ -77,6 +77,7 @@ TABLE = (
     ("ush-processes", "processes.py", 1800),
     ("ush-files", "files.py", 3600),
     ("ush-advice", "advice.py", 1800),
+    ("ush-packages", "packages.py", 1800),
 )
 
 # A valid order in which the 2nd to 5th children are not inventory or processes.
@@ -555,14 +556,14 @@ class TestRunall(RunallTestCase):
             with self.subTest(f"{skill} ok"):
                 self.assertEqual(self.child(summary, skill).get("status"), "ok")
 
-        with self.subTest("clean: seven valid children"):
+        with self.subTest("clean: eight valid children"):
             fake = FakeChildren(self.temp())
             summary = self.collect(self.data_dir(), fake)
-            self.assertEqual(len(fake.calls), 7)
-            self.assertEqual(summary.get("counts"), {"ok": 7})
+            self.assertEqual(len(fake.calls), 8)
+            self.assertEqual(summary.get("counts"), {"ok": 8})
             self.assertEqual(summary.get("not_checked"), [])
             children = self.items(summary, "children")
-            self.assertEqual(len(children), 7, children)
+            self.assertEqual(len(children), 8, children)
             for child in children:
                 self.assertEqual(self.source_for(summary, child).get("status"), "read", child)
 
@@ -630,6 +631,39 @@ class TestRunall(RunallTestCase):
             self.assertNotIn("summary", child)
         for child_summary in fake.summaries.values():
             self.assertNotIn(child_summary["marker"], stdout)
+
+    # Plan 061, M2, K3: the repository's children.json runs ush-packages as the eighth child.
+    def test_eight_children(self):
+        children = json.loads(REPO_CHILDREN.read_text(encoding="utf-8"))
+        self.assertIsInstance(children, list, children)
+        self.assertEqual(len(children), 8, [c.get("skill") for c in children])
+        packages_entry = children[7]
+        self.assertEqual(packages_entry.get("skill"), "ush-packages", children)
+
+        data_dir = self.data_dir()
+        fake = FakeChildren(self.temp())
+        summary = self.collect(data_dir, fake)
+
+        self.assertEqual(len(fake.calls), 8, [skill_of(argv) for argv, _ in fake.calls])
+        self.assertEqual(summary.get("counts"), {"ok": 8})
+        ids = [c.get("id") for c in self.items(summary, "children")]
+        self.assertEqual(ids, [f"h{n}" for n in range(1, 9)])
+        h8 = self.by_id(summary, "h8")
+        self.assertEqual(h8.get("skill"), "ush-packages", h8)
+        self.assertEqual(h8.get("status"), "ok", h8)
+        self.assertEqual(self.by_id(self.detail(summary), "h8").get("summary"),
+                         fake.summaries["ush-packages"])
+
+        calls = [argv for argv, _ in fake.calls if skill_of(argv) == "ush-packages"]
+        self.assertEqual(len(calls), 1, fake.calls)
+        argv = calls[0]
+        self.assertEqual(skill_of(fake.calls[-1][0]), "ush-packages", fake.calls)
+        script = Path(argv[2])
+        self.assertTrue(script.is_absolute(), argv)
+        self.assertTrue(same_path(script, SKILLS_ROOT / "ush-packages" / "scripts"
+                                  / packages_entry["script"]), argv)
+        self.assertTrue(script.is_file(), script)
+        self.assertEqual(argv, [sys.executable, "-B", argv[2], "--data-dir", str(data_dir)])
 
 
 if __name__ == "__main__":

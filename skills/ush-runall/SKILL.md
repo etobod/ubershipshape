@@ -1,12 +1,12 @@
 ---
 name: ush-runall
-description: Run every measuring script of the ush-* skills on this Windows machine one after another (health, events, settings, inventory, processes, files, advice) and write one combined report - one list of recommendations by weight with the source of each, the links between findings of different skills, the contradicting findings side by side, the active inbound firewall rules set against the programs that really listen on TCP ports and the network category, and one block to run the whole pass with administrator rights when that reads more. Use when the user asks for a full check-up, "check everything", one report for the whole machine, or how the machine is doing overall. Read-only; it changes nothing on the machine.
+description: Run every measuring script of the ush-* skills on this Windows machine one after another (health, events, settings, inventory, processes, files, advice, packages) and write one combined report - one list of recommendations by weight with the source of each, the links between findings of different skills, the contradicting findings side by side, the active inbound firewall rules set against the programs that really listen on TCP ports and the network category, and one block to run the whole pass with administrator rights when that reads more. Use when the user asks for a full check-up, "check everything", one report for the whole machine, or how the machine is doing overall. Read-only; it changes nothing on the machine.
 ---
 
 # ush-runall
 
 Runs the measuring script of each skill in `data/children.json` in turn,
-each with only `--data-dir`, and summarises the pass: one item `h1`...`h7`
+each with only `--data-dir`, and summarises the pass: one item `h1`...`h8`
 per child (status, duration, its `not_checked` count, `truncated`,
 `elevated`), whose full summary is in the detail file. After the children it
 sets the active inbound Allow firewall rules of `ush-inventory` against the
@@ -51,7 +51,8 @@ another way (a shell command, another folder).
   listens, or which open rules match listening programs.
 
 Not for: one area only (run that skill: `ush-health`, `ush-events`,
-`ush-settings`, `ush-inventory`, `ush-processes`, `ush-files`), the web
+`ush-settings`, `ush-inventory`, `ush-processes`, `ush-files`,
+`ush-packages`), the web
 search of `ush-advice` (`runall` runs `advice.py` without findings, so it
 gives the machine facts only; the search is a separate `ush-advice` run),
 exporting or clearing event logs or copying dumps (`ush-events`'
@@ -79,7 +80,7 @@ or running anything on a schedule. Say so if the user asks for these.
   also not to look up a finding.
 - **Read the h items one at a time.** Fetch `h1`, reduce it to its findings
   (ids, the numbers you will cite, its `not_checked` entries, its changes)
-  in a short note, and only then fetch `h2`, and so on to `h7`, in order.
+  in a short note, and only then fetch `h2`, and so on to `h8`, in order.
   Each item holds a full child summary: up to 35 000 characters as compact
   JSON, and more as `--detail` prints it indented, which can pass the
   output limit of the shell tool. When the output is cut or saved to a file,
@@ -117,7 +118,7 @@ or running anything on a schedule. Say so if the user asks for these.
   `firewall_ports` item (`ush-inventory x<n>` in its `rule`): the `runall`
   summary backs it, so cite it even when the rule is not in `h4`; never
   fetch it with the inventory's `--detail`.
-- **Name every h item.** The report text names each of `h1` to `h7` with its
+- **Name every h item.** The report text names each of `h1` to `h8` with its
   skill and status (`required_lists`); an id on the `ush:detail` line does
   not count.
 - **One list of recommendations by weight.** `high` first, then `medium`,
@@ -186,15 +187,26 @@ or running anything on a schedule. Say so if the user asks for these.
   elevated parts.
 - **The changes are summed up in this report.** The pass has already
   updated the baselines of the children (`ush-inventory`, `ush-settings`,
-  `ush-health`, `ush-files`, `ush-advice`), so a later run of a single skill
-  will not show these changes again. The report gives a short summary of
-  them (new programs by name, updated programs by name from the listed
-  change items only, at most 10, the rest in the detail file, own changes
+  `ush-health`, `ush-files`, `ush-advice`, `ush-packages`), so a later run
+  of a single skill will not show these changes again. The report gives a
+  short summary of them (new programs by name, updated programs by name
+  from the listed change items only, at most 10, the rest in the detail
+  file, package changes of `ush-packages` by name from its listed change
+  items only under the same rule of at most 10, with its
+  `truncated_changes` as a number when above 0, own changes
   as the child's own counts per source and never summed, the firewall as
   one conclusion, disks as growth and what can be removed, settings in one
   line) and names the `runall` detail file, which keeps the full lists of
   each child ("Changes since the last run" in
   `references/report-format.md`).
+- **Packages are not checked for updates.** The report says once, in one
+  sentence for the whole `ush-packages` item, that its packages are "not
+  checked for updates" (its Polish wording is in
+  `references/report-format.md`), never per package: no lookup of newer
+  versions exists yet, so the report never calls a package current or
+  outdated. A manager
+  of `ush-packages` whose `state` is `not_read` is "not read yet" (its
+  `not_checked` entry), never absent or not installed.
 - **Offline, with a pointer to ush-advice.** For a fault this machine cannot
   explain offline (a device problem code, a crash code), the report offers
   a web lookup through `ush-advice` as the next step (its Polish wording is
@@ -211,7 +223,8 @@ or running anything on a schedule. Say so if the user asks for these.
    python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-runall/scripts/runall.py" --default-data-dir "${CLAUDE_PLUGIN_DATA}"
    ```
 
-   It runs seven scripts one after another, which takes minutes and can
+   It runs the script of every child in `data/children.json` (eight in
+   the repository) one after another, which takes minutes and can
    take longer than a shell tool allows (each child has its own time limit
    in `data/children.json`). Run it in the background, or with the longest
    timeout the tool allows, and wait until it exits: it writes its summary
@@ -226,7 +239,7 @@ or running anything on a schedule. Say so if the user asks for these.
    `firewall_ports`, `firewall_ports_counts`, `network_categories`,
    `driver_update_links`, `link_counts`, `truncated` and `not_checked`.
 
-3. For each child with status `ok`, in order from `h1` to `h7`, fetch its
+3. For each child with status `ok`, in order from `h1` to `h8`, fetch its
    item:
 
    ```

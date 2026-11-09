@@ -20,7 +20,7 @@
     {"list": "changes", "prefix": "c", "count_key": "collapsed_changes"}
   ],
   "required_keys": ["components", "component_counts", "drivers", "driver_packages",
-                    "additions", "hosts_file", "vendor_folders", "package_managers"],
+                    "additions", "hosts_file", "vendor_folders"],
   "report_prefix": "inventory-",
   "summary_section": true
 }

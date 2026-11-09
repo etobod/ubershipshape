@@ -1,0 +1,22 @@
+[
+  {"name": "pip", "step": 1, "read": true},
+  {"name": "npm", "step": 1, "read": true},
+  {"name": "winget", "step": 1, "read": false},
+  {"name": "go", "step": 1, "read": false},
+  {"name": "vscode", "step": 1, "read": false},
+  {"name": "dotnet-tools", "step": 2, "read": false},
+  {"name": "nuget", "step": 2, "read": false},
+  {"name": "psgallery", "step": 2, "read": false},
+  {"name": "pipx", "step": 2, "read": false},
+  {"name": "uv", "step": 2, "read": false},
+  {"name": "conda", "step": 2, "read": false},
+  {"name": "choco", "step": 3, "read": false},
+  {"name": "scoop", "step": 3, "read": false},
+  {"name": "pnpm", "step": 3, "read": false},
+  {"name": "yarn", "step": 3, "read": false},
+  {"name": "bun", "step": 3, "read": false},
+  {"name": "cargo", "step": 3, "read": false},
+  {"name": "gem", "step": 3, "read": false},
+  {"name": "composer", "step": 3, "read": false},
+  {"name": "vcpkg", "step": 3, "read": false}
+]

@@ -15,7 +15,8 @@ process is started and nothing on the machine is read.
 Assumptions beyond the plan:
 
 - With the plan's children table, the children get the ids ``h1`` (ush-health), ``h2``
-  (ush-events), ``h3`` (ush-settings), ``h4`` (ush-inventory) ... ``h7`` (ush-advice);
+  (ush-events), ``h3`` (ush-settings), ``h4`` (ush-inventory) ... ``h7`` (ush-advice), ``h8``
+  (ush-packages);
   the test asserts this before relying on it.
 - The ``summary_file`` named in the summary printed by ``main`` holds that same summary,
   and the detail file holds ``children`` items with ``id`` and ``summary`` and the
@@ -47,7 +48,7 @@ from .test_firewall_ports import (
     processes_detail,
     rule,
 )
-from .test_runall import TABLE, RunallTestCase, entries, ok
+from .test_runall import TABLE, FakeChildren, RunallTestCase, entries, ok
 
 SKILL = "ush-runall"
 PROFILE_FILE = REPO_ROOT / "skills" / SKILL / "data" / "report-profile.json"
@@ -65,7 +66,7 @@ INVENTED_NUMBER = "9157"    # in no JSON at all
 
 EXPECTED_IDS = {"ush-health": "h1", "ush-events": "h2", "ush-settings": "h3",
                 "ush-inventory": "h4", "ush-processes": "h5", "ush-files": "h6",
-                "ush-advice": "h7"}
+                "ush-advice": "h7", "ush-packages": "h8"}
 
 H3_LINE = "- h3 ush-settings: ok."
 W1_LINE = ("- w1: reguła ush-inventory x2 (Invented rule 2) dopuszcza port 8080; program "
@@ -105,7 +106,7 @@ def _digit_free_tempdir():
 GENERATED_AT = "2026-09-20T12:00:00+00:00"
 CHILD_ROWS = (("h1", "ush-health"), ("h2", "ush-events"), ("h3", "ush-settings"),
               ("h4", "ush-inventory"), ("h5", "ush-processes"), ("h6", "ush-files"),
-              ("h7", "ush-advice"))
+              ("h7", "ush-advice"), ("h8", "ush-packages"))
 
 
 def _child_summary_file(skill):
@@ -130,7 +131,7 @@ def _w1_item():
 
 
 def _clean_summary(summary_file, detail_file):
-    """Seven children ok, one firewall rule matched to a loopback port, nothing cut."""
+    """Eight children ok, one firewall rule matched to a loopback port, nothing cut."""
     return {
         "schema_version": 1,
         "skill": SKILL,
@@ -147,7 +148,7 @@ def _clean_summary(summary_file, detail_file):
              "elevated": None if skill == "ush-events" else False}
             for item_id, skill in CHILD_ROWS
         ],
-        "counts": {"ok": 7},
+        "counts": {"ok": 8},
         "firewall_ports": [_w1_item()],
         "firewall_ports_counts": {"inbound_rules": 9, "matched": 1, "not_listening": 2,
                                   "not_compared": 4, "udp": 2, "other_protocol": 0,
@@ -282,6 +283,7 @@ class TestReportProfile(RunallTestCase):
             "- h5 ush-processes: ok.",
             "- h6 ush-files: ok.",
             "- h7 ush-advice: ok.",
+            "- h8 ush-packages: ok.",
             "",
             "## Ustalenia",
             f"- Urządzenie Invented Audio {DEVICE_NUMBER} (ush-health) zgłasza problem.",
@@ -373,6 +375,71 @@ class TestReportProfile(RunallTestCase):
             self.assertEqual(code, 1, f"output:\n{output}")
             self.assertIn("not named in the report: w1", output)
 
+    # Plan 061, M2, K5: the runall summary of the repository's children.json, built by the
+    # fake runner of test_eight_children, holds h8 (ush-packages); the report must name it.
+    def test_h8_required(self):
+        self._assert_real_profile()
+        fake = FakeChildren(self.temp())
+        summary = self.collect(self.data_dir(), fake)
+        summary_file = Path(str(summary.get("summary_file")))
+        self.assertTrue(summary_file.is_absolute(), summary_file)
+
+        # Fixture guards: eight children, h8 is ush-packages, nothing else to name.
+        ids = [c.get("id") for c in self.items(summary, "children")]
+        self.assertEqual(ids, [f"h{n}" for n in range(1, 9)])
+        self.assertEqual(self.by_id(summary, "h8").get("skill"), "ush-packages")
+        for child in self.items(summary, "children"):
+            self.assertEqual(child.get("status"), "ok", child)
+        self.assertEqual(summary.get("not_checked"), [])
+
+        h8_line = "- h8 ush-packages: ok."
+        skills = [c.get("skill") for c in self.items(summary, "children")]
+
+        def report(drop=()):
+            lines = [
+                f"<!-- ush:summary {summary_file} -->",
+                "# Raport zbiorczy",
+                "",
+                "## Decyzje",
+                "Brak decyzji do omówienia.",
+                "",
+                "## Stan przebiegu",
+                *[f"- h{n} {skill}: ok." for n, skill in enumerate(skills, start=1)],
+                "",
+                "## Zalecenia",
+                "Brak zaleceń w tym przebiegu.",
+                "",
+                "## Powiązania między skillami",
+                "Brak powiązań między ustaleniami różnych skilli.",
+                "",
+                "## Zapora wobec portów nasłuchu",
+                "Brak reguł zapory dopasowanych do portów nasłuchu.",
+                "",
+                "## Sprzeczne ustalenia",
+                "Brak.",
+                "",
+                "## Nie sprawdzono",
+                "<!-- ush:not-checked -->",
+                "Nic.",
+            ]
+            return [line for line in lines if line not in drop]
+
+        with self.subTest("control: h1 to h8 named"):
+            lines = report()
+            self.assertIn(h8_line, lines)
+            code, output = self._run(self._write_report(lines, "runall-2026-09-20-1400.md"))
+            self.assertEqual(code, 0, f"output:\n{output}")
+            self.assertTrue(any(line.startswith("OK:") for line in output.splitlines()),
+                            f"output:\n{output}")
+
+        with self.subTest("h8 not named"):
+            lines = report(drop=(h8_line,))
+            self.assertFalse(any(re.search(r"\bh8\b", line) for line in lines[1:]))
+            code, output = self._run(self._write_report(lines, "runall-2026-09-20-1401.md"))
+            self.assertEqual(code, 1, f"output:\n{output}")
+            self.assertNotIn("OK", output)
+            self.assertIn("not named in the report: h8", output)
+
 
 # --- plan 028, M2, K5 ----------------------------------------------------------------------
 
@@ -433,6 +500,7 @@ class TestDriverUpdateLinksProfile(unittest.TestCase):
             "- h5 ush-processes: ok, 1.5 s.",
             "- h6 ush-files: ok, 1.5 s.",
             "- h7 ush-advice: ok, 1.5 s.",
+            "- h8 ush-packages: ok, 1.5 s.",
             "- Cały przebieg trwał 10.5 s.",
             "",
             "## Zalecenia",
@@ -545,6 +613,7 @@ class TestDecisionsProfile(unittest.TestCase):
             "- h5 ush-processes: ok, 1.5 s.",
             "- h6 ush-files: ok, 1.5 s.",
             "- h7 ush-advice: ok, 1.5 s.",
+            "- h8 ush-packages: ok, 1.5 s.",
             "- Cały przebieg trwał 10.5 s.",
             "",
             "## Zalecenia",
@@ -650,6 +719,84 @@ class TestAcceptedProfile(TestDecisionsProfile):
             self.assertIn("4711", output)
 
     test_decision_must_be_named = None
+
+
+
+# --- plan 061, M2, K4 ----------------------------------------------------------------------
+
+RUNALL_DIR = REPO_ROOT / "skills" / SKILL
+RUNALL_DOCS = ("SKILL.md", "references/report-format.md", "references/summary-contract.md")
+# A range of h ids in the docs: `h1`...`h8`, `h1`…`h8`, `h1` to `h8`.
+H_RANGE = re.compile(r"\bh1`?\s*(?:\.\.\.|…|to)\s*`?h(\d+)\b")
+# SKILL.md is ASCII: it says the rule in English and the report format gives the Polish words.
+NOT_CHECKED_FOR_UPDATES = {"SKILL.md": "not checked for updates",
+                           "report-format.md": "nie sprawdzono pod kątem aktualizacji"}
+
+
+def _flat(text):
+    """``text`` with every run of white space as one space."""
+    return " ".join(text.split())
+
+
+def _section(text, heading):
+    """The flat text from ``heading`` up to the next heading of the same or a higher level."""
+    lines = text.splitlines()
+    start = lines.index(heading)
+    level = len(heading) - len(heading.lstrip("#"))
+    end = next((i for i in range(start + 1, len(lines))
+                if lines[i].startswith("#")
+                and len(lines[i]) - len(lines[i].lstrip("#")) <= level), len(lines))
+    return _flat("\n".join(lines[start:end]))
+
+
+class TestDocsFollowChildren(unittest.TestCase):
+    def test_docs_follow_children(self):
+        children = json.loads((RUNALL_DIR / "data" / "children.json").read_text(
+            encoding="utf-8"))
+        skills = [child.get("skill") for child in children]
+        self.assertIn("ush-packages", skills)
+        texts = {name: (RUNALL_DIR / name).read_text(encoding="utf-8")
+                 for name in RUNALL_DOCS}
+
+        for name, text in texts.items():
+            with self.subTest(f"{name}: no 'seven' and every h range ends at the last child"):
+                self.assertIsNone(re.search(r"(?i)\bseven\b", text), name)
+                ends = [int(n) for n in H_RANGE.findall(text)]
+                self.assertTrue(ends, f"{name} names no h1...h<n> range")
+                self.assertEqual(set(ends), {len(children)}, f"{name}: {ends}")
+
+        skill_md = _flat(texts["SKILL.md"])
+        report_format = texts["references/report-format.md"]
+        flat_format = _flat(report_format)
+
+        with self.subTest("the baselines the pass moves name ush-packages"):
+            for name, flat in (("SKILL.md", skill_md), ("report-format.md", flat_format)):
+                match = re.search(r"updated the baselines of the children \(([^)]*)\)", flat)
+                self.assertIsNotNone(match, f"{name} has no list of moved baselines")
+                self.assertIn("`ush-packages`", match.group(1), name)
+
+        with self.subTest("the changes section names ush-packages"):
+            section = _section(report_format, "### 6. Changes since the last run (Zmiany)")
+            self.assertIn("ush-packages", section)
+            match = re.search(r"\*\*The changes are summed up in this report\.\*\*(.*?)"
+                              r"(?: - \*\*|$)", skill_md)
+            self.assertIsNotNone(match, "SKILL.md has no rule on the changes")
+            self.assertIn("ush-packages", match.group(1))
+            # final-review: the cut change items of ush-packages are given as a number.
+            self.assertIn("`truncated_changes`", _flat(section))
+            self.assertIn("`truncated_changes`", match.group(1))
+
+        with self.subTest("packages are not checked for updates; not_read is never absent"):
+            for name, flat in (("SKILL.md", skill_md), ("report-format.md", flat_format)):
+                self.assertIn(NOT_CHECKED_FOR_UPDATES[name], flat, name)
+                # M2 code-review: said once for all packages, never per package.
+                self.assertNotIn("every package", flat.casefold(), name)
+                self.assertIn("once", flat.casefold(), name)
+                rule = [sentence for sentence in re.split(r"(?<=\.) ", flat)
+                        if "`not_read`" in sentence and "ush-packages" in sentence]
+                self.assertTrue(rule, f"{name} has no rule on a not_read manager")
+                self.assertTrue(any("not read yet" in s and "absent" in s for s in rule),
+                                f"{name}: {rule}")
 
 
 if __name__ == "__main__":

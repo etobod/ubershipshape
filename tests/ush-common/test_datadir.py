@@ -165,6 +165,7 @@ DEFAULT_FLAG_SCRIPTS = (
     *SCRIPTS,
     EVENTS,
     ("inventory.py", "ush-inventory", "inventory", [], ("run_ps", "is_admin"), True),
+    ("packages.py", "ush-packages", "packages", [], ("run_ps", "is_admin"), True),
     ("processes.py", "ush-processes", "processes", [], ("run_ps", "is_admin"), True),
     ("settings.py", "ush-settings", "settings", [], ("run_ps", "is_admin"), True),
     ("check_repair_plan.py", "ush-common", "check_repair_plan", ["--latest"], (), False),
@@ -409,7 +410,7 @@ class TestScripts(unittest.TestCase):
             return ([], {"run_ps": base.FakePowerShell(), "now": base.NOW,
                          "read_dumps": base.NO_DUMPS}, (), collection)
 
-        if script in ("inventory", "processes"):
+        if script in ("inventory", "packages", "processes"):
             fakes = other_test_module(f"ush-{script}.fakes")
             return ([], {"run_ps": fakes.FakePowerShell(), "is_admin": lambda: False,
                          "now": fakes.NOW}, (), collection)

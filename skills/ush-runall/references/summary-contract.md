@@ -35,10 +35,11 @@ a usage error.
 `data/children.json` is an ordered list of `{skill, script, timeout_s}`:
 `skill` the full name (`ush-health`), `script` a bare file name resolved to
 `skills/<skill>/scripts/<script>`, `timeout_s` a positive integer of at
-most 86400 (one day). The
-repository order is `ush-health`, `ush-events`, `ush-settings`,
-`ush-inventory`, `ush-processes`, `ush-files`, `ush-advice`, so the ids
-are `h1` to `h7` in that order. The file is not usable (exit 2) when it
+most 86400 (one day). The ids
+follow the order of the file, `h1` for its first entry. The repository
+order is `ush-health`, `ush-events`, `ush-settings`, `ush-inventory`,
+`ush-processes`, `ush-files`, `ush-advice`, `ush-packages`, so the ids are
+`h1` to `h8` in that order. The file is not usable (exit 2) when it
 cannot be read or is not a non-empty list, or an entry:
 
 - has a key other than `skill`, `script`, `timeout_s`, or misses one;

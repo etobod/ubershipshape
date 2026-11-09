@@ -730,7 +730,7 @@ class TestReportStyleDocs(unittest.TestCase):
 #   report-style.md, and says the section comes first after the header (the word
 #   "first" outside "Summary first", and "header", "title" or "ush:summary").
 SUMMARY_SKILLS = ("ush-advice", "ush-events", "ush-files", "ush-health", "ush-inventory",
-                  "ush-processes", "ush-runall", "ush-settings")
+                  "ush-packages", "ush-processes", "ush-runall", "ush-settings")
 SUMMARY_RULE_TITLE = "Summary first"
 SUMMARY_MARKER = "<!-- ush:attention -->"
 SUMMARY_PARTS = ("Do decyzji", "Złamane decyzje", "Otwarte plany naprawcze",

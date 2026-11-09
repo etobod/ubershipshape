@@ -16,7 +16,7 @@ from tests.skill_loader import REPO_ROOT, load_script
 NOT_CHECKED = ["## Not checked", "<!-- ush:not-checked -->", "Nothing."]
 # The 8 report-writing skills (plan 055).
 REPORT_SKILLS = ("ush-advice", "ush-events", "ush-files", "ush-health", "ush-inventory",
-                 "ush-processes", "ush-runall", "ush-settings")
+                 "ush-packages", "ush-processes", "ush-runall", "ush-settings")
 
 
 def _profile(**overrides):

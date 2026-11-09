@@ -45,8 +45,8 @@ list); in short:
   when the report never names that item. Name every `h` item whose numbers
   or ids you cite.
 - The checker does not catch every unbacked small number: the ids of the
-  `runall` summary itself (`h1`…`h7`, `w1`…) back their own digits, so a
-  count from 1 to 7 (and up to the last `w` id) passes the check even when
+  `runall` summary itself (`h1`…`h8`, `w1`…) back their own digits, so a
+  count from 1 to 8 (and up to the last `w` id) passes the check even when
   its child's `h` item is not on the `ush:detail` line. Check those by hand:
   cite such a count only from an `h` item you fetched and named.
 - Never use a child's own `--detail`: its detail file is not part of the
@@ -57,7 +57,7 @@ list); in short:
   `report-style.md`) (in Polish `160,0`), counts without a thousands
   separator. Never add children's numbers up, never compute a difference
   or a percentage.
-- The ids `h1`…`h7`, `w1`… and `y1`… are not numbers when they name an item of the
+- The ids `h1`…`h8`, `w1`… and `y1`… are not numbers when they name an item of the
   summary or of an `ush:detail` line, or a `w` item cut from the summary
   (`truncated` > 0). A child's ids are not `runall` ids: write them with the
   skill (`ush-inventory s11`, `ush-events g3`); their digits are checked as
@@ -88,7 +88,7 @@ list); in short:
 
 ## Items the report must name
 
-Every `children[*].id` (`h1`…`h7`), every `firewall_ports[*].id` (`w1`…),
+Every `children[*].id` (`h1`…`h8`), every `firewall_ports[*].id` (`w1`…),
 every `driver_update_links[*].id` (`y1`…) and every `decisions[*].id` (`j1`…) of the summary appears in a visible line of the report, as a word of its own
 (`h12` does not name `h1`), each with a short name after it (rule 6 of
 `report-style.md`): the skill for an `h` item, the rule's name or program
@@ -192,7 +192,7 @@ not read and its reason goes to "Not checked".
 Then one line per item of `children`, in order: id, skill, `status` in words,
 `duration_s`, and for an `ok` child its `not_checked_count`, its own
 `truncated` and its `elevated` (`null`: the child does not report it, as
-`ush-events`). Every `h1`…`h7` stands here in the text. A child other than
+`ush-events`). Every `h1`…`h8` stands here in the text. A child other than
 `ok` gives its status in words (failed, timed out, gave no valid summary)
 and that its findings are not in this report; its reason goes to "Not
 checked". Then `counts` in one line.
@@ -264,8 +264,9 @@ checked" with the child's reason, never as "no old dumps".
 
 ### 6. Changes since the last run (Zmiany)
 
-The pass has updated the baselines of the children, so a later run of a
-single skill will not show these changes again. That is why this section
+The pass has updated the baselines of the children (`ush-inventory`,
+`ush-settings`, `ush-health`, `ush-files`, `ush-advice`, `ush-packages`),
+so a later run of a single skill will not show these changes again. That is why this section
 exists, but it is a short summary, not the full lists:
 
 - new programs by name;
@@ -280,6 +281,13 @@ exists, but it is a short summary, not the full lists:
   child's wording "<N> zmian `ms-resource:` zwiniętych w jedną linię", with
   N its `count` as given, never added to another type or to the listed
   names;
+- package changes of `ush-packages`: by name only from the change items
+  the child lists in its summary (`changes`, `ush-packages c<n>`), with
+  the kind (added, removed, version changed), at most 10, then "reszta w
+  pliku szczegółów" with no count; when its `truncated_changes` is above
+  0, also that number of change items cut from its summary; a source of
+  its `comparison` that is
+  `no_baseline` or `not_read` gives "no comparison", never "no changes";
 - disks as growth, plus what can be removed (see the clean-up section);
 - settings in one line.
 
@@ -292,6 +300,13 @@ top of this file, and says that the full lists are there; it never writes
 its file name or expanded path (the name carries digits no number backs, the
 path the account name). A child whose baseline was missing or unreadable gives
 "no comparison" for it, never "no changes". With none, say so per child.
+
+Packages are not checked for updates: the report says once, in one sentence
+for the whole `ush-packages` item, that its packages are "nie sprawdzono pod
+kątem aktualizacji", never per package, since no lookup of newer versions
+exists yet; the report never calls a package current or outdated.
+A manager of `ush-packages` whose `state` is `not_read` is "not read yet"
+(its `not_checked` entry), never absent or not installed.
 
 ### 7. Disk clean-up (Porządki)
 

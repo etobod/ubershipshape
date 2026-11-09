@@ -92,7 +92,7 @@ on a marker line does not count. The check lists each missing id as
 summary (the `truncated*` counts) and items fetched with `--detail` are not
 required. A list that is `null` (its sources were not read) requires
 nothing, but the keys `components`, `component_counts`, `drivers`,
-`driver_packages`, `additions`, `hosts_file`, `vendor_folders` and `package_managers` must be in the summary: a summary without them
+`driver_packages`, `additions`, `hosts_file` and `vendor_folders` must be in the summary: a summary without them
 is of an older shape and fails with
 `required key missing from the summary: <key>`.
 
@@ -138,7 +138,6 @@ the count of low recommendations whose main source no line names.
    | 7 | Added to the system | x2 hosts entry | 🔍 see below |
    | 8 | Leftovers of removed programs | l1 folder and task | 🔧 see below |
    | 9 | Vendor folders: no installed program, or not judged | v1, v2 | 🔍 see below |
-   | 10 | Package managers | PythonCore/3.12 and npm read, c3 new version | ✅ nothing to do |
 
    `#` is the section number of the area, `State` a few words with the ids
    and the numbers from the JSON, `Action` a legend symbol and a few words
@@ -472,43 +471,8 @@ the count of low recommendations whose main source no line names.
      `0` says that every folder read is matched or a Windows name. With
      `truncated_vendor_folders` above `0` the folders were cut to the budget,
      not absent: give the count, never call the list clean or empty.
-   - Package managers: the facts from `package_managers`, read from the files
-     on disk (no package manager ran, nothing went online). For each Python of
-     `package_managers.pip.pythons`, one line with its `python`, `count` and
-     `unreadable` (and a folder whose state in `folders` is `absent`,
-     `skipped` or `unreadable`, by name); then one line for npm with
-     `package_managers.npm` `count`, `unreadable` and `prefix_from`
-     (`NPM_CONFIG_PREFIX`: the prefix set in that environment variable;
-     `npmrc`: the prefix set in `.npmrc`; `default`: `%APPDATA%\npm`). `pythons` `[]`
-     is "no Python whose packages were read": when "Not checked" has a
-     `Python <tag> from the Microsoft Store (WindowsApps)` entry, a
-     `pip_packages <company>/<tag>` entry whose reason names no InstallPath,
-     or a `pip_packages registration` entry (no company or tag), name each
-     such Python as registered but not read, never "no Python registered";
-     only with none of these entries is it "no Python registered". npm `status` `empty` is "npm not present" (no
-     global `node_modules`, or no package in it, at the prefix read; say with
-     it, from "Not checked", that other prefixes, those of the global or
-     builtin npmrc and the folder of node.exe, were not searched, so npm
-     may still be installed elsewhere); a `count` of `null` (`status` `unreadable`, or a
-     folder or npm scope folder that could not be listed) is "could not be
-     read", never 0: give
-     the reason from "Not checked". Then the package changes: every change
-     of `changes` with `source` `pip_packages` or `npm_packages` by its id,
-     name and the `version` before and after (they also appear in
-     "Comparison"; one line pointing there is enough). These changes come
-     last in `changes` and the budget cuts them first: with
-     `truncated_changes` above 0 say that some package changes may be among
-     the cut ones. The full package list is in the detail file
-     (`pip_packages`, `npm_packages`), not in the report. Then what was not
-     read, from "Not checked": winget (`winget list` may go online and has no
-     offline flag), Pythons not registered in PEP 514 (venvs, portable
-     builds), each Microsoft Store Python only when "Not checked" has its
-     entry, other package managers (choco, scoop,
-     cargo, go: not searched) and any skipped or unreadable folder. Newer
-     versions of a package are not looked up here: that needs the network and
-     is a matter for ush-advice in a later plan; this report does not judge
-     whether a version is old. An area with nothing to act on gets these lines
-     and no recommendation.
+   - Package managers are not in this report: pip, npm and the other package
+     managers are read and reported by `ush-packages`.
 
    Leftovers (the SKILL.md rule "Leftovers are named"): an autostart entry
    with an existing target whose `signature_status` is set and not `Valid`,

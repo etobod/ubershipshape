@@ -1,0 +1,14 @@
+{
+  "detail_sections": ["packages", "changes"],
+  "id_letters": "ck",
+  "path_keys": ["summary_file", "detail_file", "folder", "install_path", "entry", "prefix_from", "reference_file"],
+  "id_keys": ["id"],
+  "required_lists": ["packages", "changes"],
+  "truncated": [
+    {"list": "packages", "prefix": "k", "count_key": "truncated"},
+    {"list": "changes", "prefix": "c", "count_key": "truncated_changes"}
+  ],
+  "required_keys": ["managers"],
+  "report_prefix": "packages-",
+  "summary_section": true
+}
