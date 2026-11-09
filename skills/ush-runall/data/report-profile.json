@@ -11,6 +11,11 @@
   ],
   "required_keys": ["children", "firewall_ports", "firewall_ports_counts",
                     "driver_update_links", "link_counts", "decisions"],
+  "summary_counts": ["accepted_counts.quiet"],
+  "summary_null_words": {"accepted_counts.quiet": "zaakceptowanych nie sprawdzono"},
+  "required_except": [
+    {"list": "accepted", "field": "state", "values": ["quiet"]}
+  ],
   "report_prefix": "runall-",
   "summary_section": true
 }

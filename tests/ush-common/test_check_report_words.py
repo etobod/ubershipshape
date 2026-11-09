@@ -651,7 +651,9 @@ def _summary_section(skill):
         "### Otwarte plany naprawcze",
         "nic",
         "",
-        "Nic więcej nie wymaga uwagi: 0 niskich.",
+        # The runall fixture has no accepted_counts: not checked (plan 067, M2).
+        ("Nic więcej nie wymaga uwagi: 0 niskich; zaakceptowanych nie sprawdzono."
+         if skill == "ush-runall" else "Nic więcej nie wymaga uwagi: 0 niskich."),
         "",
     ]
 

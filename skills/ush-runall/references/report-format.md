@@ -89,13 +89,13 @@ list); in short:
 ## Items the report must name
 
 Every `children[*].id` (`h1`…`h8`), every `firewall_ports[*].id` (`w1`…),
-every `driver_update_links[*].id` (`y1`…) and every `decisions[*].id` (`j1`…) of the summary appears in a visible line of the report, as a word of its own
+every `driver_update_links[*].id` (`y1`…), every `decisions[*].id` (`j1`…) and every `accepted[*].id` (`a1`…) whose `state` is not `quiet` (the profile's `required_except`) of the summary appears in a visible line of the report, as a word of its own
 (`h12` does not name `h1`), each with a short name after it (rule 6 of
 `report-style.md`): the skill for an `h` item, the rule's name or program
-for a `w` item, the provider for a `y` item, the decision (`D<n>`) for a `j` item. An id on an `ush:detail` line, on another marker line or in
+for a `w` item, the provider for a `y` item, the decision (`D<n>`) for a `j` item, the entry's key for an `a` item. An id on an `ush:detail` line, on another marker line or in
 a fenced code block does not count. The check lists each missing id as
 `not named in the report: <id> (<list>)` and fails. A list that is `null`
-(`firewall_ports`, `driver_update_links` or `decisions`) requires no id.
+(`firewall_ports`, `driver_update_links`, `decisions` or `accepted`) requires no id.
 
 ## Blocks
 
@@ -173,12 +173,18 @@ sections after it are the details. Its parts:
 - When `<data dir>/plans/` cannot be listed, part 3 says that the open
   repair plans could not be listed, and the reason goes to "Not checked";
   it is never „nic” and never "no open plans".
-- The last line: „Nic więcej nie wymaga uwagi: N niskich.”, N the count of
-  `low` recommendations whose main source no line names, which the checker
-  counts in the report itself (interim answer A of question 054). Beyond
-  that line the summary gives no count of its own ("3 rzeczy warte uwagi"
-  is not written): every other number in a report comes from the script's
-  JSON, and the listed names already show how many there are.
+- The last line: „Nic więcej nie wymaga uwagi: N niskich, M zaakceptowanych.”,
+  N the count of `low` recommendations whose main source no line names,
+  which the checker counts in the report itself (interim answer A of
+  question 054), and M `accepted_counts.quiet` of the summary, the accepted
+  findings that stayed quiet (the profile's `summary_counts`; the checker
+  compares M with the JSON). With `accepted` `null` (`accepted.json` could
+  not be used) the line has no M: „Nic więcej nie wymaga uwagi: N niskich;
+  zaakceptowanych nie sprawdzono.”; the checker requires those words then
+  (the profile's `summary_null_words`). Beyond that line the summary gives no
+  count of its own ("3 rzeczy warte uwagi" is not written): every other
+  number in a report comes from the script's JSON, and the listed names
+  already show how many there are.
 
 ### 3. Run state
 
@@ -230,6 +236,34 @@ The user's decisions of `<data dir>/decisions.json`, one line per item of
 `decisions` `[]` (no file): one line saying that no decisions are recorded.
 `decisions` `null`: the file could not be used; say so, and its
 `not_checked` item goes to "Not checked", never "no decisions".
+
+### 4a. Accepted findings (Zaakceptowane)
+
+The section `Zaakceptowane`, after the decisions, from `accepted` and
+`accepted_counts` of the summary (see "Accepted findings" in
+`summary-contract.md`): the `quiet` count, then every `back`, `gone` and
+`not_checked` item by its id:
+
+- The `quiet` count (`accepted_counts.quiet`) in one line. A `quiet` item is
+  only counted, never named one by one: its child item (its `evidence`)
+  gets no recommendation, no line in the summary and no leftover line.
+- Each `back` item in full: its id and key, each `changed` field with its
+  `accepted` value and its `now` value, and its `evidence` (`<skill> <id>`).
+  Its `skipped` fields, the watched fields not compared, are named here and
+  also under "Nie sprawdzono" ("Not checked"). A `back` item is judged like
+  any finding: when you weigh it, it is a recommendation of section 5 whose
+  main source is `ush-runall a<n>`. Its child item (its `evidence`) gets no
+  recommendation of its own: the `a<n>` one covers it, so one finding never
+  gets two recommendations.
+- Each `gone` item with its id and key, saying that it can be removed from
+  the accepted findings with `accepted.py --remove` (in words, on the
+  user's word only).
+- Each `not_checked` item with its id, key and `reason`, also under "Nie
+  sprawdzono".
+
+`accepted` `[]` (no file): one line saying that no findings are accepted,
+and M is 0. `accepted` `null`: the file could not be used; say so, and the
+reason goes to "Nie sprawdzono".
 
 ### 5. Recommendations
 
@@ -488,7 +522,8 @@ It lists every `not_checked` item of the `runall` summary with its `what`
 and `reason` (a child that did not finish, the firewall comparison not
 made, listening ports whose program path could not be read), and, per
 child, the child's own `not_checked` entries from its `h` item (their
-number is `not_checked_count`). If every list is empty, it says "nothing".
+number is `not_checked_count`), each `not_checked` accepted item (`a<n>`)
+with its `reason`, and the `skipped` fields of each `back` accepted item. If every list is empty, it says "nothing".
 
 ## Account names
 

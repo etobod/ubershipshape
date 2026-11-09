@@ -338,6 +338,14 @@ the other rules.
       to „Nie sprawdzono” and this part then never says „nic”.
     - The last line: „Nic więcej nie wymaga uwagi: N niskich.”, where N is the
       count of low recommendations whose main source no line names.
+    - The last line (Nic więcej nie wymaga uwagi) may carry a skill's counts
+      from the JSON after N, as its report profile's `summary_counts` names
+      them (dotted summary paths, in order); each equals its JSON value, and a
+      path whose value is `null` gives no number. Only `ush-runall` has one:
+      „Nic więcej nie wymaga uwagi: N niskich, M zaakceptowanych.”, M its
+      `accepted_counts.quiet`; its own `report-format.md` gives the wording
+      when the accepted findings were not checked. Every other skill's last
+      line stays „N niskich.”.
 
     The `Dowód` item of every recommendation starts with its main source: an
     item id, `ush-<skill> <id>` or a summary key path in inline code. The

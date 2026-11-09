@@ -15,11 +15,29 @@ It finds the child in the runall detail file (``children[]``, its summary's
 ``detail_file``), the item in that child's detail file, and saves the file through
 ``baseline.save_json``; an entry with the same kind and key is replaced. It prints
 ``{ok, key, kind, path}``, or ``ok`` false with ``reason``; a refusal writes nothing.
+
+    accepted.py --remove "ush-runall a<n>" --detail-file <runall detail file> --data-dir <dir>
+
+removes the entry with the kind and key of item ``a<n>`` of the runall detail file's
+``accepted`` list, through the same verified write and with the same output.
+
+Each write keeps the file before it as ``state/accepted.previous.json`` (one generation);
+the first write ever first writes an empty accepted file, so that generation exists then too.
+
+    accepted.py --undo --data-dir <dir>
+
+checks ``accepted.previous.json`` as ``load`` checks ``accepted.json``, writes its entries
+through the same verified write (the current file becomes the previous generation, so a
+second ``--undo`` goes back again), reads the result back and prints ``{ok, entry_count,
+path}``, or ``ok`` false with ``reason``; with no previous file it refuses and writes
+nothing. ``warning`` (all three actions): the new file is saved, but the previous
+generation was not replaced, so ``--undo`` does not restore the state before this write.
 The script judges nothing: the user decides what to accept.
 """
 
 import argparse
 import json
+import re
 import sys
 from datetime import date, datetime
 from pathlib import Path
@@ -143,8 +161,16 @@ def _check(data, kinds):
     return None, entries
 
 
+PREVIOUS_NAME = f"{FILE_STEM}.previous.json"
+EMPTY = {"schema_version": SCHEMA_VERSION, "entries": []}
+
+
 def file_path(data_dir) -> Path:
     return Path(data_dir).absolute() / "state" / FILE_NAME
+
+
+def previous_path(data_dir) -> Path:
+    return Path(data_dir).absolute() / "state" / PREVIOUS_NAME
 
 
 def load(data_dir, kinds=None) -> dict:
@@ -154,14 +180,20 @@ def load(data_dir, kinds=None) -> dict:
     (cannot be read, bad JSON, a bad shape, an entry of a kind not in the kinds file, or
     an unreadable kinds file; ``reason`` names the problem and ``entries`` is ``[]``).
     Never raises."""
-    path = file_path(data_dir)
+    return _load_path(file_path(data_dir), kinds)
+
+
+def _load_path(path: Path, kinds=None) -> dict:
+    """``load`` of the accepted file at ``path`` (``accepted.json`` or its previous
+    generation)."""
+    name = path.name
     result = {"status": "none", "reason": None, "path": str(path), "entries": []}
     try:
         if not path.exists():
             return result
         text = path.read_text(encoding="utf-8-sig")
     except (OSError, UnicodeDecodeError) as exc:
-        return dict(result, status="unreadable", reason=f"cannot read {FILE_NAME}: {exc}")
+        return dict(result, status="unreadable", reason=f"cannot read {name}: {exc}")
     if kinds is None:
         kinds, reason = load_kinds()
         if kinds is None:
@@ -169,10 +201,10 @@ def load(data_dir, kinds=None) -> dict:
     try:
         data = json.loads(text)
     except ValueError as exc:
-        return dict(result, status="unreadable", reason=f"{FILE_NAME} is not JSON: {exc}")
+        return dict(result, status="unreadable", reason=f"{name} is not JSON: {exc}")
     problem, entries = _check(data, kinds)
     if problem is not None:
-        return dict(result, status="unreadable", reason=f"{FILE_NAME}: {problem}")
+        return dict(result, status="unreadable", reason=f"{name}: {problem}")
     return dict(result, status="read", entries=entries)
 
 
@@ -297,31 +329,139 @@ def accept(target: str, detail_file, data_dir, today=None) -> dict:
     entries = [e for e in current["entries"]
                if not (e["kind"] == name and e["key"] == entry["key"])]
     entries.append(entry)
-    data = {"schema_version": SCHEMA_VERSION, "entries": entries}
-    failure = baseline.save_json(path.parent, FILE_STEM, data,
-                                 lambda old: _check(old, kinds)[0])
-    saved = {"ok": True, "key": entry["key"], "kind": name, "path": str(path)}
-    if failure is not None and failure.startswith(f"the new {FILE_NAME} is saved, but "):
+    return _save(path, kinds, entries, name, entry["key"], refused)
+
+
+def _write(path: Path, kinds: dict, entries: list):
+    """Write ``entries`` through ``baseline.save_json``: ``(None, None)``, ``(None,
+    warning)`` when only the previous generation was not replaced, or ``(reason, None)``.
+
+    With no ``accepted.json`` yet, an empty accepted file is written first, so the first
+    write also leaves a previous generation (no accepted findings) for ``--undo``."""
+    def validate(old):
+        return _check(old, kinds)[0]
+
+    def saved_only(failure):
         # The verified new file is in place; only the previous generation failed.
-        return dict(saved, warning=failure)
+        return failure.startswith(f"the new {FILE_NAME} is saved, but ")
+
+    if not path.exists():
+        failure = baseline.save_json(path.parent, FILE_STEM, EMPTY, validate)
+        if failure is not None and not saved_only(failure):
+            return f"{FILE_NAME} not saved: {failure}", None
+    failure = baseline.save_json(path.parent, FILE_STEM,
+                                 {"schema_version": SCHEMA_VERSION, "entries": entries},
+                                 validate)
+    if failure is not None and saved_only(failure):
+        return None, failure
     if failure is not None:
-        return dict(refused, reason=f"{FILE_NAME} not saved: {failure}")
-    return saved
+        return f"{FILE_NAME} not saved: {failure}", None
+    return None, None
+
+
+def _save(path: Path, kinds: dict, entries: list, name: str, key, refused: dict) -> dict:
+    """Write ``entries`` through ``_write``; the printed result."""
+    reason, warning = _write(path, kinds, entries)
+    if reason is not None:
+        return dict(refused, reason=reason)
+    saved = {"ok": True, "key": key, "kind": name, "path": str(path)}
+    return saved if warning is None else dict(saved, warning=warning)
+
+
+def undo(data_dir) -> dict:
+    """Write the previous generation back as ``accepted.json``; the printed result."""
+    path = file_path(data_dir)
+    refused = {"ok": False, "entry_count": None, "path": str(path)}
+    kinds, reason = load_kinds()
+    if kinds is None:
+        return dict(refused, reason=reason)
+    current = load(data_dir, kinds)
+    if current["status"] == "unreadable":
+        return dict(refused, reason=(f"{current['reason']}; it is left as it is: correct "
+                                     "or move it first"))
+    previous = _load_path(previous_path(data_dir), kinds)
+    if previous["status"] == "none":
+        return dict(refused, reason=f"there is no {PREVIOUS_NAME}: no write to undo")
+    if previous["status"] != "read":
+        return dict(refused, reason=f"{previous['reason']}; nothing was written")
+    entries = previous["entries"]
+    reason, warning = _write(path, kinds, entries)
+    if reason is not None:
+        return dict(refused, reason=reason)
+    now = load(data_dir, kinds)
+    if now["status"] != "read" or now["entries"] != entries:
+        return dict(refused, reason=(f"{FILE_NAME} was written, but it does not read back "
+                                     f"as {PREVIOUS_NAME} held it ({now['status']}: "
+                                     f"{now['reason']})"))
+    saved = {"ok": True, "entry_count": len(entries), "path": str(path)}
+    return saved if warning is None else dict(saved, warning=warning)
+
+
+def remove(target: str, detail_file, data_dir) -> dict:
+    """Remove the entry of ``target`` (``"ush-runall a<n>"``); the printed result."""
+    path = file_path(data_dir)
+    refused = {"ok": False, "key": None, "kind": None, "path": str(path)}
+    parts = target.split()
+    if len(parts) != 2 or parts[0] != "ush-runall" or not re.fullmatch(r"a[1-9]\d*", parts[1]):
+        return dict(refused, reason=f"--remove {target!r} is not 'ush-runall a<n>'")
+    item_id = parts[1]
+    kinds, reason = load_kinds()
+    if kinds is None:
+        return dict(refused, reason=reason)
+    current = load(data_dir, kinds)
+    if current["status"] == "unreadable":
+        return dict(refused, reason=(f"{current['reason']}; it is left as it is: correct "
+                                     "or move it first"))
+    runall_detail, reason = _read_json(detail_file, "runall detail file")
+    if runall_detail is None:
+        return dict(refused, reason=reason)
+    listed = runall_detail.get("accepted")
+    if not isinstance(listed, list):
+        return dict(refused, reason=("the runall detail file has no accepted list "
+                                     f"(accepted is {listed!r})"))
+    item = next((i for i in listed if isinstance(i, dict) and i.get("id") == item_id), None)
+    if item is None:
+        return dict(refused, reason=f"the runall detail file has no accepted item {item_id}")
+    name, key = item.get("kind"), item.get("key")
+    entries = [e for e in current["entries"] if not (e["kind"] == name and e["key"] == key)]
+    if len(entries) == len(current["entries"]):
+        return dict(refused, reason=(f"ush-runall {item_id} ({name} {key!r}) is no longer "
+                                     f"in {FILE_NAME}"))
+    return _save(path, kinds, entries, name, key, refused)
 
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--accept", required=True, metavar="'<skill> <id>'",
+    action = parser.add_mutually_exclusive_group(required=True)
+    action.add_argument("--accept", metavar="'<skill> <id>'",
                         help="the finding to accept, as the runall report cites it")
-    parser.add_argument("--detail-file", required=True,
-                        help="the runall detail file of the pass the finding comes from")
+    action.add_argument("--remove", metavar="'ush-runall a<n>'",
+                        help="the accepted finding to stop accepting, as the runall "
+                             "report cites it")
+    action.add_argument("--undo", action="store_true",
+                        help="write the previous generation of accepted.json back")
+    parser.add_argument("--detail-file",
+                        help="the runall detail file of the pass the finding comes from "
+                             "(required with --accept and --remove)")
     datadir.add_arguments(parser)
     args = parser.parse_args(argv)
+    if args.undo and args.detail_file is not None:
+        parser.error("--detail-file is not used with --undo")
+    if not args.undo and args.detail_file is None:
+        parser.error("--detail-file is required with --accept and --remove")
     try:
         data_dir = datadir.resolve(args.data_dir, default=args.default_data_dir)
     except datadir.DataDirError as exc:
         parser.error(str(exc))
-    result = accept(args.accept, Path(args.detail_file).absolute(), data_dir)
+    if args.undo:
+        result = undo(data_dir)
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result["ok"] else 1
+    detail_file = Path(args.detail_file).absolute()
+    if args.remove is not None:
+        result = remove(args.remove, detail_file, data_dir)
+    else:
+        result = accept(args.accept, detail_file, data_dir)
     print(json.dumps(result, ensure_ascii=False))
     return 0 if result["ok"] else 1
 

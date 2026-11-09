@@ -20,10 +20,13 @@ INTRO_HEADING = "## Przegląd"
 USH_MARKER = re.compile(r"^\s*<!--\s*ush:[^<>]*-->\s*$")
 
 
-def summary_section(skill, decide=()):
+def summary_section(skill, decide=(), accepted=None):
     """The section's lines: ``decide`` are the lines of part 1 (each naming the main
     source of a high or medium recommendation of the fixture), "nic" without them;
-    only ush-runall checks decisions (part 2)."""
+    only ush-runall checks decisions (part 2). ``accepted``: the quiet accepted
+    count a runall summary gives (``accepted_counts.quiet``, plan 067; ``"not_checked"``
+    when it is null or missing), put on the
+    last line after the low count; None for a summary without it."""
     return [
         MARKER,
         "## Podsumowanie",
@@ -37,7 +40,10 @@ def summary_section(skill, decide=()):
         "### Otwarte plany naprawcze",
         "nic",
         "",
-        "Nic więcej nie wymaga uwagi: 0 niskich.",
+        ("Nic więcej nie wymaga uwagi: 0 niskich." if accepted is None
+         else "Nic więcej nie wymaga uwagi: 0 niskich; zaakceptowanych nie sprawdzono."
+         if accepted == "not_checked"
+         else f"Nic więcej nie wymaga uwagi: 0 niskich, {accepted} zaakceptowanych."),
         "",
     ]
 
@@ -50,7 +56,7 @@ def printed_section(skill):
     return lines
 
 
-def with_summary(lines, skill, decide=()):
+def with_summary(lines, skill, decide=(), accepted=None):
     """``lines`` with the section before the first ``##`` heading outside a fence
     (above a not-checked marker that stands directly over that heading); with no
     such heading, at the end. Line 1 (the ush:summary line) is never a heading.
@@ -65,10 +71,10 @@ def with_summary(lines, skill, decide=()):
     """
     at, intro = _place(lines)
     if intro:
-        return [*lines[:at], *summary_section(skill, decide), INTRO_HEADING, *lines[at:]]
+        return [*lines[:at], *summary_section(skill, decide, accepted), INTRO_HEADING, *lines[at:]]
     if at == len(lines):
-        return [*lines, "", *summary_section(skill, decide)]
-    return [*lines[:at], *summary_section(skill, decide), *lines[at:]]
+        return [*lines, "", *summary_section(skill, decide, accepted)]
+    return [*lines[:at], *summary_section(skill, decide, accepted), *lines[at:]]
 
 
 def report_line(lines, index, skill, decide=()):

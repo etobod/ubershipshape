@@ -259,6 +259,10 @@ class Profile:
     required_keys: tuple[str, ...]  # top-level summary keys that must be present
     report_prefix: str
     summary_section: bool = False  # the report opens with the ush:attention section
+    summary_counts: tuple[str, ...] = ()  # dotted paths given after the low count
+    required_except: tuple[dict, ...] = ()  # ({"list", "field", "values"}, ...)
+    # summary_counts path -> words the last line must hold when that path is null
+    summary_null_words: tuple[tuple[str, str], ...] = ()
 
 
 def check_skill_name(skill) -> str:
@@ -302,6 +306,23 @@ def load_profile(skill) -> Profile:
     summary_section = data.get("summary_section", False)
     if not isinstance(summary_section, bool):
         raise CheckError(f"report profile {path}: summary_section must be true or false")
+    summary_counts = names("summary_counts") if "summary_counts" in data else ()
+    null_words = data.get("summary_null_words", {})
+    if not isinstance(null_words, dict) or not all(
+            key in summary_counts and isinstance(words, str) and words.strip()
+            for key, words in null_words.items()):
+        raise CheckError(f"report profile {path}: summary_null_words must map a path of "
+                         f"summary_counts to the words its null value is written with")
+    required_except = data.get("required_except", [])
+    if not isinstance(required_except, list) or not all(
+            isinstance(entry, dict) and set(entry) == {"list", "field", "values"}
+            and isinstance(entry["list"], str) and entry["list"]
+            and isinstance(entry["field"], str) and entry["field"]
+            and isinstance(entry["values"], list)
+            and all(isinstance(v, str) for v in entry["values"])
+            for entry in required_except):
+        raise CheckError(f"report profile {path}: required_except must be a list of "
+                         f"{{list: <dotted path>, field: <key>, values: [<strings>]}}")
     return Profile(
         skill=skill,
         detail_sections=names("detail_sections"),
@@ -312,6 +333,9 @@ def load_profile(skill) -> Profile:
         required_keys=required_keys,
         report_prefix=prefix,
         summary_section=summary_section,
+        summary_counts=summary_counts,
+        required_except=tuple(required_except),
+        summary_null_words=tuple(null_words.items()),
     )
 
 
@@ -952,7 +976,8 @@ def summary_section(lines: list[str], raw: list[str], summary, profile: Profile)
     section line names is the main source of a recommendation, every high or
     medium recommendation is named by exactly one section line, and the
     numbers on the last non-blank line equal the count of low recommendations
-    the section does not name. A line naming a main source names every
+    the section does not name (with the profile's ``summary_counts``: that
+    count, then the JSON value of each path that is not null, in order). A line naming a main source names every
     recommendation with that source, so a source of high or medium blocks is
     named on as many lines as it has such blocks.
     """
@@ -1015,10 +1040,41 @@ def summary_section(lines: list[str], raw: list[str], summary, profile: Profile)
     else:
         line = profile.item_id.sub(" ", lines[count_line])
         written = [value for _, value in tokens(line)]
-        if not written or any(value != ("dec", low) for value in written):
-            problems.append(
-                f"line {count_line + 1}: the last line of the summary section must give "
-                f"{low}, the count of low recommendations it does not name")
+        if not profile.summary_counts:
+            if not written or any(value != ("dec", low) for value in written):
+                problems.append(
+                    f"line {count_line + 1}: the last line of the summary section must "
+                    f"give {low}, the count of low recommendations it does not name")
+        else:
+            # The low count first, then each path's JSON value; a null value
+            # (or a null parent) gives no number.
+            counts = [(path, dotted(summary, path)) for path in profile.summary_counts]
+            counts = [(path, value) for path, value in counts if value is not None]
+            expected = [("dec", low)] + [
+                ("dec", value) if isinstance(value, int) and not isinstance(value, bool)
+                else None for _, value in counts]
+            if written != expected:
+                parts = "".join(f", then {value} ({path})" for path, value in counts)
+                left_out = [path for path in profile.summary_counts
+                            if path not in dict(counts)]
+                note = (f"; no number for {', '.join(left_out)}, which is null"
+                        if left_out else "")
+                problems.append(
+                    f"line {count_line + 1}: the last line of the summary section must "
+                    f"give {low}, the count of low recommendations it does not name"
+                    f"{parts}, in this order and nothing else{note}")
+            # A null path is not checked: the line says so in the profile's words,
+            # and only then (a counted path is never also "not checked").
+            for path, words in profile.summary_null_words:
+                said = words.casefold() in lines[count_line].casefold()
+                if dotted(summary, path) is None and not said:
+                    problems.append(
+                        f"line {count_line + 1}: {path} is null, so the last line of the "
+                        f"summary section must say \"{words}\"")
+                elif dotted(summary, path) is not None and said:
+                    problems.append(
+                        f"line {count_line + 1}: {path} has a value, so the last line of "
+                        f"the summary section must not say \"{words}\"")
     # Fenced lines are blank in ``lines``: a marker-like line in a fence is printed.
     text = [line for index, line in enumerate(raw[first:end], start=first)
             if not _is_marker(lines[index], index)]
@@ -1084,14 +1140,21 @@ def _paragraph_line(line: str, continuing: bool) -> bool:
 
 
 def required_ids(summary, profile: Profile) -> list[tuple[str, str]]:
-    """(id, dotted list path) of the items of the profile's required lists.
+    """(id, dotted list path) of the items of the profile's required lists, and
+    of the items of each ``required_except`` list whose ``field`` is not one of
+    its ``values``.
 
     A list that is missing or not a list (``null``: the source could not be
     read) requires nothing.
     """
-    lists = [(where, dotted(summary, where)) for where in profile.required_lists]
-    return [(item["id"], where) for where, items in lists if isinstance(items, list)
-            for item in items if isinstance(item, dict) and isinstance(item.get("id"), str)]
+    lists = [(where, dotted(summary, where), None, ())
+             for where in profile.required_lists]
+    lists += [(entry["list"], dotted(summary, entry["list"]), entry["field"],
+               tuple(entry["values"])) for entry in profile.required_except]
+    return [(item["id"], where) for where, items, field, values in lists
+            if isinstance(items, list)
+            for item in items if isinstance(item, dict) and isinstance(item.get("id"), str)
+            and (field is None or item.get(field) not in values)]
 
 
 def item_ids(summary, profile: Profile) -> set[str]:

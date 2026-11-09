@@ -211,9 +211,12 @@ class TestReportProfile(RunallTestCase):
                 code = exc.code
         return code, out.getvalue() + err.getvalue()
 
-    def _write_report(self, lines, name):
+    def _write_report(self, lines, name, accepted=0):
+        # accepted: the quiet accepted count of the summary runall.main writes
+        # (no accepted.json: 0), on the summary's last line since plan 067, M2.
         path = self.reports / name
-        path.write_text("\n".join(with_summary(lines, SKILL)) + "\n", encoding="utf-8")
+        path.write_text("\n".join(with_summary(lines, SKILL, accepted=accepted)) + "\n",
+                        encoding="utf-8")
         return path
 
     def _assert_real_profile(self):
@@ -488,7 +491,7 @@ class TestDriverUpdateLinksProfile(unittest.TestCase):
         self.summary_file.write_text(json.dumps(summary), encoding="utf-8")
         self.detail_file.write_text(json.dumps(detail), encoding="utf-8")
 
-    def _write_report(self, link_lines, name):
+    def _write_report(self, link_lines, name, accepted="not_checked"):
         lines = [
             f"<!-- ush:summary {self.summary_file} -->",
             "# Raport zbiorczy, 2026-09-20",
@@ -524,7 +527,8 @@ class TestDriverUpdateLinksProfile(unittest.TestCase):
             "Nic.",
         ]
         path = self.reports_dir / name
-        path.write_text("\n".join(with_summary(lines, SKILL)) + "\n", encoding="utf-8")
+        path.write_text("\n".join(with_summary(lines, SKILL, accepted=accepted)) + "\n",
+                        encoding="utf-8")
         return path
 
     def _run(self, report_path):
@@ -598,7 +602,7 @@ class TestDecisionsProfile(unittest.TestCase):
         self.summary_file.write_text(json.dumps(summary), encoding="utf-8")
         self.detail_file.write_text(json.dumps(detail), encoding="utf-8")
 
-    def _write_report(self, decision_lines, name):
+    def _write_report(self, decision_lines, name, accepted="not_checked"):
         lines = [
             f"<!-- ush:summary {self.summary_file} -->",
             "# Raport zbiorczy, 2026-09-20",
@@ -637,7 +641,8 @@ class TestDecisionsProfile(unittest.TestCase):
             "Nic.",
         ]
         path = self.reports_dir / name
-        path.write_text("\n".join(with_summary(lines, SKILL)) + "\n", encoding="utf-8")
+        path.write_text("\n".join(with_summary(lines, SKILL, accepted=accepted)) + "\n",
+                        encoding="utf-8")
         return path
 
     def _run(self, report_path):
@@ -680,10 +685,15 @@ ACCEPTED_ITEMS = [
 ACCEPTED_COUNTS = {"quiet": 0, "back": 1, "gone": 1, "not_checked": 0}
 
 
+A1_LINE = "- a1: zaakceptowana aktualizacja znów zawiodła; wróciła."
+A2_LINE = "- a2: zaakceptowanej reguły zapory już nie ma; można ją usunąć (--remove)."
+
+
 class TestAcceptedProfile(TestDecisionsProfile):
-    """A summary with ``accepted`` items and ``accepted_counts`` still passes the runall
-    profile with a report in the current format, which names no ``a`` item (plan 060, M2,
-    K5); an ``a`` item named in ``ush:detail`` backs its numbers."""
+    """A summary with ``accepted`` items and ``accepted_counts`` passes the runall
+    profile with a report that names its ``back`` and ``gone`` items and gives the
+    quiet count on the summary's last line (plan 060, M2, K5; format of plan 067, M2);
+    an ``a`` item named in ``ush:detail`` backs its numbers."""
 
     def _write_data(self):
         super()._write_data()
@@ -695,16 +705,18 @@ class TestAcceptedProfile(TestDecisionsProfile):
 
     def test_current_format_passes(self):
         self._write_data()
-        with self.subTest("no a item named"):
-            code, output = self._run(self._write_report([J1_LINE],
-                                                        "runall-2026-09-20-1300.md"))
+        with self.subTest("a1 and a2 named, no number of theirs"):
+            code, output = self._run(self._write_report([J1_LINE, A1_LINE, A2_LINE],
+                                                        "runall-2026-09-20-1300.md",
+                                                        accepted=0))
             self.assertEqual(code, 0, f"output:\n{output}")
             self.assertIn("OK", output)
 
         with self.subTest("a1 named through ush:detail"):
             line = ("- a1: zaakceptowana aktualizacja znów zawiodła "
                     "(ostatnio 2026-09-19, zaakceptowana 2026-09-02).")
-            path = self._write_report([J1_LINE, line], "runall-2026-09-20-1301.md")
+            path = self._write_report([J1_LINE, line, A2_LINE], "runall-2026-09-20-1301.md",
+                                      accepted=0)
             text = path.read_text(encoding="utf-8").replace(
                 "## Nie sprawdzono", "<!-- ush:detail a1 -->\n## Nie sprawdzono")
             path.write_text(text, encoding="utf-8")
@@ -714,8 +726,9 @@ class TestAcceptedProfile(TestDecisionsProfile):
 
         with self.subTest("control: an unbacked number fails"):
             line = "- a1: zaakceptowana aktualizacja zawiodła 4711 razy."
-            code, output = self._run(self._write_report([J1_LINE, line],
-                                                        "runall-2026-09-20-1302.md"))
+            code, output = self._run(self._write_report([J1_LINE, line, A2_LINE],
+                                                        "runall-2026-09-20-1302.md",
+                                                        accepted=0))
             self.assertEqual(code, 1, f"output:\n{output}")
             self.assertIn("4711", output)
 

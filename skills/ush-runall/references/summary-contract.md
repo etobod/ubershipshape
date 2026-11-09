@@ -322,6 +322,47 @@ never its cut summary:
 
 The script sets no threshold. `--detail a1` prints one item.
 
+Entries are added and removed only on the user's word (`SKILL.md` step 10),
+each with this pass's `runall` detail file:
+
+- `accepted.py --accept "<skill> <id>" --detail-file <detail_file>` adds the
+  entry of a child item the report cites; an entry with the same kind and
+  key is replaced. A `back` item is accepted again with its `evidence`,
+  never with `ush-runall a<n>`.
+- `accepted.py --remove "ush-runall a<n>" --detail-file <detail_file>` reads
+  item `a<n>` of `accepted` in that detail file and removes the entry with
+  its `kind` and `key`, through the same verified write. Removing the last
+  entry leaves `{"schema_version": 1, "entries": []}`.
+- `--accept`, `--remove` and `--undo` are mutually exclusive and one is
+  required; `--detail-file` is required with `--accept` and `--remove` and
+  not taken with `--undo` (else a usage error, exit 2). Both `--accept` and
+  `--remove` print `{ok, key, kind, path}`; a
+  refusal (for `--remove`: a target not `ush-runall a<n>`, an id not in
+  `accepted`, `accepted` `null`, a key no longer in `accepted.json`, or an
+  unreadable `accepted.json`) prints `ok` `false` with `reason`, exits 1
+  and writes nothing.
+- The report's line of a `gone` item suggests `--remove` in words.
+- A result may also carry `warning` (with `ok` `true`): the new file is
+  saved, but `accepted.previous.json` was not replaced, so `--undo` does not
+  restore the state before this write. Tell the user so.
+- Rollback of either command: `accepted.py --undo` (with `--data-dir`, no
+  `--detail-file`), the only undo, run on the user's word; no file under
+  `state/` is copied or deleted by hand. Each write keeps the file before it
+  as `<data dir>/state/accepted.previous.json` (one generation, through
+  `baseline.save_json`); the first write ever first writes an empty accepted
+  file, so its previous generation is "no accepted findings". `--undo`
+  checks that file as `accepted.json` is checked, writes it back through
+  the same verified write (the current file becomes the previous
+  generation, so a second `--undo` goes back again), reads the result back
+  and prints `{ok, entry_count, path}`, `warning` as above; with no
+  previous file, or one that cannot be used, or an unreadable
+  `accepted.json`, it prints `ok` `false` with
+  `reason`, exits 1 and writes nothing. It restores only the state before
+  the last write. `--accept` again is not an undo (it stores this pass's
+  facts and date); a removed `gone` or `not_checked` entry cannot be
+  accepted again from this pass, and after another write it is lost for
+  good.
+
 ## Review dates (`review`, ids `r..`)
 
 After the accepted findings, `runall` reads `<data dir>/state/review-dates.json`

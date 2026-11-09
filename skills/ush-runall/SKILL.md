@@ -155,7 +155,10 @@ or running anything on a schedule. Say so if the user asks for these.
   the two providers the same only when `provider_via` is `equal`, and the
   two classes the same only when `class_via` is `equal`; when one of them is
   `table`, say that a line of `driver-link-aliases.json` paired those two
-  names.
+  names. One exception: the child item of a `quiet` accepted finding (the
+  `evidence` of an `a` item with `state` `quiet`) gets no recommendation,
+  no summary line and no leftover line; it is only counted (M on the
+  summary's last line, `accepted_counts.quiet`).
 - **Driver packages by state and group, no removal.** A driver package of
   `ush-inventory` (`o..`) is named by its `device_state`, never as an orphan
   or "without a device": `non_present` is "known device not present", with
@@ -263,7 +266,14 @@ or running anything on a schedule. Say so if the user asks for these.
    same thing, set contradicting findings side by side, name the leftovers
    of the rule "Leftovers are named", and read the firewall items against
    the network categories. The script sets no
-   threshold: the judgement is yours.
+   threshold: the judgement is yours. Leave out the child item of a `quiet`
+   accepted finding (its `evidence`): no recommendation, no summary line and
+   no leftover line, only the count. Name every `back`, `gone` and
+   `not_checked` accepted item (`ush-runall a<n>`) in the section
+   `Zaakceptowane`, and judge a `back` item like any finding (see
+   `references/report-format.md`): its recommendation's main source is
+   `ush-runall a<n>`, and its child item (its `evidence`) gets no
+   recommendation of its own, so one finding never gets two.
 
    Before judging, list `<data dir>/plans/` (not `done/`); for an open plan of a skill run in
    this pass, compare this run's values with the values its run blocks set (its `Odczyt po
@@ -412,3 +422,54 @@ or running anything on a schedule. Say so if the user asks for these.
    tell the user to run the same `run-me-admin.ps1` again from an elevated
    PowerShell and when to ask for the error first. Otherwise write a new report
    from that one pass, as in steps 2-7. Never merge two passes into one report.
+
+10. Accept or stop accepting a finding only on the user's word, never on
+    your own judgement. Only when the user says in words to accept a
+    finding the report cites (for example "zaakceptuj", or that it is fine
+    and should not be shown again), run `accepted.py --accept` with this
+    pass's `runall` detail file:
+
+    ```
+    python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-common/scripts/accepted.py" --accept "<skill> <id>" --detail-file <detail_file> --data-dir "<absolute data dir>"
+    ```
+
+    Only when the user says to stop accepting one (`ush-runall a<n>`), run
+    `accepted.py --remove` with the same detail file:
+
+    ```
+    python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-common/scripts/accepted.py" --remove "ush-runall a<n>" --detail-file <detail_file> --data-dir "<absolute data dir>"
+    ```
+
+    To accept a `back` item again with its new facts, run `--accept` with
+    that item's `evidence` (`"<skill> <id>"`), never with `ush-runall a<n>`:
+    the entry of the same kind and key is replaced.
+
+    Rollback of either command (`--accept` or `--remove`):
+    `accepted.py --undo`, the only undo, run
+    only on the user's word (never a manual copy or delete of a file under
+    `state/`):
+
+    ```
+    python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-common/scripts/accepted.py" --undo --data-dir "<absolute data dir>"
+    ```
+
+    Each `--accept` or `--remove` keeps the file before it as
+    `<data dir>/state/accepted.previous.json`, one generation (the first
+    write ever keeps an empty one: no accepted findings). `--undo` checks
+    that file, writes it back through the same verified write, reads the
+    result back and prints `ok` with `entry_count`; with no previous file,
+    or an unreadable `accepted.json`, it refuses and writes nothing. It
+    restores only the state before the last write: a second `--undo` goes back to the state the first one replaced.
+    Say this when you run either command. Accepting again with `--accept`
+    is not an undo: it stores this pass's facts and today's date, so a
+    `back` change becomes accepted. A removed `gone` or `not_checked` entry
+    cannot be accepted again from this pass (no child lists its finding, or
+    it was not read); after another write it is lost for good, since
+    `--undo` restores only the state before the last write, so say so when
+    you suggest removing one.
+
+    Then tell the user the printed `ok`, and on `false` its `reason`; a
+    refusal writes nothing. When the result has a `warning`, tell the user
+    it too: the new file is saved, but the previous generation was not
+    replaced, so `--undo` does not restore the state before this write. The report's line of a `gone` item suggests
+    `--remove` for it in words, never as a block.
