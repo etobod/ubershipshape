@@ -64,12 +64,12 @@ anything automatically. Say so if the user asks for these.
   `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/report-style.md`). Either goes into a repair
   plan per `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/repair-plan.md`, checked with `python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-common/scripts/check_repair_plan.py" <file>`;
   tell the user which plan holds it, and deliver each block in `run-me.ps1`
-  (normal shell) or `run-me-admin.ps1` (elevated shell) per
+  (normal shell) or `run-me-admin.ps1` (it elevates itself, a UAC prompt) per
   `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/run-me.md`. Nothing of it
   goes into the chat or the report. This
   `SKILL.md` has no change template (its only block, step 8, is the
   read-only elevated re-run), so a change step is given in words. The user
-  does it themselves (in an elevated PowerShell when it needs the rights),
+  does it themselves (with administrator rights when it needs them),
   and you then read the value back.
 - **Nothing leaves the machine.** No web search, no upload, no online tool.
 - **Read only the summary JSON.** Never open the raw captures or other files
@@ -195,7 +195,7 @@ anything automatically. Say so if the user asks for these.
 
 8. Only when `elevated` is `false` and some sources were not read because
    they need administrator rights (`needs administrator` in `not_checked`):
-   deliver this block for an elevated PowerShell in `run-me-admin.ps1` per
+   deliver this block in `run-me-admin.ps1`, which elevates itself (a UAC prompt), per
    `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/run-me.md`, with the absolute
    plugin root and the absolute data directory filled in. Do not run it
    yourself.
@@ -217,8 +217,7 @@ anything automatically. Say so if the user asks for these.
    the run") and whose `elevated` must be `true`. When it is not newer, or
    `elevated` is not `true`, the elevated pass did not run, failed or ran
    without the rights: follow `run-me.md` "After the run", which says when to
-   tell the user to run the same `run-me-admin.ps1` again from an elevated
-   PowerShell and when to ask for the error first. Otherwise write the whole
+   tell the user to run the same `run-me-admin.ps1` again (it elevates itself) and accept the UAC prompt and when to ask for the error first. Otherwise write the whole
    report again from that one summary, as in steps 3-6: a new `ush:summary`
    line, a new report file name, and the checker run on it until it prints `OK`.
    Never merge two summaries into one report: the elevated run reads a superset

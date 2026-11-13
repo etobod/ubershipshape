@@ -66,9 +66,8 @@ or running anything on a schedule. Say so if the user asks for these.
   `--days`, `--findings`, `--cut`, `--compare-to`, ...), so every child runs read-only. It never
   runs `logs.py` or `dumps.py`. It writes only to `<data dir>/work/`; the
   children write their own files and baselines to `<data dir>` as in a run
-  of their own. Any block (the elevated pass in the report, a change block
-  in a repair plan of step 5, never in the chat) is for the user to run in
-  their own shell (an elevated one where the child's rules say so),
+  of their own. Any block (the elevated pass of step 9, a change block
+  in a repair plan of step 5, never in the chat) is for the user to run (in `run-me-admin.ps1`, which elevates itself, where the child's rules say it needs administrator rights),
   delivered in `run-me.ps1` or `run-me-admin.ps1` per
   `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/run-me.md`; never run a block yourself.
 - **No identifiers from the h items.** The child summaries carry the
@@ -184,8 +183,9 @@ or running anything on a schedule. Say so if the user asks for these.
   many items were cut.
 - **One elevated block for the whole pass.** When a child has `elevated`
   `false` and `not_checked` entries that need administrator rights, the
-  report gives one block for an elevated shell that runs `runall.py` with
-  `--data-dir` (the absolute path, step 9), never the elevated re-run
+  report offers one elevated pass of `runall.py`
+  with `--data-dir` (the absolute path), delivered in `run-me-admin.ps1` per
+  step 9 and never in the report, never the elevated re-run
   blocks of the single skills. The change blocks of step 5 keep their
   elevated parts.
 - **The changes are summed up in this report.** The pass has already
@@ -345,8 +345,7 @@ or running anything on a schedule. Say so if the user asks for these.
    Correct the plan until the check gives `ok` `true`. Then tell the user
    which plan holds the blocks, and deliver the run blocks per
    `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/run-me.md`: all run blocks of a normal
-   PowerShell in one `run-me.ps1`, all of an elevated one in one
-   `run-me-admin.ps1`, in the plan's order; an undo block only when the user
+   PowerShell in one `run-me.ps1`, all that need administrator rights in one `run-me-admin.ps1` (it elevates itself), in the plan's order; an undo block only when the user
    asks to undo, as its own file. The blocks are never given in the chat and
    never go into the report.
 
@@ -391,12 +390,13 @@ or running anything on a schedule. Say so if the user asks for these.
 
 8. Tell the user where the report is (the absolute path of the report file, in the chat answer
    only): the chat answer is the summary section that `check_report.py` printed after `OK` when
-   it checked the report, word for word, followed by that path, with nothing added. It holds no
-   block: a block comes only after the user decides (step 5).
+   it checked the report, word for word, followed by that path, with nothing added except, when step 9 writes
+   `run-me-admin.ps1`, the lines `run-me.md` sets under "What the user is given"
+   (its command and what to wait for). It holds no block: a change block comes
+   only after the user decides (step 5).
 
 9. Only when a child has `elevated` `false` and `not_checked` entries that
-   need administrator rights: give one block for an elevated PowerShell that
-   runs the whole pass, delivered in `run-me-admin.ps1` per
+   need administrator rights: give one block that runs the whole pass with administrator rights, delivered in `run-me-admin.ps1`, which elevates itself (a UAC prompt), per
    `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/run-me.md` (not `run-me.ps1`, which is
    for a normal shell). It is not required; do not run it yourself.
 
@@ -419,8 +419,7 @@ or running anything on a schedule. Say so if the user asks for these.
    none) is not a missing right. When it is not newer, or a child with status
    `ok` has `elevated` `false`, the elevated pass did not run, failed or ran
    without the rights: follow `run-me.md` "After the run", which says when to
-   tell the user to run the same `run-me-admin.ps1` again from an elevated
-   PowerShell and when to ask for the error first. Otherwise write a new report
+   tell the user to run the same `run-me-admin.ps1` again (it elevates itself) and accept the UAC prompt and when to ask for the error first. Otherwise write a new report
    from that one pass, as in steps 2-7. Never merge two passes into one report.
 
 10. Accept or stop accepting a finding only on the user's word, never on

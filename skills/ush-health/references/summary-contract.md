@@ -54,7 +54,7 @@ are not run:
 | `restore_points` (`Get-ComputerRestorePoint`) | source `unreadable`, reason `needs administrator`; `restore_points` is `null` |
 | `winre` (`reagentc /info`) | source `unreadable`, reason `needs administrator`; `winre` is `null` |
 
-Running the same script in an elevated PowerShell (the user does it, see
+Running the same script with administrator rights (the user runs it from `run-me-admin.ps1`, which elevates itself, see
 `SKILL.md`) reads a superset of the sources. It is still read-only.
 
 ## Summary fields

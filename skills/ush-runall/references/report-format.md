@@ -115,8 +115,7 @@ change. The model checks the plan with
 `python -B "<plugin root>/skills/ush-common/scripts/check_repair_plan.py" <file>` and tells
 the user which plan holds the blocks. The plan still holds them; they reach
 the user in `run-me.ps1` / `run-me-admin.ps1` in the cwd per
-`<plugin root>/skills/ush-common/references/run-me.md` (`run-me-admin.ps1`
-where the child's rules say an elevated PowerShell), and the user runs them
+`<plugin root>/skills/ush-common/references/run-me.md` (`run-me-admin.ps1`, which elevates itself, where the child's rules say administrator rights), and the user runs them
 themselves; you never run a block. After the user ran a block, a new run reads the
 values back; the result goes under `Notatki` and the plan is moved to
 `plans/done/` only when every value the plan sets reads back as set (see the
@@ -483,17 +482,12 @@ comparison was not made: say so and give the reason in "Not checked".
 Only when a child has `elevated` `false` and `not_checked` entries that need
 administrator rights:
 
-- The report gives one block for an elevated PowerShell that runs
-  `runall.py` with `--data-dir` (the absolute data directory) and a
+- The report offers, in words, one elevated pass of `runall.py`; its block
+  (delivered in `run-me-admin.ps1`, never in the report) runs it with `--data-dir` (the absolute data directory) and a
   `Set-Location` line (rule 9 of `report-style.md`), never the elevated
   re-run blocks of the single skills (a change block, given after the
   user decides, keeps its elevated parts); it says what that pass reads more and that it
-  changes nothing.
-
-```powershell
-Set-Location "C:\proj"
-python -B skills/ush-runall/scripts/runall.py --data-dir "C:\dane\ush"
-```
+  changes nothing. The block itself is the one of step 9 of `SKILL.md`.
 
 Without such entries this section is left out.
 

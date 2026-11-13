@@ -62,13 +62,13 @@ for these.
   You write it into a repair plan per `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/repair-plan.md`,
   check the plan with `python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-common/scripts/check_repair_plan.py" <file>`, tell the user which plan holds it,
   and deliver the block per `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/run-me.md`:
-  in `run-me-admin.ps1` for an elevated PowerShell (`run-me.ps1` only for a
+  in `run-me-admin.ps1`, which elevates itself (a UAC prompt) (`run-me.ps1` only for a
   block that names a normal shell); the block never goes into the chat or the report.
   After a new run has read the value back, write the result under `Notatki`
   and move the plan to `plans/done/` only when every value the plan sets reads
   back as set (see the step before judging); otherwise it stays open; never
   delete it. The templates are the dump copy (step 8) and the log export and
-  clear (step 10): the user runs them themselves in an elevated PowerShell; you
+  clear (step 10): the user runs them themselves from `run-me-admin.ps1`, which elevates itself (a UAC prompt); you
   then read the result back.
 - **Nothing leaves the machine.** No web search, no upload, no online tool.
 - **Read only the summary JSON.** Never open the raw captures or other files
@@ -198,8 +198,7 @@ for these.
    Reading a dump usually needs administrator rights, so do not run the copy
    yourself. The report proposes archiving in words and holds no block
    (rule 8 of `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/report-style.md`). Only after
-   the user decides to archive, put this template block for an elevated
-   PowerShell into a repair plan per `repair-plan.md` (see Rules), never
+   the user decides to archive, put this template block, which needs administrator rights, into a repair plan per `repair-plan.md` (see Rules), never
    into the chat, with the absolute plugin root and the absolute
    data directory filled in from the summary:
 
@@ -271,8 +270,7 @@ for these.
    nothing to verify): do not run it again, and it cannot be cleared.
 
 10. Clearing a log, only when the user explicitly asks for it. Never run it
-    yourself and never pass `--clear` in any other step. Put this block for
-    an elevated PowerShell into a repair plan per `repair-plan.md` (see
+    yourself and never pass `--clear` in any other step. Put this block, which needs administrator rights, into a repair plan per `repair-plan.md` (see
     Rules), not into the chat, with the log name, the absolute
     plugin root and the absolute data directory filled in, as a
     recommendation in the layout of rule 4 of
@@ -284,7 +282,7 @@ for these.
       history of that log (clearing `System` removes the boot sessions,
       trends and bugchecks it would report);
     - `evidence`: the user's request and the log's name;
-    - `permissions`: administrator (an elevated PowerShell);
+    - `permissions`: administrator (`run-me-admin.ps1`, which elevates itself);
     - `rollback`: none, it is irreversible; the export and the `-rest` file
       are a copy to open in Event Viewer, they cannot be loaded back into
       the log.

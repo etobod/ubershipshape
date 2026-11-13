@@ -258,13 +258,12 @@ class TestRunMe(unittest.TestCase):
                        "run-me-admin.out.txt",
                        "git check-ignore",
                        "powershell -ExecutionPolicy Bypass -File .\\run-me.ps1",
-                       "powershell -ExecutionPolicy Bypass -File .\\run-me-admin.ps1"):
+                       # Plan 070 M1: run-me-admin.ps1 elevates itself and is run by
+                       # its absolute path from a normal shell, so the old
+                       # "Set-Location <cwd>; ... -File .\run-me-admin.ps1" command is gone.
+                       'powershell -ExecutionPolicy Bypass -File "<cwd>\\run-me-admin.ps1"'):
             self.assertIn(phrase, rule)
         self.assertRegex(rule, r"\btry\s*\{", "the block is wrapped in try {")
-        self.assertRegex(
-            rule, r"Set-Location\b[^`\n]*;\s*powershell -ExecutionPolicy Bypass -File "
-                  r"\.\\run-me-admin\.ps1",
-            "the elevated command changes into the cwd first")
         # The written file is read back and compared with its source line by line.
         self.assertIn("read back", lowered)
         self.assertIn("line by line", lowered)
@@ -355,11 +354,180 @@ class TestRunMe(unittest.TestCase):
                     # The file and "again" in one sentence: an unrelated "again" nearby
                     # (write the report again) is not a rerun of the file.
                     and rerun.search(lowered),
-                    "does not tell the user to run the same run-me-admin.ps1 again from an "
-                    "elevated PowerShell when the elevated pass did not run")
+                    "does not tell the user to run the same run-me-admin.ps1 again "
+                    "(it elevates itself, plan 070) when the elevated pass did not run")
                 if label == "run-me.md":
                     self.assertNotIn("a new run of the skill shows what changed", lowered,
                                      "still offers a new run of the skill as the recovery")
+
+
+RUN_ME_DOC = SKILLS / "ush-common/references/run-me.md"
+
+
+def fenced_blocks(text):
+    """The bodies of the ``` fenced blocks of a Markdown text, in order."""
+    return re.findall(r"(?ms)^```[^\n]*\n(.*?)^```", text)
+
+
+def admin_frame(text):
+    """The fenced block of run-me.md that is the run-me-admin.ps1 frame."""
+    for block in fenced_blocks(text):
+        if "run-me-admin.out.txt" in block and "Start-Transcript" in block:
+            return block
+    return None
+
+
+class TestRunMeElevation(unittest.TestCase):
+    """run-me-admin.ps1 elevates itself and run-me files show each block
+    (loc/inbox/070-plan-1-hard-run-me-admin-self-elevation.md)."""
+
+    # M1 K1
+    def test_admin_frame_elevates_itself_before_transcript(self):
+        frame = admin_frame(read(RUN_ME_DOC))
+        self.assertIsNotNone(frame, "run-me.md has no run-me-admin.ps1 frame")
+        check = re.search(r"if\s*\(\s*-not\s*\(?[^\n]*IsInRole[^\n]*Administrator", frame)
+        self.assertIsNotNone(check, "the frame has no IsInRole administrator check")
+        else_at = re.search(r"\}\s*else\s*\{", frame[check.end():])
+        self.assertIsNotNone(else_at, "the administrator check has no else branch")
+        not_admin = frame[check.end():check.end() + else_at.start()]
+        admin = frame[check.end() + else_at.end():]
+        self.assertIn("Start-Process powershell.exe", not_admin)
+        self.assertIn("-Verb RunAs", not_admin)
+        self.assertIn("-NoExit", not_admin)
+        self.assertIn('-File "<cwd>\\run-me-admin.ps1"', not_admin)
+        for token in ("Start-Transcript", "Stop-Transcript", "<the block"):
+            self.assertNotIn(token, not_admin, f"{token} runs in the not-elevated branch")
+            self.assertIn(token, admin, f"{token} is not in the elevated branch")
+        head = frame[:check.start()]
+        self.assertNotIn("Start-Transcript", head, "the transcript starts before the check")
+
+    # M1 K2
+    def test_admin_command_for_normal_shell(self):
+        text = read(RUN_ME_DOC)
+        rule = flat(text)
+        self.assertIn('powershell -ExecutionPolicy Bypass -File "<cwd>\\run-me-admin.ps1"', rule)
+        self.assertIn("uac", rule.lower())
+        lowered = rule.lower()
+        for phrase in ("run as administrator", "open an elevated", "from an elevated powershell",
+                       "in an elevated powershell", "an elevated shell starts elsewhere"):
+            self.assertNotIn(phrase, lowered, f"run-me.md still says {phrase!r}")
+
+    # M1 K3
+    def test_frame_prints_block_start_and_end(self):
+        text = read(RUN_ME_DOC)
+        frames = [b for b in fenced_blocks(text) if "Start-Transcript" in b]
+        names = {"run-me-admin.out.txt" in b for b in frames}
+        self.assertEqual(names, {True, False}, "run-me.md has no frame for each file")
+        for frame in frames:
+            with self.subTest(frame=frame.splitlines()[0]):
+                start = re.search(r'Write-Host "\[<n>/<N>\] [^"\n]*\.\.\."', frame)
+                done = re.search(r'Write-Host "\[<n>/<N>\] done"', frame)
+                closing = frame.find('Write-Host "Finished. You can close this window."')
+                block = frame.find("<the block")
+                self.assertIsNotNone(start, "no numbered start line")
+                self.assertIsNotNone(done, "no numbered end line")
+                self.assertNotEqual(block, -1)
+                self.assertLess(start.start(), block)
+                self.assertGreater(done.start(), block)
+                self.assertGreater(closing, done.start(), "no closing line after the blocks")
+
+    # M1 K4
+    def test_not_elevated_rerun_accepts_uac(self):
+        lowered = flat(read(RUN_ME_DOC)).lower()
+        # The passage about an elevated pass whose summary is not elevated.
+        not_elevated = re.compile(r"not elevated|\"elevated\":\s*false"
+                                  r"|`elevated`[^.]{0,40}\bfalse\b")
+        windows = [lowered[max(0, m.start() - 400):m.end() + 400]
+                   for m in not_elevated.finditer(lowered)]
+        self.assertTrue(windows, "run-me.md does not name a summary that is not elevated")
+        rerun = re.compile(r"run-me-admin\.ps1`?(?:(?!\. ).){0,200}?\bagain\b"
+                           r"|\bagain\b(?:(?!\. ).){0,200}?run-me-admin\.ps1")
+        same_command = re.compile(r"\bsame command\b")
+        accept_uac = re.compile(r"\baccept(?:(?!\. ).){0,80}?\buac\b"
+                                r"|\buac\b(?:(?!\. ).){0,80}?\baccept")
+        matching = [w for w in windows
+                    if "summary" in w and rerun.search(w)
+                    and same_command.search(w) and accept_uac.search(w)]
+        self.assertTrue(
+            matching,
+            "after an elevated pass whose summary is not elevated, run-me.md does not tell "
+            "the user to run the same run-me-admin.ps1 again with the same command and "
+            "accept the UAC prompt")
+        for window in matching:
+            for phrase in ("open an elevated", "from an elevated powershell",
+                           "in an elevated powershell", "run as administrator"):
+                self.assertNotIn(phrase, window,
+                                 f"the rerun still asks for an elevated shell: {phrase!r}")
+
+    # M2 K1
+    def test_no_skill_tells_user_to_open_elevated_shell(self):
+        # Prose only: fenced blocks (``` and ````) are skipped, and so is a quote in
+        # backticks or quotation marks, such as the header a block printer prints
+        # ("Run in an elevated Windows PowerShell").
+        quoted = re.compile(r"`[^`]*`|\"[^\"]*\"|“[^”]*”|„[^”]*”")
+        asks = (
+            ("open an elevated shell",
+             re.compile(r"\bopen(?:s|ing)?\s+(?:(?:a|an|the)\s+)?(?:new\s+)?elevated\b")),
+            ("start PowerShell as administrator",
+             re.compile(r"\b(?:start|open|launch|run)(?:s|ing)?\s+(?:(?:a|an|the)\s+)?"
+                        r"(?:new\s+)?(?:windows\s+)?powershell(?:\.exe)?(?:\s+window)?\s+"
+                        r"as\s+(?:an?\s+)?admin(?:istrator)?\b")),
+            ("in/from an elevated PowerShell",
+             re.compile(r"\b(?:in|from)\s+(?:an?|the)\s+elevated\s+(?:windows\s+)?powershell\b")),
+        )
+        docs = sorted(SKILLS.glob("*/SKILL.md")) + sorted(SKILLS.glob("*/references/*.md"))
+        self.assertTrue(docs, "no skill docs found")
+        problems = []
+        for path in docs:
+            name = path.relative_to(SKILLS).as_posix()
+            paragraphs = []
+            current = []
+            for number, line, kind in classify_lines(read(path)):
+                if kind != "text" or not line.strip():
+                    if current:
+                        paragraphs.append(current)
+                    current = []
+                    continue
+                current.append((number, line))
+            if current:
+                paragraphs.append(current)
+            for paragraph in paragraphs:
+                text = flat(" ".join(line for _, line in paragraph))
+                prose = quoted.sub(" ", text).lower()
+                for label, pattern in asks:
+                    match = pattern.search(prose)
+                    if match:
+                        problems.append(
+                            f"{name}:{paragraph[0][0]}: {label}: {match.group(0)!r}")
+        self.assertEqual(problems, [],
+                         "a skill doc still tells the user to open an elevated shell "
+                         "(run-me-admin.ps1 elevates itself, plan 070)")
+
+    # M2 K2
+    def test_skills_name_self_elevation(self):
+        said = re.compile(r"run-me-admin\.ps1`?(?:(?!\. ).){0,80}?\belevates itself\b"
+                          r"(?:(?!\. ).){0,40}?\buac\b")
+        for name in RUN_ME_SKILLS:
+            with self.subTest(skill=f"ush-{name}"):
+                lowered = flat(read(SKILLS / f"ush-{name}" / "SKILL.md")).lower()
+                self.assertRegex(lowered, said,
+                                 "does not say run-me-admin.ps1 elevates itself (a UAC prompt)")
+
+    # M2 K3
+    def test_skills_rerun_accepts_uac(self):
+        rerun = re.compile(r"run the same `run-me-admin\.ps1`(?:(?!\. ).){0,60}?\bagain\b"
+                           r"(?:(?!\. ).){0,60}?\baccept the uac prompt\b")
+        for name in ("health", "files", "inventory", "processes", "runall", "settings"):
+            with self.subTest(skill=f"ush-{name}"):
+                lowered = flat(read(SKILLS / f"ush-{name}" / "SKILL.md")).lower()
+                self.assertRegex(lowered, rerun,
+                                 "a failed elevated pass is not 'run the same run-me-admin.ps1 "
+                                 "again and accept the UAC prompt'")
+
+    # M2 K4
+    def test_plugin_version_raised(self):
+        plugin = json.loads(read(MANIFEST_DIR / "plugin.json"))
+        self.assertEqual(plugin["version"], "1.0.43")
 
 
 # loc/inbox/055-plan-1-hard-report-summary.md, M2: the chat answer is the summary

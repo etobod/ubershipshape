@@ -290,7 +290,7 @@ reads the memory dumps. A missing or unreadable detail file, `listed`,
 `python -B "<plugin root>/skills/ush-events/scripts/dumps.py" --data-dir <dir>` prints the
 same inventory as `dumps` (without ids and links) as JSON on stdout,
 `{generated_at, inventory}`, and changes nothing. The user runs it with
-`--copy` in an elevated PowerShell (see `SKILL.md`); the skill never runs
+`--copy` from `run-me-admin.ps1`, which elevates itself (see `SKILL.md`); the skill never runs
 `--copy` itself.
 
 `--copy` copies each readable dump to
@@ -432,6 +432,6 @@ Archiving memory dumps (`dumps.py --copy`) is a `change` with:
   dumps, `size` in `dumps.files`); with `--delete-source` the original is
   gone, and only the verified copy remains;
 - `evidence`: the dump ids (`d1`) and, when linked, their bugcheck (`a2`);
-- `permissions`: administrator (an elevated PowerShell, run by the user);
+- `permissions`: administrator (`run-me-admin.ps1`, which elevates itself, run by the user);
 - `rollback`: the copy stays; deleting the original is irreversible (it can
   only be copied back from the archive by hand).

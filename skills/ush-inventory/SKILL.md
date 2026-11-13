@@ -362,8 +362,7 @@ Say so if the user asks for these.
 8. Only when `elevated` is `false`: you may offer an elevated run, which
    also sees the tasks this account cannot and reads the capabilities and
    the Defender exclusions. It compares only with an elevated baseline, so
-   its first run has no comparison. Deliver this block in `run-me-admin.ps1`
-   per `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/run-me.md`. Do not run it yourself.
+   its first run has no comparison. Deliver this block in `run-me-admin.ps1`, which elevates itself (a UAC prompt), per `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/run-me.md`. Do not run it yourself.
 
    ```
    # Runs the same read-only inventory with administrator rights. It changes
@@ -381,8 +380,7 @@ Say so if the user asks for these.
    the run") and whose `elevated` must be `true`. When it is not newer, or
    `elevated` is not `true`, the elevated pass did not run, failed or ran
    without the rights: follow `run-me.md` "After the run", which says when to
-   tell the user to run the same `run-me-admin.ps1` again from an elevated
-   PowerShell and when to ask for the error first. Otherwise write a new report
+   tell the user to run the same `run-me-admin.ps1` again (it elevates itself) and accept the UAC prompt and when to ask for the error first. Otherwise write a new report
    from that one summary, as in steps 3-6. Never merge two summaries into one
    report.
 

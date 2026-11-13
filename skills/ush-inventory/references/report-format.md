@@ -453,8 +453,7 @@ the count of low recommendations whose main source no line names.
      `path`, after one line with the cause (`not_judged`, the same text for
      all of them): something they could belong to was not read, so the run
      cannot say whether a program matches them; never write "no installed
-     program matches" for one, never count it among the unmatched, and offer
-     the run again in an elevated shell (and, when the cause is a source or
+     program matches" for one, never count it among the unmatched, and offer the run again with administrator rights (`run-me-admin.ps1`, which elevates itself) (and, when the cause is a source or
      a program key, the cause named in "Not checked"). Then, each on its own
      line with its number from `component_counts`: folders read
      (`vendor_folders_read`), matched (`vendor_folders_matched`), with no

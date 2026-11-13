@@ -167,8 +167,7 @@ a change automatically. Say so if the user asks for these.
    which plan holds the blocks and deliver each part per
    `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/run-me.md`: the part under "Run in a
    normal (non-elevated) Windows PowerShell" in `run-me.ps1`, for the user's own normal shell,
-   the part under "Run in an elevated Windows PowerShell" in `run-me-admin.ps1`, for a shell started
-   with "Run as administrator". A rollback part never goes into a file with
+   the part under "Run in an elevated Windows PowerShell" in `run-me-admin.ps1`, which elevates itself (a UAC prompt). A rollback part never goes into a file with
    its run part: only when the user asks to undo is it written, as its own
    `run-me.ps1` or `run-me-admin.ps1` for its shell. Lines starting with `#` that say "no block" give the reason an
    entry got no command; give that reason. An entry with `has_block`
@@ -238,7 +237,6 @@ from such a run). After the user says it ran, read the newest
 `run-me-admin.ps1`, never the file's modification time; `run-me.md` "After the
 run") and whose `elevated` must be `true`. When it is not newer, or `elevated`
 is not `true`, the elevated pass did not run, failed or ran without the rights:
-follow `run-me.md` "After the run", which says when to tell the user to run the
-same `run-me-admin.ps1` again from an elevated PowerShell and when to ask for
+follow `run-me.md` "After the run", which says when to tell the user to run the same `run-me-admin.ps1` again (it elevates itself) and accept the UAC prompt and when to ask for
 the error first. Otherwise write a new report from that one summary. Never merge
 two summaries into one report.

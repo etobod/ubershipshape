@@ -179,8 +179,7 @@ the count of low recommendations whose main source no line names.
 
    - what the user must make sure of first: `conditions`, in the report
      language;
-   - the shell: `needs_admin` `true` is an elevated PowerShell, `false` the
-     user's own PowerShell;
+   - the shell: `needs_admin` `true` is `run-me-admin.ps1`, which elevates itself (a UAC prompt), `false` the user's own PowerShell (`run-me.ps1`);
    - `risk`, and that it cannot be undone (`rollback`);
    - that the block comes after the user decides: once the user chooses
      the item, the model prints it with

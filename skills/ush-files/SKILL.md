@@ -96,8 +96,7 @@ files, file contents or cloud storage. Say so if the user asks for these.
   copy, verify size and SHA-256, then delete, for Downloads files the user
   approved.
 - **Before a cleanup block, its conditions.** Give the item's `conditions`
-  as what the user must make sure of first, whether it needs an elevated
-  shell (`needs_admin`), and its rollback: "cannot be undone".
+  as what the user must make sure of first, whether it needs administrator rights (`needs_admin`, then `run-me-admin.ps1`), and its rollback: "cannot be undone".
 - **Recommendations** carry `weight`, `kind`, `risk`, `evidence`,
   `permissions` and `rollback` as defined in the shared contract
   `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/summary-contract.md` ("Recommendations").
@@ -144,8 +143,7 @@ files, file contents or cloud storage. Say so if the user asks for these.
    is not "no plans".
 
 4. The report proposes each cleanup item you recommend in words, with its
-   conditions, the shell it needs (`needs_admin` `true`: an elevated
-   PowerShell), its risk and that it cannot be undone, and holds no block
+   conditions, the shell it needs (`needs_admin` `true`: administrator rights, in `run-me-admin.ps1`), its risk and that it cannot be undone, and holds no block
    (rule 8 of `${CLAUDE_PLUGIN_ROOT}/skills/ush-common/references/report-style.md`). Only after the
    user chooses an item, print its block with
 
@@ -276,7 +274,6 @@ files, file contents or cloud storage. Say so if the user asks for these.
    modification time; `run-me.md` "After the run") and whose `elevated` must be
    `true`. When it is not newer, or `elevated` is not `true`, the elevated pass
    did not run, failed or ran without the rights: follow `run-me.md` "After the
-   run", which says when to tell the user to run the same `run-me-admin.ps1`
-   again from an elevated PowerShell and when to ask for the error first.
+   run", which says when to tell the user to run the same `run-me-admin.ps1` again (it elevates itself) and accept the UAC prompt and when to ask for the error first.
    Otherwise write a new report from that one summary, as in steps 3-6. Never
    merge two summaries into one report.

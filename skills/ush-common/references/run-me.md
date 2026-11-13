@@ -6,7 +6,8 @@ writes it, with its file tool, into a file in the session's working directory
 (the cwd):
 
 - `run-me.ps1` for a normal (non-elevated) Windows PowerShell;
-- `run-me-admin.ps1` for an elevated one (Run as administrator).
+- `run-me-admin.ps1` for blocks that need administrator rights; it elevates
+  itself.
 
 The file is overwritten as a whole each time. One file holds the blocks the
 user is to run now, for one shell only, in the order of their source. A run
@@ -17,19 +18,53 @@ written only when the user asks to undo, as its own file.
 
 The block comes only from a `--block` printer, a template in a `SKILL.md` or a
 repair plan, copied word for word, with every guard kept. Its `Set-Location`
-to the plugin root stays inside the file. Around it:
+to the plugin root stays inside the file. Around it, for `run-me-admin.ps1`:
 
 ```
-# Shell: elevated Windows PowerShell (Run as administrator)
+# Shell: Windows PowerShell; starts itself as administrator, run it from a normal PowerShell
+# Not elevated: it starts itself again as administrator (a UAC prompt) and this window stops.
 # Does: <what the block does, one or two lines>
 # Source: <the printer, the SKILL.md template or the repair plan file>
 # Written: <YYYY-MM-DD HH:MM> (<YYYY-MM-DD HH:MM> UTC)
 # Writes its output to run-me-admin.out.txt beside this file in the cwd.
-Start-Transcript -Path "<cwd>\run-me-admin.out.txt" -Force
-try {
+if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+  Write-Host "Starting as administrator: accept the UAC prompt; the blocks run in a new window."
+  Start-Process powershell.exe -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -NoExit -File "<cwd>\run-me-admin.ps1"'
+  Write-Host "This window is done. Wait for 'Finished.' in the new window."
+} else {
+  Start-Transcript -Path "<cwd>\run-me-admin.out.txt" -Force
+  try {
+    Write-Host "[<n>/<N>] <what the block does, a few words> ..."
 <the block, word for word>
+    Write-Host "[<n>/<N>] done"
+    Write-Host "Finished. You can close this window."
+  } finally { Stop-Transcript }
+}
+```
+
+The blocks run only in the `else` branch: a window without the rights starts
+the elevated one (`-NoExit` keeps it open when the blocks end) and does nothing
+else. A refused UAC prompt starts nothing.
+
+For `run-me.ps1`:
+
+```
+# Shell: normal (non-elevated) Windows PowerShell
+# Does: <what the block does, one or two lines>
+# Source: <the printer, the SKILL.md template or the repair plan file>
+# Written: <YYYY-MM-DD HH:MM> (<YYYY-MM-DD HH:MM> UTC)
+# Writes its output to run-me.out.txt beside this file in the cwd.
+Start-Transcript -Path "<cwd>\run-me.out.txt" -Force
+try {
+  Write-Host "[<n>/<N>] <what the block does, a few words> ..."
+<the block, word for word>
+  Write-Host "[<n>/<N>] done"
+  Write-Host "Finished. You can close this window."
 } finally { Stop-Transcript }
 ```
+
+`<n>` is the block's number in the file and `<N>` the number of blocks; the
+`Write-Host` lines are ASCII and name no path or value from the machine.
 
 The `# Written:` times come from the machine, never from a guess or the
 conversation: read them just before writing the file,
@@ -40,16 +75,16 @@ python -B -c "from datetime import datetime, timezone; n = datetime.now().astime
 
 and copy its output after `# Written: `.
 
-For `run-me.ps1` the shell line says normal (non-elevated) Windows
-PowerShell and the transcript line is
-`Start-Transcript -Path "<cwd>\run-me.out.txt" -Force`. `<cwd>` is the
-absolute working directory, written into the file: a file pasted into a
-console instead of run with `-File` has no script folder, and its transcript
-would land in the drive root. The `finally` closes the transcript also when
-the block throws.
+`<cwd>` is the absolute working directory, written into the file: a file
+pasted into a console instead of run with `-File` has no script folder, and
+its transcript would land in the drive root; the elevated window starts in
+another folder. The `finally` closes the transcript also when the block
+throws.
 
 Several run blocks of one shell go into one file one after another, each
-under its own `# Source:` comment, all inside the same `try { ... } finally`.
+under its own `# Source:` comment and between its own `[<n>/<N>]` start and
+`done` lines, all inside the same `try { ... } finally`; the `Finished.` line
+comes once, after the last block.
 
 The file ends up as UTF-8 with BOM (Windows PowerShell 5.1 reads a UTF-8
 file without BOM as ANSI); see "After writing".
@@ -84,10 +119,14 @@ differs or prints `False`.
 
 One command line to type, and what the file does:
 
-- normal shell: `powershell -ExecutionPolicy Bypass -File .\run-me.ps1`;
-- elevated shell: `Set-Location "<cwd>"; powershell -ExecutionPolicy Bypass -File .\run-me-admin.ps1`,
-  with `<cwd>` the absolute working directory (an elevated shell starts
-  elsewhere).
+- `run-me.ps1`: `powershell -ExecutionPolicy Bypass -File .\run-me.ps1`
+  in a normal PowerShell in the cwd;
+- `run-me-admin.ps1`: `powershell -ExecutionPolicy Bypass -File "<cwd>\run-me-admin.ps1"`
+  in a normal PowerShell, with `<cwd>` the absolute working directory; it
+  shows a UAC prompt to accept, and the blocks run in a new window that stays
+  open. Tell the user to answer only when that new window shows
+  `Finished. You can close this window.` (or an error): the typed command
+  returns at once, while the blocks may run for minutes.
 
 `-ExecutionPolicy Bypass` applies to that one process and changes no machine
 setting. Never run either file yourself.
@@ -108,14 +147,13 @@ header is the moment of the hand-off.
 
 A skill's read-only elevated re-run changes nothing, so it can always be run
 again. When it left a summary newer than the header whose `elevated` is not
-`true`, it ran without the rights: tell the user to run the same
-`run-me-admin.ps1` again, with the same command line, from an elevated
-PowerShell (Run as administrator); a normal run of the skill cannot read what
-needs the rights. When it left no summary newer than the header, ask the user
+`true` (not elevated), it ran without the rights: tell the user to run the
+same `run-me-admin.ps1` again, with the same command, and accept the UAC
+prompt; a normal run of the skill cannot read what needs the rights. When it left no summary newer than the header, ask the user
 whether the window showed an error. Without one, it did not run: hand the same
 file back as above. With one, ask for the error message (below) and say what
-it points to (a wrong folder in `Set-Location`, a refused prompt, `python` not
-found, the script stopping); then hand the same file back as above, once that
+it points to (a wrong folder in `Set-Location`, a refused UAC prompt, `python`
+not found, the script stopping); then hand the same file back as above, once that
 cause is put right. For `ush-runall` a child that fails shows in the new
 summary as its status, so only a pass that wrote no summary at all comes
 here.
