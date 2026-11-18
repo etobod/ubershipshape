@@ -57,9 +57,9 @@ list); in short:
   `report-style.md`) (in Polish `160,0`), counts without a thousands
   separator. Never add children's numbers up, never compute a difference
   or a percentage.
-- The ids `h1`…`h8`, `w1`… and `y1`… are not numbers when they name an item of the
-  summary or of an `ush:detail` line, or a `w` item cut from the summary
-  (`truncated` > 0). A child's ids are not `runall` ids: write them with the
+- The ids `h1`…`h8`, `w1`…, `y1`… and `r1`… are not numbers when they name an item of the
+  summary or of an `ush:detail` line, a `w` item cut from the summary
+  (`truncated` > 0), or an `r` item cut from it (`truncated_review` > 0). A child's ids are not `runall` ids: write them with the
   skill (`ush-inventory s11`, `ush-events g3`); their digits are checked as
   numbers and backed by the named `h` item.
 - An item a child cut from its own summary (the child's `truncated` and its
@@ -89,13 +89,13 @@ list); in short:
 ## Items the report must name
 
 Every `children[*].id` (`h1`…`h8`), every `firewall_ports[*].id` (`w1`…),
-every `driver_update_links[*].id` (`y1`…), every `decisions[*].id` (`j1`…) and every `accepted[*].id` (`a1`…) whose `state` is not `quiet` (the profile's `required_except`) of the summary appears in a visible line of the report, as a word of its own
+every `driver_update_links[*].id` (`y1`…), every `decisions[*].id` (`j1`…), every `accepted[*].id` (`a1`…) whose `state` is not `quiet` and every `review[*].id` (`r1`…) whose `state` is `due`, `gone` or `not_checked` (not `no_decision`, `not_due` or `no_limit`; the profile's `required_except`) of the summary appears in a visible line of the report, as a word of its own
 (`h12` does not name `h1`), each with a short name after it (rule 6 of
 `report-style.md`): the skill for an `h` item, the rule's name or program
-for a `w` item, the provider for a `y` item, the decision (`D<n>`) for a `j` item, the entry's key for an `a` item. An id on an `ush:detail` line, on another marker line or in
+for a `w` item, the provider for a `y` item, the decision (`D<n>`) for a `j` item, the entry's key for an `a` item, the item's `name` for an `r` item. An id on an `ush:detail` line, on another marker line or in
 a fenced code block does not count. The check lists each missing id as
 `not named in the report: <id> (<list>)` and fails. A list that is `null`
-(`firewall_ports`, `driver_update_links`, `decisions` or `accepted`) requires no id.
+(`firewall_ports`, `driver_update_links`, `decisions`, `accepted` or `review`) requires no id.
 
 ## Blocks
 
@@ -263,6 +263,52 @@ The section `Zaakceptowane`, after the decisions, from `accepted` and
 `accepted` `[]` (no file): one line saying that no findings are accepted,
 and M is 0. `accepted` `null`: the file could not be used; say so, and the
 reason goes to "Nie sprawdzono".
+
+### 4b. Review dates (Przeglądy)
+
+The section `Przeglądy`, after the accepted findings, from `review`,
+`review_counts` and `truncated_review` of the summary (see "Review dates"
+in `summary-contract.md`). The review dates are the user's: the section
+reports them and judges nothing; an item here is no recommendation and
+nothing is offered for removal from it. An `r` item is named
+`ush-runall r<n>` (or `r<n>` inside this section) with its `name`; a
+`name` of `null` is written as its kind and manager in words (for example
+"pakiet pip bez nazwy"), never as its `key`, which can hold a path.
+
+Every item of these states is named, in this order, one line each:
+
+- `due`: "<name>: termin przeglądu minął <review_on>" ("review due since
+  <review_on>"), with its `period` and `decided_on` ("ustalono
+  <decided_on>, co <period>").
+- `gone`: "<name>: nie ma go już na liście programów i pakietów, a data
+  przeglądu została" ("no longer listed, the review date stays"). No
+  date can be set for it and nothing is offered for it.
+- `not_checked`: "<name>: przeglądu nie sprawdzono" ("review not
+  checked") with its `reason` in plain words; the item also goes under
+  "Nie sprawdzono".
+
+The other states are given only as counts from `review_counts`, never one
+by one, each in one line:
+
+- `no_decision`: "Bez decyzji o przeglądzie: <N>. Przegląd startowy ustawi
+  dla nich daty (`review_dates.py --list`)." ("No review decision:
+  <N>. The start pass sets their dates.") This is the count line
+  that offers the start pass; it is left out when the count is 0. It
+  carries no other figure: a step number of `SKILL.md` would have no
+  backing in the JSON.
+- `not_due`: "Przegląd jeszcze nie teraz: <N>." ("Review not yet due.")
+- `no_limit`: "Bez terminu przeglądu: <N>." ("No review wanted.")
+
+With `truncated_review` > 0, one line: "Pominięto w podsumowaniu: <N>"
+("cut from the summary"), the review items that are only in the detail
+file. A cut `r` item is given as part of this count; when the report names
+one, it names it by id and name only, never with its dates (its digits
+have no backing).
+
+`review` `[]`: one line saying that no program or package has a review
+date and none is listed. `review` `null`: the file could not be used; say
+so, and its `not_checked` item goes to "Nie sprawdzono", never "no
+reviews".
 
 ### 5. Recommendations
 
@@ -528,7 +574,8 @@ and `reason` (a child that did not finish, the firewall comparison not
 made, listening ports whose program path could not be read), and, per
 child, the child's own `not_checked` entries from its `h` item (their
 number is `not_checked_count`), each `not_checked` accepted item (`a<n>`)
-with its `reason`, and the `skipped` fields of each `back` accepted item. If every list is empty, it says "nothing".
+with its `reason`, the `skipped` fields of each `back` accepted item, and
+each `not_checked` review item (`r<n>`) with its `reason`. If every list is empty, it says "nothing".
 
 ## Account names
 
@@ -588,3 +635,5 @@ Never report missing data as "none", "nothing there" or "no change":
   give the numbers.
 - `firewall_ports` cut (`truncated` > 0): give the number and that the
   detail file has them.
+- `review` cut (`truncated_review` > 0): give the number and that the
+  detail file has them; a cut `r` item is never cited with its dates.

@@ -1,4 +1,4 @@
-"""Review dates: ``<data dir>/state/review-dates.json`` (plan 063, B-03, B-04, B-17).
+"""Review dates: ``<data dir>/state/review-dates.json`` (plans 063, 077, B-03, B-04, B-17).
 
 The file holds ``{"schema_version": 1, "entries": [...]}``. Each entry is
 ``{kind, key, name, decided_on, period, review_on}``: ``kind`` is ``program`` (an
@@ -9,12 +9,21 @@ read), ``decided_on`` the local date of the decision, ``period`` ``<N>d``, ``<N>
 ``<N>y`` or ``none``, and ``review_on`` the local date the user wants to look again
 (``null`` for ``none``). Dates are ISO ``YYYY-MM-DD``.
 
-``load`` reads the file and never raises. On the user's word the model runs
-``review_dates.py --set r<n>[,r<n>...] --period <N>d|<N>m|<N>y|none --detail-file
-<runall detail file> --data-dir <dir>``: it writes one entry per id from the runall
-detail file's ``review`` section, all or nothing, with a verified write. ``local_date(now)`` is the one helper that
-turns a run time into the local date compared with ``review_on`` (and stored as
-``decided_on``). The script judges nothing: the dates are the user's.
+``load`` reads the file and never raises. The script has three actions; exactly one is
+given per call:
+
+- ``--set r<n>[,r<n>...]=<N>d|<N>m|<N>y|none`` (repeatable, one group per period)
+  ``--detail-file <runall detail file> --data-dir <dir>``, on the user's word: it writes
+  one entry per id from the runall detail file's ``review`` section, every group or none,
+  as one generation, with a verified write. With no ``review-dates.json`` yet, an empty
+  file is written first, so the first write also leaves a previous generation.
+- ``--list --detail-file <runall detail file>``: read-only; prints the detail file's
+  ``review`` items (``id``, ``kind``, ``name``, the key prefix, ``state``) and their counts.
+- ``--undo``: writes ``review-dates.previous.json`` back as ``review-dates.json``.
+
+``local_date(now)`` is the one helper that turns a run time into the local date compared
+with ``review_on`` (and stored as ``decided_on``). The script judges nothing: the dates
+are the user's.
 """
 
 import argparse
@@ -35,12 +44,16 @@ import datadir
 
 FILE_STEM = "review-dates"
 FILE_NAME = f"{FILE_STEM}.json"
+PREVIOUS_NAME = f"{FILE_STEM}.previous.json"
 SCHEMA_VERSION = 1
 KINDS = ("program", "package")
 NO_PERIOD = "none"
 PERIOD = re.compile(r"[1-9][0-9]*[dmy]")
 ISO_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 SETTABLE = ("no_decision", "due", "not_due", "no_limit")
+# The review states of runall.py (REVIEW_STATES); --list counts each, zero included.
+STATES = ("due", "gone", "not_checked", "no_decision", "not_due", "no_limit")
+EMPTY = {"schema_version": SCHEMA_VERSION, "entries": []}
 
 
 def local_date(now) -> date:
@@ -121,27 +134,37 @@ def file_path(data_dir) -> Path:
     return Path(data_dir).absolute() / "state" / FILE_NAME
 
 
+def previous_path(data_dir) -> Path:
+    return Path(data_dir).absolute() / "state" / PREVIOUS_NAME
+
+
 def load(data_dir) -> dict:
     """``{status, reason, path, entries}`` of ``<data_dir>/state/review-dates.json``.
 
     ``status`` is ``none`` (no file; ``entries`` ``[]``), ``read``, or ``unreadable``
     (cannot be read, bad JSON or a bad shape; ``reason`` names the problem and
     ``entries`` is ``[]``). Never raises."""
-    path = file_path(data_dir)
+    return _load_path(file_path(data_dir))
+
+
+def _load_path(path: Path) -> dict:
+    """``load`` of the review dates file at ``path`` (``review-dates.json`` or its
+    previous generation)."""
+    name = path.name
     result = {"status": "none", "reason": None, "path": str(path), "entries": []}
     try:
         if not path.exists():
             return result
         text = path.read_text(encoding="utf-8-sig")
     except (OSError, UnicodeDecodeError) as exc:
-        return dict(result, status="unreadable", reason=f"cannot read {FILE_NAME}: {exc}")
+        return dict(result, status="unreadable", reason=f"cannot read {name}: {exc}")
     try:
         data = json.loads(text)
     except ValueError as exc:
-        return dict(result, status="unreadable", reason=f"{FILE_NAME} is not JSON: {exc}")
+        return dict(result, status="unreadable", reason=f"{name} is not JSON: {exc}")
     problem, entries = _check(data)
     if problem is not None:
-        return dict(result, status="unreadable", reason=f"{FILE_NAME}: {problem}")
+        return dict(result, status="unreadable", reason=f"{name}: {problem}")
     return dict(result, status="read", entries=entries)
 
 
@@ -159,18 +182,72 @@ def _review_items(detail_file):
             if isinstance(item, dict) and isinstance(item.get("id"), str)}, None
 
 
-def set_dates(ids: str, period: str, detail_file, data_dir, today=None) -> dict:
-    """Write one entry per id of ``ids`` (``r1,r3``) with ``period``, all or nothing;
-    the printed result ``{ok, keys, path}`` (with ``warning`` when the file was saved
-    but its ``.previous`` copy was not replaced) or ``{ok: false, reason, keys, path}``."""
+def _groups(groups):
+    """``(list of (ids, period), None)`` of the ``--set`` groups, or ``(None, reason)``."""
+    if not groups:
+        return None, "no --set group was given"
+    parsed, seen = [], {}
+    for group in groups:
+        text = group if isinstance(group, str) else ""
+        ids_text, sep, period = text.partition("=")
+        if not sep:
+            return None, (f"--set {group!r} is not r<n>[,r<n>...]=<N>d|<N>m|<N>y|"
+                          f"{NO_PERIOD}")
+        period = period.strip()
+        if not period_ok(period):
+            return None, (f"--set {group!r}: period {period!r} is not <N>d, <N>m, <N>y or "
+                          f"{NO_PERIOD}")
+        wanted = [part.strip() for part in ids_text.split(",")]
+        if any(not part for part in wanted):
+            return None, f"--set {group!r}: the ids are not r<n>[,r<n>...]"
+        ids = list(dict.fromkeys(wanted))
+        for item_id in ids:
+            if item_id in seen:
+                return None, (f"{item_id} is in two --set groups ({seen[item_id]!r} and "
+                              f"{group!r})")
+            seen[item_id] = group
+        parsed.append((ids, period))
+    return parsed, None
+
+
+def _saved_only(failure) -> bool:
+    # The verified new file is in place; only the previous generation failed.
+    return failure.startswith(f"the new {FILE_NAME} is saved, but ")
+
+
+def _write(path: Path, entries: list):
+    """Write ``entries`` through ``baseline.save_json``: ``(None, None)``, ``(None,
+    warning)`` when only the previous generation was not replaced, or ``(reason, None)``.
+
+    With no ``review-dates.json`` yet, an empty file is written first, so the first write
+    also leaves a previous generation (no review dates) for ``--undo``."""
+    def validate(old):
+        return _check(old)[0]
+
+    if not path.exists():
+        failure = baseline.save_json(path.parent, FILE_STEM, EMPTY, validate)
+        if failure is not None and not _saved_only(failure):
+            return f"{FILE_NAME} not saved: {failure}", None
+    failure = baseline.save_json(path.parent, FILE_STEM,
+                                 {"schema_version": SCHEMA_VERSION, "entries": entries},
+                                 validate)
+    if failure is not None and _saved_only(failure):
+        return None, failure
+    if failure is not None:
+        return f"{FILE_NAME} not saved: {failure}", None
+    return None, None
+
+
+def set_dates(groups, detail_file, data_dir, today=None) -> dict:
+    """Write one entry per id of each group of ``groups`` (``["r1,r3=1y", "r2=none"]``)
+    with that group's period, every group or none; the printed result ``{ok, keys, path}``
+    (with ``warning`` when the file was saved but its ``.previous`` copy was not
+    replaced) or ``{ok: false, reason, keys, path}``."""
     path = file_path(data_dir)
     refused = {"ok": False, "keys": [], "path": str(path)}
-    if not period_ok(period):
-        return dict(refused, reason=(f"--period {period!r} is not <N>d, <N>m, <N>y or "
-                                     f"{NO_PERIOD}"))
-    wanted = [part.strip() for part in ids.split(",")]
-    if not wanted or any(not part for part in wanted):
-        return dict(refused, reason=f"--set {ids!r} is not r<n>[,r<n>...]")
+    parsed, reason = _groups(groups)
+    if parsed is None:
+        return dict(refused, reason=reason)
     current = load(data_dir)
     if current["status"] == "unreadable":
         return dict(refused, reason=(f"{current['reason']}; it is left as it is: correct "
@@ -179,58 +256,122 @@ def set_dates(ids: str, period: str, detail_file, data_dir, today=None) -> dict:
     if items is None:
         return dict(refused, reason=reason)
     today = today or local_date(datetime.now().astimezone())
-    try:
-        due = review_on(today, period)
-    except (ValueError, OverflowError):
-        return dict(refused, reason=f"--period {period!r} gives a date past year 9999")
     new = []
-    for item_id in dict.fromkeys(wanted):
-        item = items.get(item_id)
-        if item is None:
-            return dict(refused, reason=f"{item_id} is not a review item of that pass")
-        if item.get("state") not in SETTABLE:
-            return dict(refused, reason=(f"{item_id} is in state {item.get('state')!r}; "
-                                         f"only {', '.join(SETTABLE)} can get a date"))
-        kind, key, name = item.get("kind"), item.get("key"), item.get("name")
-        if kind not in KINDS or not isinstance(key, str) or not key.strip() or not (
-                name is None or isinstance(name, str)):
-            return dict(refused, reason=f"{item_id} has no valid kind, key and name")
-        new.append({"kind": kind, "key": key, "name": name,
-                    "decided_on": today.isoformat(), "period": period,
-                    "review_on": None if due is None else due.isoformat()})
+    for ids, period in parsed:
+        try:
+            due = review_on(today, period)
+        except (ValueError, OverflowError):
+            return dict(refused, reason=f"period {period!r} gives a date past year 9999")
+        for item_id in ids:
+            item = items.get(item_id)
+            if item is None:
+                return dict(refused, reason=f"{item_id} is not a review item of that pass")
+            if item.get("state") not in SETTABLE:
+                return dict(refused, reason=(f"{item_id} is in state {item.get('state')!r}; "
+                                             f"only {', '.join(SETTABLE)} can get a date"))
+            kind, key, name = item.get("kind"), item.get("key"), item.get("name")
+            if kind not in KINDS or not isinstance(key, str) or not key.strip() or not (
+                    name is None or isinstance(name, str)):
+                return dict(refused, reason=f"{item_id} has no valid kind, key and name")
+            new.append({"kind": kind, "key": key, "name": name,
+                        "decided_on": today.isoformat(), "period": period,
+                        "review_on": None if due is None else due.isoformat()})
     replaced = {(entry["kind"], entry["key"]) for entry in new}
     entries = [entry for entry in current["entries"]
                if (entry.get("kind"), entry.get("key")) not in replaced]
     entries += new
-    data = {"schema_version": SCHEMA_VERSION, "entries": entries}
-    problem, _ = _check(data)
+    problem, _ = _check({"schema_version": SCHEMA_VERSION, "entries": entries})
     if problem is not None:
         return dict(refused, reason=f"{FILE_NAME} would not be valid: {problem}")
-    failure = baseline.save_json(path.parent, FILE_STEM, data, lambda old: _check(old)[0])
+    reason, warning = _write(path, entries)
+    if reason is not None:
+        return dict(refused, reason=reason)
     saved = {"ok": True, "keys": [entry["key"] for entry in new], "path": str(path)}
-    if failure is not None and failure.startswith(f"the new {FILE_NAME} is saved, but "):
-        # The verified new file is in place; only the previous generation failed.
-        return dict(saved, warning=failure)
-    if failure is not None:
-        return dict(refused, reason=f"{FILE_NAME} not saved: {failure}")
-    return saved
+    return saved if warning is None else dict(saved, warning=warning)
+
+
+def list_items(detail_file) -> dict:
+    """The printed result of ``--list``: ``{ok, detail_file, items, counts}`` of the runall
+    detail file's ``review`` list, in file order (read-only), or ``{ok: false, reason}``.
+    ``prefix`` is the key up to and including its first ``:``; the full key is not
+    printed."""
+    detail_file = str(Path(detail_file).absolute())
+    items, reason = _review_items(detail_file)
+    if items is None:
+        return {"ok": False, "detail_file": detail_file, "reason": reason}
+    listed = []
+    by_state = dict.fromkeys(STATES, 0)
+    by_kind = dict.fromkeys(KINDS, 0)
+    for item_id, item in items.items():
+        key, state, kind = item.get("key"), item.get("state"), item.get("kind")
+        prefix = key[:key.index(":") + 1] if isinstance(key, str) and ":" in key else None
+        listed.append({"id": item_id, "kind": kind, "name": item.get("name"),
+                       "prefix": prefix, "state": state})
+        by_state[str(state)] = by_state.get(str(state), 0) + 1
+        by_kind[str(kind)] = by_kind.get(str(kind), 0) + 1
+    return {"ok": True, "detail_file": detail_file, "items": listed,
+            "counts": {"by_state": by_state, "by_kind": by_kind}}
+
+
+def undo(data_dir) -> dict:
+    """Write the previous generation back as ``review-dates.json``; the printed result
+    ``{ok, entry_count, path}`` (with ``warning``) or ``{ok: false, reason, ...}``."""
+    path = file_path(data_dir)
+    refused = {"ok": False, "entry_count": None, "path": str(path)}
+    current = load(data_dir)
+    if current["status"] == "unreadable":
+        return dict(refused, reason=(f"{current['reason']}; it is left as it is: correct "
+                                     "or move it first"))
+    previous = _load_path(previous_path(data_dir))
+    if previous["status"] == "none":
+        return dict(refused, reason=f"there is no {PREVIOUS_NAME}: no write to undo")
+    if previous["status"] != "read":
+        return dict(refused, reason=f"{previous['reason']}; nothing was written")
+    entries = previous["entries"]
+    reason, warning = _write(path, entries)
+    if reason is not None:
+        return dict(refused, reason=reason)
+    now = load(data_dir)
+    if now["status"] != "read" or now["entries"] != entries:
+        return dict(refused, reason=(f"{FILE_NAME} was written, but it does not read back "
+                                     f"as {PREVIOUS_NAME} held it ({now['status']}: "
+                                     f"{now['reason']})"))
+    saved = {"ok": True, "entry_count": len(entries), "path": str(path)}
+    return saved if warning is None else dict(saved, warning=warning)
 
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--set", required=True, metavar="r<n>[,r<n>...]",
-                        help="the review items of the runall pass to give a date")
-    parser.add_argument("--period", required=True, metavar="<N>d|<N>m|<N>y|none",
-                        help="when to look again, counted from today")
-    parser.add_argument("--detail-file", required=True,
-                        help="the runall detail file of the pass the items come from")
+    action = parser.add_mutually_exclusive_group(required=True)
+    action.add_argument("--set", action="append", metavar="r<n>[,r<n>...]=<period>",
+                        help="review items and their period <N>d, <N>m, <N>y or none; "
+                             "repeat for another period")
+    action.add_argument("--list", action="store_true",
+                        help="print the review items of the runall detail file (read-only)")
+    action.add_argument("--undo", action="store_true",
+                        help="write the previous generation of review-dates.json back")
+    parser.add_argument("--detail-file",
+                        help="the runall detail file of the pass the ids come from "
+                             "(required with --set and --list)")
     datadir.add_arguments(parser)
     args = parser.parse_args(argv)
+    if args.undo and args.detail_file is not None:
+        parser.error("--detail-file is not used with --undo")
+    if not args.undo and args.detail_file is None:
+        parser.error("--detail-file is required with --set and --list")
+    if args.list:
+        # Read-only: the detail file is all --list reads; no data directory is needed.
+        result = list_items(args.detail_file)
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result["ok"] else 1
     try:
         data_dir = datadir.resolve(args.data_dir, default=args.default_data_dir)
     except datadir.DataDirError as exc:
         parser.error(str(exc))
-    result = set_dates(args.set, args.period, Path(args.detail_file).absolute(), data_dir)
+    if args.undo:
+        result = undo(data_dir)
+    else:
+        result = set_dates(args.set, Path(args.detail_file).absolute(), data_dir)
     print(json.dumps(result, ensure_ascii=False))
     return 0 if result["ok"] else 1
 

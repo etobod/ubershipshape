@@ -89,7 +89,7 @@ Besides the shared fields (`schema_version`, `skill` `"ush-runall"`,
 | `accepted` | list or `null` | one item per entry of `<data dir>/state/accepted.json`, ids `a1`... (see "Accepted findings"); `[]` when there is no file; `null` when the file or the kinds file cannot be used (one `not_checked` item names `accepted.json`) |
 | `accepted_counts` | object or `null` | `{quiet, back, gone, not_checked}`: the `accepted` items per state, every state present (`0` when none); `null` with `accepted` `null` |
 | `review` | list or `null` | the review items, ids `r1`..., at most 50 (see "Review dates"); `[]` when no program or package is listed and the file has no entry; `null` when `<data dir>/state/review-dates.json` cannot be used (one `not_checked` item names `review-dates.json`) |
-| `review_counts` | object or `null` | `{due, no_decision, gone, not_checked, not_due, no_limit}`: every review item per state (the detail file's list, never cut), every state present (`0` when none); `null` with `review` `null` |
+| `review_counts` | object or `null` | `{due, gone, not_checked, no_decision, not_due, no_limit}`: every review item per state (the detail file's list, never cut), every state present (`0` when none); `null` with `review` `null` |
 | `truncated_review` | int | `review` items cut from the summary by the limit of 50, from the end of the order; `0` when none (also when `review` is `null`). The detail file has them all |
 | `truncated` | int | `firewall_ports` items cut from the summary by the limit of 50, from the end of the order; `0` when none. The detail file has them all |
 
@@ -430,11 +430,56 @@ States:
   later. The local date is `review_dates.local_date(now)`
   (`now.astimezone().date()`), the date the writer stores as `decided_on`.
 
-Order: `due`, `no_decision`, `gone`, `not_checked`, `not_due`, `no_limit`,
+Order: `due`, `gone`, `not_checked`, `no_decision`, `not_due`, `no_limit`,
 then by `kind` and `key`; the summary keeps the first 50 and counts the rest
-in `truncated_review`. `review_counts` counts every item. The script
+in `truncated_review`. The states the report names (`due`, `gone`,
+`not_checked`) come first, so they are cut only when there are more than 50
+of them. `review_counts` counts every item. The script
 compares the user's dates only and sets no threshold. `--detail r1` prints
 one item.
+
+### Setting review dates (`review_dates.py`)
+
+`<plugin root>/skills/ush-common/scripts/review_dates.py` takes exactly one
+action per call and prints one JSON object on stdout; it exits 0 when `ok`
+is `true`, 1 otherwise. The ids `r<n>` are positions within one pass, so
+`--list` and `--set` take that pass's `runall` `detail_file`.
+
+- `--list --detail-file <detail_file>` (read-only; it needs no data
+  directory and accepts `--data-dir` or `--default-data-dir`): prints
+  `{ok, detail_file, items, counts}`. `detail_file` is the absolute path
+  read. `items` holds one `{id, kind, name, prefix, state}` per item of the
+  detail file's `review` list, in its order (never cut); `prefix` is the
+  key up to and including its first `:` (`win32:`, `pip:`...), or `null`;
+  the full key is not printed. `counts` is `{by_state, by_kind}`: `by_state`
+  every state of the order above (`0` when none), `by_kind` `program` and
+  `package`. A detail file that cannot be read or has no `review` list:
+  `{ok: false, detail_file, reason}`.
+- `--set <ids>=<period> [--set <ids>=<period> ...] --detail-file
+  <detail_file> --data-dir <dir>`: `<ids>` is `r<n>[,r<n>...]`, `<period>`
+  `<N>d`, `<N>m`, `<N>y` or `none`, one group per period. It writes one
+  entry per id (`decided_on` today's local date, `review_on` from the
+  period, `null` for `none`), replacing an entry of the same kind and key,
+  every group or none, as one generation with a verified write. Only
+  `no_decision`, `due`, `not_due` and `no_limit` items take a date. Prints
+  `{ok: true, keys, path}`: `keys` the keys written, `path` the file. A
+  refusal is `{ok: false, keys: [], path, reason}` and writes nothing (an
+  id not in the pass, an item in another state, a bad period, an
+  unreadable `review-dates.json`). Each write keeps the file before it as
+  `<data dir>/state/review-dates.previous.json`, one generation; with no
+  file yet an empty one is written first, so the first write also leaves
+  a previous generation.
+- `--undo --data-dir <dir>`: writes `review-dates.previous.json` back as
+  `review-dates.json` through the same verified write, reads it back and
+  prints `{ok: true, entry_count, path}`: `entry_count` the entries now in
+  the file. It reverses the last `--set` call as a whole; a second `--undo`
+  re-applies it. A refusal is `{ok: false, entry_count: null, path, reason}`
+  (no previous file, or an unreadable current or previous file) and writes
+  nothing.
+
+`warning` (`--set` and `--undo`, only with `ok` `true`): the new file is
+saved, but its previous generation was not replaced, so `--undo` does not
+restore the state before this write.
 
 ## not_checked
 

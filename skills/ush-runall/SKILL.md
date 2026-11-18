@@ -226,6 +226,16 @@ or running anything on a schedule. Say so if the user asks for these.
   exists; for npm, no global `node_modules` folder) is "not present", never
   "not read yet", "could not be read" or 0 packages, and it is no finding; a manager whose `state` is `not_read`
   stays "not read yet". The two are never swapped.
+- **Review dates: name what is due, count the rest.** The `review` items
+  (`r1`...) of the summary are named as `ush-runall r<n>` in the review
+  section (4b of `references/report-format.md`) when their `state` is
+  `due`, `gone` or `not_checked`; the `no_decision`, `not_due` and
+  `no_limit` items are given only as counts
+  from `review_counts`, and the `no_decision` count line offers the start
+  pass of step 11. The list puts the states to name first, so only more
+  than 50 of them are cut (`truncated_review`). A review date is the
+  user's: it is set only on the user's word (step 11), never on your own
+  judgement.
 - **Offline, with a pointer to ush-advice.** For a fault this machine cannot
   explain offline (a device problem code, a crash code), the report offers
   a web lookup through `ush-advice` as the next step (its Polish wording is
@@ -256,7 +266,8 @@ or running anything on a schedule. Say so if the user asks for these.
 
 2. Read the summary: `children` (status of each child), `counts`,
    `firewall_ports`, `firewall_ports_counts`, `network_categories`,
-   `driver_update_links`, `link_counts`, `truncated` and `not_checked`.
+   `driver_update_links`, `link_counts`, `truncated`, `review`,
+   `review_counts`, `truncated_review` and `not_checked`.
 
 3. For each child with status `ok`, in order from `h1` to `h8`, fetch its
    item:
@@ -285,6 +296,16 @@ or running anything on a schedule. Say so if the user asks for these.
    `references/report-format.md`): its recommendation's main source is
    `ush-runall a<n>`, and its child item (its `evidence`) gets no
    recommendation of its own, so one finding never gets two.
+
+   Name every `due`, `gone` and `not_checked` review item
+   (`ush-runall r<n>`) in the review section (4b of
+   `references/report-format.md`, which gives its Polish heading); give
+   the `no_decision`, `not_due` and `no_limit` items only as counts from
+   `review_counts`. The
+   `no_decision` count line offers the start pass (step 11) with its
+   `review_dates.py --list` command; the step number stays out of the
+   report, where every figure comes from the JSON. With `truncated_review` above 0 give
+   how many review items were cut (`references/report-format.md`).
 
    Before judging, list `<data dir>/plans/` (not `done/`); for an open plan of a skill run in
    this pass, compare this run's values with the values its run blocks set (its `Odczyt po
@@ -483,3 +504,45 @@ or running anything on a schedule. Say so if the user asks for these.
     it too: the new file is saved, but the previous generation was not
     replaced, so `--undo` does not restore the state before this write. The report's line of a `gone` item suggests
     `--remove` for it in words, never as a block.
+
+11. The start pass sets review dates, and its writes run only on the user's
+    word, never on your own judgement. When the user asks for it (the
+    `no_decision` count line of the review section offers it), list the review
+    items of this pass's `runall` detail file (read-only):
+
+    ```
+    python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-common/scripts/review_dates.py" --list --detail-file <detail_file> --default-data-dir "${CLAUDE_PLUGIN_DATA}"
+    ```
+
+    It prints `items` (`id`, `kind`, `name`, `prefix`, `state`) and
+    `counts` (`summary-contract.md`). Show the user the programs and
+    packages by name and ask for a period per item (`<N>d`, `<N>m`, `<N>y`
+    or `none` for no review), or per group in words (for example "all pip
+    packages 1y"). Build from the answer the explicit list of ids per
+    period, show it to the user, and only on the user's word run one
+    `--set` call with one `<ids>=<period>` group per period and the same
+    detail file:
+
+    ```
+    python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-common/scripts/review_dates.py" --set r1,r3=1y --set r2=none --detail-file <detail_file> --data-dir "<absolute data dir>"
+    ```
+
+    Each group has the form `<ids>=<period>`: ids `r<n>` joined by commas.
+    Only `no_decision`, `due`, `not_due` and `no_limit` items take a date;
+    the call writes every group or none. Tell the user the printed `ok`
+    and `keys`, and on `false` its `reason` (nothing was written). When the
+    result has a `warning`, tell the user it too: the file is saved, but
+    the previous generation was not replaced, so `--undo` does not restore
+    the state before this write.
+
+    Rollback: `review_dates.py --undo` reverses the last `--set` call, the
+    whole start pass at once, run only on the user's word (never a manual
+    copy or delete of a file under `state/`):
+
+    ```
+    python -B "${CLAUDE_PLUGIN_ROOT}/skills/ush-common/scripts/review_dates.py" --undo --data-dir "<absolute data dir>"
+    ```
+
+    It writes `<data dir>/state/review-dates.previous.json` back, reads it
+    back and prints `ok` with `entry_count`. A second `--undo` re-applies
+    the pass it reversed, so it is never run twice; say so when you run it.

@@ -104,7 +104,7 @@ DETAIL_SECTIONS = ("children", "firewall_ports", "driver_update_links", "decisio
                    "accepted", "review")
 ACCEPTED_STATES = ("quiet", "back", "gone", "not_checked")
 # The review states in the order of the review list.
-REVIEW_STATES = ("due", "no_decision", "gone", "not_checked", "not_due", "no_limit")
+REVIEW_STATES = ("due", "gone", "not_checked", "no_decision", "not_due", "no_limit")
 SKILL_HEALTH = "ush-health"
 SKILL_INVENTORY = "ush-inventory"
 SKILL_PROCESSES = "ush-processes"

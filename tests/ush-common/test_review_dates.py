@@ -21,8 +21,9 @@ Assumptions added by these tests beyond the plan text:
 
 The writer (plan 063, M2, criteria K1, K3, K4):
 
-- ``review_dates.py --set r<n>[,r<n>...] --period <N>d|<N>m|<N>y|none --detail-file
-  <runall detail> --data-dir <dir>`` reads only the runall detail file's ``review``
+- ``review_dates.py --set r<n>[,r<n>...]=<N>d|<N>m|<N>y|none --detail-file
+  <runall detail> --data-dir <dir>`` (one group; plan 077 M1 made ``--set`` a
+  repeatable group and removed ``--period``) reads only the runall detail file's ``review``
   section, accepts items in state ``no_decision``, ``due``, ``not_due`` or ``no_limit``,
   stores ``{kind, key, name, decided_on, period, review_on}`` (``decided_on`` the local
   date, ``review_on`` ``null`` for ``none``), never the ``r`` id, replaces an entry with
@@ -38,6 +39,31 @@ Assumptions added by the writer tests beyond the plan text:
   ``<data_dir>/state/review-dates.json`` as a string; a success exits 0.
 - The script runs as a child process with the real clock: "today" is the local date
   before or after the run (a run across midnight is allowed).
+
+The three actions (plan 077, M1, criteria K1, K2, K3, K4, K5, K7):
+
+- ``--set <ids>=<period>``, repeatable (``--period`` removed): each group is
+  ``r<n>[,r<n>...]=<N>d|<N>m|<N>y|none``; one call writes every group or none of them, as
+  one generation; with no ``review-dates.json`` yet it first writes an empty file, so the
+  first write also leaves a previous generation.
+- ``--list --detail-file <runall detail>``, read-only, prints
+  ``{ok, detail_file, items, counts}``: ``items`` every ``review`` item in file order as
+  ``{id, kind, name, prefix, state}`` (``prefix`` the key up to and including the first
+  ``:``), ``counts`` ``{by_state, by_kind}``; ``{ok: false, reason}`` when the detail file
+  cannot be read or has no ``review`` list.
+- ``--undo`` restores ``review-dates.previous.json`` and prints ``{ok, entry_count, path}``;
+  it refuses with a reason and writes nothing when there is no previous file or it is
+  unreadable.
+- The actions exclude each other and exactly one is required (exit code 2 otherwise).
+
+Assumptions added by these tests beyond the plan text:
+
+- Every action takes ``--data-dir``; ``--list`` is given it too and must still write
+  nothing.
+- A count map may leave out states or kinds with no items; a value present for a state or
+  kind with no items is ``0``.
+- ``detail_file`` names the same file as ``--detail-file`` (compared after ``resolve``).
+- A ``--set`` refusal of a group exits 1, as every other ``--set`` refusal.
 
 Every value is invented (Contoso, Fabrikam); nothing on the machine is read.
 """
@@ -218,14 +244,13 @@ def runall_detail(data_dir, review=None):
 
 class TestSet(ReviewDatesTestCase):
     def run_set(self, data_dir, ids, period, detail_file):
-        """Run ``--set``; return (exit code, parsed stdout)."""
+        """Run ``--set <ids>=<period>`` (one group); return (exit code, parsed stdout)."""
         env = dict(os.environ)
         env.pop("USH_DATA_DIR", None)
         env["PYTHONIOENCODING"] = "utf-8"
         done = subprocess.run(
-            [sys.executable, "-B", str(REVIEW_DATES_SCRIPT), "--set", ids,
-             "--period", period, "--detail-file", str(detail_file),
-             "--data-dir", str(data_dir)],
+            [sys.executable, "-B", str(REVIEW_DATES_SCRIPT), "--set", f"{ids}={period}",
+             "--detail-file", str(detail_file), "--data-dir", str(data_dir)],
             capture_output=True, text=True, check=False, encoding="utf-8", env=env,
             timeout=120)
         try:
@@ -417,7 +442,7 @@ class TestSavedButPrevious(ReviewDatesTestCase):
                    "could not be replaced: locked")
         with mock.patch.object(self.review_dates.baseline, "save_json",
                                return_value=warning):
-            result = self.review_dates.set_dates("r1", "1y", detail, data_dir)
+            result = self.review_dates.set_dates(["r1=1y"], detail, data_dir)
         self.assertIs(result["ok"], True, result)
         self.assertTrue(result["keys"], result)
         self.assertEqual(result["warning"], warning)
@@ -427,10 +452,317 @@ class TestSavedButPrevious(ReviewDatesTestCase):
         detail = runall_detail(data_dir)
         with mock.patch.object(self.review_dates.baseline, "save_json",
                                return_value="cannot write review-dates.json.tmp: denied"):
-            result = self.review_dates.set_dates("r1", "1y", detail, data_dir)
+            result = self.review_dates.set_dates(["r1=1y"], detail, data_dir)
         self.assertIs(result["ok"], False, result)
         self.assertEqual(result["keys"], [], result)
         self.assertIn("not saved", result["reason"])
+
+
+# --- --list, --undo and groups in --set (plan 077, M1) ----------------------------------------
+
+def run_script(args):
+    """Run review_dates.py with ``args``; return (exit code, stdout, stderr)."""
+    env = dict(os.environ)
+    env.pop("USH_DATA_DIR", None)
+    env["PYTHONIOENCODING"] = "utf-8"
+    done = subprocess.run(
+        [sys.executable, "-B", str(REVIEW_DATES_SCRIPT), *[str(arg) for arg in args]],
+        capture_output=True, text=True, check=False, encoding="utf-8", env=env,
+        timeout=120)
+    return done.returncode, done.stdout, done.stderr
+
+
+def snapshot(data_dir):
+    """Every file under ``data_dir`` as {relative path: bytes}."""
+    return {path.relative_to(data_dir).as_posix(): path.read_bytes()
+            for path in sorted(data_dir.rglob("*")) if path.is_file()}
+
+
+class ActionTestCase(ReviewDatesTestCase):
+    def run_json(self, args):
+        """Run the script; return (exit code, parsed stdout as a dict)."""
+        code, stdout, stderr = run_script(args)
+        try:
+            result = json.loads(stdout)
+        except ValueError:
+            self.fail(f"stdout is not JSON: {stdout!r}; stderr: {stderr!r}")
+        self.assertIsInstance(result, dict, stdout)
+        return code, result
+
+    def run_list(self, data_dir, detail_file):
+        return self.run_json(["--list", "--detail-file", detail_file,
+                              "--data-dir", data_dir])
+
+    def run_set_groups(self, data_dir, groups, detail_file):
+        args = []
+        for group in groups:
+            args += ["--set", group]
+        return self.run_json(args + ["--detail-file", detail_file, "--data-dir", data_dir])
+
+    def run_undo(self, data_dir):
+        return self.run_json(["--undo", "--data-dir", data_dir])
+
+    def previous_path(self, data_dir):
+        return data_dir / "state" / "review-dates.previous.json"
+
+    def assert_reason(self, result):
+        self.assertIs(result.get("ok"), False, result)
+        reason = result.get("reason")
+        self.assertIsInstance(reason, str, result)
+        self.assertTrue(reason.strip(), result)
+
+    def raw_entries(self, data_dir):
+        data = json.loads(self.file_path(data_dir).read_text(encoding="utf-8"))
+        self.assertIsInstance(data, dict, data)
+        self.assertIsInstance(data.get("entries"), list, data)
+        return data["entries"]
+
+
+LIST_ITEMS = REVIEW_ITEMS + [
+    {"id": "r7", "kind": "program", "key": "win32:hkcu:FabrikamSync", "name": "Fabrikam Sync",
+     "state": "no_decision"},
+    {"id": "r8", "kind": "program", "key": "portable:C:/Tools/ContosoView.exe",
+     "name": "Contoso View", "state": "no_decision"},
+]
+
+
+class TestList(ActionTestCase):
+    @staticmethod
+    def nonzero(counts):
+        return {name: value for name, value in counts.items() if value != 0}
+
+    def test_list_items_and_counts(self):
+        data_dir = self.data_dir()
+        detail = runall_detail(data_dir, LIST_ITEMS)
+        self.write(data_dir, VALID)
+        before = snapshot(data_dir)
+
+        _code, result = self.run_list(data_dir, detail)
+
+        self.assertIs(result.get("ok"), True, result)
+        self.assertEqual(Path(result.get("detail_file")).resolve(), detail.resolve(), result)
+        expected = [
+            {"id": "r1", "kind": "program", "name": "Contoso Tray", "prefix": "win32:",
+             "state": "no_decision"},
+            {"id": "r2", "kind": "program", "name": "Fabrikam Notes", "prefix": "msix:",
+             "state": "not_due"},
+            {"id": "r3", "kind": "package", "name": None, "prefix": "pip:", "state": "due"},
+            {"id": "r4", "kind": "package", "name": "@contoso/tool", "prefix": "npm:",
+             "state": "no_limit"},
+            {"id": "r5", "kind": "program", "name": "Fabrikam Removed", "prefix": "win32:",
+             "state": "gone"},
+            {"id": "r6", "kind": "package", "name": "@fabrikam/cli", "prefix": "npm:",
+             "state": "not_checked"},
+            {"id": "r7", "kind": "program", "name": "Fabrikam Sync", "prefix": "win32:",
+             "state": "no_decision"},
+            {"id": "r8", "kind": "program", "name": "Contoso View", "prefix": "portable:",
+             "state": "no_decision"},
+        ]
+        self.assertEqual(result.get("items"), expected, result)
+        # The full key is never printed.
+        for item in result.get("items"):
+            self.assertNotIn("key", item, item)
+
+        counts = result.get("counts")
+        self.assertIsInstance(counts, dict, result)
+        self.assertEqual(self.nonzero(counts.get("by_state")),
+                         {"no_decision": 3, "not_due": 1, "due": 1, "no_limit": 1,
+                          "gone": 1, "not_checked": 1}, counts)
+        self.assertEqual(self.nonzero(counts.get("by_kind")),
+                         {"program": 5, "package": 3}, counts)
+
+        # Read-only: no file in the data directory changes, none is added.
+        self.assertEqual(snapshot(data_dir), before)
+
+    def test_empty_is_not_unreadable(self):
+        with self.subTest(case="empty review list"):
+            data_dir = self.data_dir()
+            detail = runall_detail(data_dir, [])
+            _code, result = self.run_list(data_dir, detail)
+            self.assertIs(result.get("ok"), True, result)
+            self.assertEqual(result.get("items"), [], result)
+            counts = result.get("counts")
+            self.assertIsInstance(counts, dict, result)
+            for name in ("by_state", "by_kind"):
+                values = counts.get(name)
+                self.assertIsInstance(values, dict, counts)
+                self.assertTrue(all(value == 0 for value in values.values()), counts)
+            self.assertFalse(result.get("reason"), result)
+
+        with self.subTest(case="missing detail file"):
+            data_dir = self.data_dir()
+            runall_detail(data_dir, [])
+            missing = data_dir / "work" / "runall-20261109-999999.detail.json"
+            _code, result = self.run_list(data_dir, missing)
+            self.assert_reason(result)
+            self.assertFalse(result.get("items"), result)
+
+        with self.subTest(case="review null"):
+            data_dir = self.data_dir()
+            detail = runall_detail(data_dir, [])
+            content = json.loads(detail.read_text(encoding="utf-8"))
+            content["review"] = None
+            detail.write_text(json.dumps(content, indent=2), encoding="utf-8")
+            _code, result = self.run_list(data_dir, detail)
+            self.assert_reason(result)
+            self.assertFalse(result.get("items"), result)
+
+
+OLD_ENTRY = {"kind": "package", "key": TOOL_KEY, "name": "@contoso/tool",
+             "decided_on": "2026-02-01", "period": "none", "review_on": None}
+
+
+class TestUndo(ActionTestCase):
+    def assert_undone(self, data_dir, expected_entries):
+        code, result = self.run_undo(data_dir)
+        self.assertEqual(code, 0, result)
+        self.assertIs(result.get("ok"), True, result)
+        self.assertEqual(result.get("path"), str(self.file_path(data_dir)), result)
+        loaded = self.review_dates.load(data_dir)
+        self.assertEqual(loaded.get("status"), "read", loaded)
+        self.assertEqual(result.get("entry_count"), len(loaded.get("entries")), (result, loaded))
+        self.assertEqual(result.get("entry_count"), len(expected_entries), result)
+        self.assertEqual(self.raw_entries(data_dir), expected_entries)
+
+    def test_undo_restores_previous(self):
+        with self.subTest(case="first --set on an empty data folder"):
+            data_dir = self.data_dir()
+            detail = runall_detail(data_dir)
+            self.assertFalse(self.file_path(data_dir).exists())
+            code, result = self.run_set_groups(data_dir, ["r1=1y"], detail)
+            self.assertEqual(code, 0, result)
+            self.assertIs(result.get("ok"), True, result)
+            self.assertEqual(len(self.raw_entries(data_dir)), 1)
+
+            self.assert_undone(data_dir, [])
+
+        with self.subTest(case="one --set with two groups on a file with one entry"):
+            data_dir = self.data_dir()
+            detail = runall_detail(data_dir)
+            self.write(data_dir, {"schema_version": 1, "entries": [OLD_ENTRY]})
+            code, result = self.run_set_groups(data_dir, ["r1,r3=1y", "r2=none"], detail)
+            self.assertEqual(code, 0, result)
+            self.assertIs(result.get("ok"), True, result)
+            written = {(raw.get("kind"), raw.get("key")) for raw in self.raw_entries(data_dir)}
+            self.assertEqual(written, {("package", TOOL_KEY), ("program", TRAY_KEY),
+                                       ("package", HTTP_KEY), ("program", NOTES_KEY)})
+
+            # One --undo removes both groups and keeps the old entry.
+            self.assert_undone(data_dir, [OLD_ENTRY])
+
+    def assert_refused(self, data_dir):
+        before = snapshot(data_dir)
+        _code, result = self.run_undo(data_dir)
+        self.assert_reason(result)
+        self.assertEqual(snapshot(data_dir), before)
+
+    def test_undo_refused(self):
+        with self.subTest(case="no previous file"):
+            data_dir = self.data_dir()
+            path = self.write(data_dir, VALID)
+            before = path.read_bytes()
+            self.assertFalse(self.previous_path(data_dir).exists())
+            self.assert_refused(data_dir)
+            self.assertEqual(path.read_bytes(), before)
+            self.assertFalse(self.previous_path(data_dir).exists())
+
+        with self.subTest(case="no previous file and no review-dates.json"):
+            data_dir = self.data_dir()
+            self.assert_refused(data_dir)
+            self.assertFalse(self.file_path(data_dir).exists())
+
+        unreadable = {
+            "previous file not JSON": '{"schema_version": 1, "entries": [{"kind": "program"',
+            "previous file with a wrong schema version":
+                json.dumps(dict(copy.deepcopy(VALID), schema_version=999)),
+            "previous file with a bad period": json.dumps({
+                "schema_version": 1,
+                "entries": [dict(OLD_ENTRY, period="2w")]}),
+        }
+        for case, text in unreadable.items():
+            with self.subTest(case=case):
+                data_dir = self.data_dir()
+                path = self.write(data_dir, VALID)
+                before = path.read_bytes()
+                self.previous_path(data_dir).write_text(text, encoding="utf-8")
+                self.assert_refused(data_dir)
+                self.assertEqual(path.read_bytes(), before)
+
+
+class TestArguments(ActionTestCase):
+    def test_one_action(self):
+        cases = {
+            "--list with --set": ["--list", "--set", "r1=1y"],
+            "--undo with --set": ["--undo", "--set", "r1=1y"],
+            "no action": [],
+        }
+        for case, action in cases.items():
+            for existing in (False, True):
+                with self.subTest(case=case, review_dates_exists=existing):
+                    data_dir = self.data_dir()
+                    detail = runall_detail(data_dir)
+                    if existing:
+                        self.write(data_dir, VALID)
+                    before = snapshot(data_dir)
+                    code, stdout, stderr = run_script(
+                        action + ["--detail-file", detail, "--data-dir", data_dir])
+                    self.assertEqual(code, 2, (stdout, stderr))
+                    self.assertEqual(snapshot(data_dir), before)
+
+
+class TestGroups(ActionTestCase):
+    def test_groups(self):
+        with self.subTest(case="two groups"):
+            data_dir = self.data_dir()
+            detail = runall_detail(data_dir)
+            before_day = local_today()
+            code, result = self.run_set_groups(data_dir, ["r1,r3=1y", "r2=30d"], detail)
+            after_day = local_today()
+            self.assertEqual(code, 0, result)
+            self.assertIs(result.get("ok"), True, result)
+            self.assertEqual(result.get("path"), str(self.file_path(data_dir)), result)
+            self.assertEqual(sorted(result.get("keys")),
+                             sorted([TRAY_KEY, HTTP_KEY, NOTES_KEY]), result)
+
+            raw = self.raw_entries(data_dir)
+            by_key = {(entry.get("kind"), entry.get("key")): entry for entry in raw}
+            self.assertEqual(len(raw), 3, raw)
+            self.assertEqual(set(by_key), {("program", TRAY_KEY), ("package", HTTP_KEY),
+                                           ("program", NOTES_KEY)}, raw)
+            for key in (("program", TRAY_KEY), ("package", HTTP_KEY)):
+                entry = by_key[key]
+                self.assertEqual(entry.get("period"), "1y", entry)
+                decided_on = date.fromisoformat(entry.get("decided_on"))
+                self.assertIn(decided_on, {before_day, after_day}, entry)
+                self.assertEqual(entry.get("review_on"),
+                                 add_years(decided_on, 1).isoformat(), entry)
+            notes = by_key[("program", NOTES_KEY)]
+            self.assertEqual(notes.get("period"), "30d", notes)
+            decided_on = date.fromisoformat(notes.get("decided_on"))
+            self.assertIn(decided_on, {before_day, after_day}, notes)
+            self.assertEqual(notes.get("review_on"),
+                             (decided_on + timedelta(days=30)).isoformat(), notes)
+
+        refused = {
+            "empty group": ["r1=1y", ""],
+            "group with no ids": ["r1=1y", "=6m"],
+            "group without =": ["r1=1y", "r2,r3"],
+            "bad period": ["r1=1y", "r2=2w"],
+            "one id in two groups": ["r1,r3=1y", "r3=6m"],
+        }
+        for case, groups in refused.items():
+            for existing in (False, True):
+                with self.subTest(case=case, review_dates_exists=existing):
+                    data_dir = self.data_dir()
+                    detail = runall_detail(data_dir)
+                    if existing:
+                        self.write(data_dir, VALID)
+                    before = snapshot(data_dir)
+                    code, result = self.run_set_groups(data_dir, groups, detail)
+                    self.assertEqual(code, 1, result)
+                    self.assert_reason(result)
+                    self.assertEqual(result.get("keys"), [], result)
+                    self.assertEqual(snapshot(data_dir), before)
 
 
 class TestPeriod(ReviewDatesTestCase):

@@ -15,8 +15,9 @@ Interface under test (from the plan):
 - The local date is ``local_date(now)`` (``now.astimezone().date()``), one helper in
   ``review_dates.py``.
 - The detail file section ``review`` holds every item; the summary ``review`` holds the
-  first ``REVIEW_MAX = 50`` in the order ``due``, ``no_decision``, ``gone``,
-  ``not_checked``, ``not_due``, ``no_limit``, then by kind and key; ``truncated_review``
+  first ``REVIEW_MAX = 50`` in the order ``due``, ``gone``, ``not_checked``,
+  ``no_decision``, ``not_due``, ``no_limit`` (plan 077, M2; before it ``no_decision``
+  came second), then by kind and key; ``truncated_review``
   is the number cut; ``review_counts`` counts every item per state.
 - An unreadable file gives ``review`` ``null``, ``review_counts`` ``null`` and one runall
   ``not_checked`` entry naming ``review-dates.json``.
@@ -46,7 +47,7 @@ Assumptions added by these tests beyond the plan text:
   as in the detail file.
 
 Plan 063, M2, criterion K5 (``test_written_file_is_read``): the writer
-``review_dates.py --set <id> --period <p> --detail-file <runall detail> --data-dir <dir>``
+``review_dates.py --set <id>=<p> --detail-file <runall detail> --data-dir <dir>``
 is run as a child process on the detail file of a fake pass (the real clock and the real
 ``local_date``, since the writer stores the real local date); the next pass reads its file.
 
@@ -79,7 +80,8 @@ REVIEW_DATES_SCRIPT = script_path("ush-common", "review_dates")
 PLUS_TWO = timezone(timedelta(hours=2), "UTC+02:00")
 FAILURE = "Invented failure: access denied (0x80070005)."
 NPM_FOLDER = "C:\\Users\\Invented\\AppData\\Roaming\\npm\\node_modules"
-STATES = ("due", "no_decision", "gone", "not_checked", "not_due", "no_limit")
+# Plan 077, M2: the states the report must name (due, gone, not_checked) sort first.
+STATES = ("due", "gone", "not_checked", "no_decision", "not_due", "no_limit")
 
 
 class PlusTwoNow(datetime):
@@ -558,8 +560,8 @@ class TestRunallReviewDates(RunallTestCase):
                 packages_child([]))
             self.assertEqual(
                 [(item.get("key"), item.get("state")) for item in self.review(summary)],
-                [(due["key"], "due"), (new["key"], "no_decision"), (gone, "gone"),
-                 (unread, "not_checked"), (later["key"], "not_due"),
+                [(due["key"], "due"), (gone, "gone"), (unread, "not_checked"),
+                 (new["key"], "no_decision"), (later["key"], "not_due"),
                  (keep["key"], "no_limit")])
 
         with self.subTest("more items than the budget"):
@@ -582,8 +584,9 @@ class TestRunallReviewDates(RunallTestCase):
             self.assertEqual({item.get("key") for item in detail_items}, expected_keys)
 
             kept = self.review(summary)
-            first = (sorted(p["key"] for p in due)
-                     + sorted(p["key"] for p in new)[:47])
+            # Plan 077, M2: the gone item sorts after the due items, before no_decision.
+            first = (sorted(p["key"] for p in due) + [gone]
+                     + sorted(p["key"] for p in new)[:46])
             self.assertEqual([item.get("key") for item in kept], first)
             self.assertEqual(summary.get("truncated_review"), 17, summary)
             self.assert_counts_match(summary, detail_items)
@@ -611,6 +614,49 @@ class TestRunallReviewDates(RunallTestCase):
             self.assertIn(r1["key"], stdout)
             self.assertIn(r1["state"], stdout)
 
+    # --- plan 077, M2, K5 ------------------------------------------------------------------
+
+    def test_named_states_first(self):
+        """60 ``no_decision`` items, one ``gone`` and one ``not_checked`` item (and two
+        ``due`` items): the summary keeps the ``gone`` and the ``not_checked`` item after
+        the ``due`` items and before every ``no_decision`` item, and cuts only
+        ``no_decision`` items."""
+        self.assertEqual(getattr(self.runall, "REVIEW_MAX", None), 50)
+        new = [win32(f"ContosoApp{n:03d}", f"Contoso App {n:03d}") for n in range(1, 61)]
+        due = [win32(f"ContosoDue{n}", f"Contoso Due {n}") for n in (2, 1)]
+        gone = "win32:hklm64:ContosoGone"
+        unread = "msix:Contoso.Unread_0abc1def2ghj3"
+        entries = ([entry("program", p["key"], p["name"], "2026-09-15") for p in due]
+                   + [entry("program", gone, "Contoso Gone", "2026-09-01"),
+                      entry("program", unread, "Contoso Unread", "2026-09-01")])
+        summary, _, _ = self.run_pass(
+            entries, inventory_child(new + due, msix_status="unreadable"),
+            packages_child([]))
+
+        detail_items = self.review(self.detail(summary))
+        self.assertEqual(len(detail_items), 64, len(detail_items))
+        self.assert_counts_match(summary, detail_items)
+        self.assertEqual(summary["review_counts"].get("no_decision"), 60)
+        self.assertEqual(summary["review_counts"].get("gone"), 1)
+        self.assertEqual(summary["review_counts"].get("not_checked"), 1)
+        self.assertEqual(summary["review_counts"].get("due"), 2)
+
+        kept = self.review(summary)
+        self.assertEqual(len(kept), 50, len(kept))
+        self.assertEqual(
+            [(item.get("key"), item.get("state")) for item in kept[:4]],
+            [(due[1]["key"], "due"), (due[0]["key"], "due"), (gone, "gone"),
+             (unread, "not_checked")])
+        self.assertEqual([item.get("state") for item in kept[4:]], ["no_decision"] * 46)
+        self.assertEqual([item.get("key") for item in kept[4:]],
+                         sorted(p["key"] for p in new)[:46])
+        self.assertEqual(summary.get("truncated_review"), 14, summary)
+
+        kept_ids = {item.get("id") for item in kept}
+        cut = [item for item in detail_items if item.get("id") not in kept_ids]
+        self.assertEqual(len(cut), 14, cut)
+        self.assertEqual({item.get("state") for item in cut}, {"no_decision"}, cut)
+
     # --- M2 K5 -----------------------------------------------------------------------------
 
     def run_set(self, data_dir, ids, period, detail_file):
@@ -619,9 +665,8 @@ class TestRunallReviewDates(RunallTestCase):
         env.pop("USH_DATA_DIR", None)
         env["PYTHONIOENCODING"] = "utf-8"
         done = subprocess.run(
-            [sys.executable, "-B", str(REVIEW_DATES_SCRIPT), "--set", ids,
-             "--period", period, "--detail-file", str(detail_file),
-             "--data-dir", str(data_dir)],
+            [sys.executable, "-B", str(REVIEW_DATES_SCRIPT), "--set", f"{ids}={period}",
+             "--detail-file", str(detail_file), "--data-dir", str(data_dir)],
             capture_output=True, text=True, check=False, encoding="utf-8", env=env,
             timeout=120)
         try:

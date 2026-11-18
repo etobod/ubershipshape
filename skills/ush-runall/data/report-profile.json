@@ -7,14 +7,17 @@
   "required_lists": ["children", "firewall_ports", "driver_update_links",
                      "decisions"],
   "truncated": [
-    {"list": "firewall_ports", "prefix": "w", "count_key": "truncated"}
+    {"list": "firewall_ports", "prefix": "w", "count_key": "truncated"},
+    {"list": "review", "prefix": "r", "count_key": "truncated_review"}
   ],
   "required_keys": ["children", "firewall_ports", "firewall_ports_counts",
-                    "driver_update_links", "link_counts", "decisions"],
+                    "driver_update_links", "link_counts", "decisions",
+                    "review", "review_counts", "truncated_review"],
   "summary_counts": ["accepted_counts.quiet"],
   "summary_null_words": {"accepted_counts.quiet": "zaakceptowanych nie sprawdzono"},
   "required_except": [
-    {"list": "accepted", "field": "state", "values": ["quiet"]}
+    {"list": "accepted", "field": "state", "values": ["quiet"]},
+    {"list": "review", "field": "state", "values": ["no_decision", "not_due", "no_limit"]}
   ],
   "report_prefix": "runall-",
   "summary_section": true

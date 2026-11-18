@@ -160,6 +160,11 @@ def _clean_summary(summary_file, detail_file):
                         "packages_without_update": 0},
         # Plan 030, M2: no decisions file, so no decision to name.
         "decisions": [],
+        # Plan 077, M2: the review keys are required; no program or package to review.
+        "review": [],
+        "review_counts": {"due": 0, "gone": 0, "not_checked": 0, "no_decision": 0,
+                          "not_due": 0, "no_limit": 0},
+        "truncated_review": 0,
         "truncated": 0,
         "not_checked": [],
     }
@@ -749,28 +754,138 @@ REVIEW_COUNTS = {"no_decision": 1, "due": 1, "not_due": 0, "no_limit": 0, "gone"
                  "not_checked": 0}
 
 
-class TestReviewProfile(TestDecisionsProfile):
-    """A summary with ``review`` items, ``review_counts`` and ``truncated_review`` still
-    passes the runall profile with a report in the current format, which names no ``r``
-    item (plan 063, M1, K6); an ``r`` item named in ``ush:detail`` backs its numbers."""
+def _review_item(number, state, kind="program"):
+    """An invented ``r`` item in ``state`` (plan 063, M1 shape)."""
+    if kind == "program":
+        key, name = f"win32:hklm64:{{invented-contoso-app-{number}}}", "Contoso App"
+    else:
+        key, name = f"npm:fabrikam-pkg-{number}", "fabrikam-pkg"
+    dated = state in ("due", "not_due", "gone")
+    return {"id": f"r{number}", "kind": kind, "key": key, "name": name, "state": state,
+            "decided_on": "2025-09-01" if dated or state == "no_limit" else None,
+            "period": "1y" if dated else ("none" if state == "no_limit" else None),
+            "review_on": "2026-09-01" if dated else None,
+            "reason": "Invented: the source was not read." if state == "not_checked"
+            else None}
 
-    def _write_data(self):
+
+def _review_counts(items):
+    counts = {state: 0 for state in ("due", "gone", "not_checked", "no_decision",
+                                     "not_due", "no_limit")}
+    for item in items:
+        counts[item["state"]] += 1
+    return counts
+
+
+# Plan 077, M2, K1: one item per state; r1, r2 and r3 must be named, r4 to r6 counted.
+ALL_STATE_ITEMS = [
+    _review_item(1, "due"),
+    _review_item(2, "gone"),
+    _review_item(3, "not_checked", kind="package"),
+    _review_item(4, "no_decision"),
+    _review_item(5, "not_due", kind="package"),
+    _review_item(6, "no_limit"),
+]
+NAMED_REVIEW_LINES = {
+    "r1": "- r1: Contoso App, termin przeglądu minął.",
+    "r2": "- r2: Contoso App, programu już nie ma; wpis można usunąć.",
+    "r3": "- r3: fabrikam-pkg, nie sprawdzono: źródło nie zostało odczytane.",
+}
+COUNT_LINES = [
+    "- Bez decyzji: 1. Przegląd startowy: review_dates.py --list.",
+    "- Przegląd później: 1; bez terminu: 1.",
+]
+
+
+class TestReviewProfile(TestDecisionsProfile):
+    """A summary with ``review`` items, ``review_counts`` and ``truncated_review`` passes
+    the runall profile with a report that names its ``due``, ``gone`` and ``not_checked``
+    items (plan 077, M2; earlier plan 063, M1, K6, where no ``r`` item was required); an
+    ``r`` item named in ``ush:detail`` backs its numbers."""
+
+    def _write_data(self, items=None, detail_items=None, truncated=0, drop_keys=()):
         super()._write_data()
-        for path in (self.summary_file, self.detail_file):
+        items = REVIEW_ITEMS if items is None else items
+        detail_items = items if detail_items is None else detail_items
+        for path, listed in ((self.summary_file, items), (self.detail_file, detail_items)):
             data = json.loads(path.read_text(encoding="utf-8"))
-            data["review"] = json.loads(json.dumps(REVIEW_ITEMS))
-            data["review_counts"] = dict(REVIEW_COUNTS)
-            data["truncated_review"] = 0
+            data["review"] = json.loads(json.dumps(listed))
+            data["review_counts"] = (dict(REVIEW_COUNTS) if items is REVIEW_ITEMS
+                                     else _review_counts(detail_items))
+            data["truncated_review"] = truncated
+            if path == self.summary_file:
+                for key in drop_keys:
+                    data.pop(key, None)
             path.write_text(json.dumps(data), encoding="utf-8")
 
-    def test_current_format_passes(self):
-        self._write_data()
-        with self.subTest("no r item named"):
-            code, output = self._run(self._write_report([J1_LINE],
-                                                        "runall-2026-09-20-1400.md"))
+    def _review_report(self, review_lines, name):
+        """A report with a ``Przeglądy`` section holding ``review_lines``."""
+        path = self._write_report([J1_LINE], name)
+        section = "\n".join(["## Przeglądy", *review_lines, "", "## Nie sprawdzono"])
+        text = path.read_text(encoding="utf-8")
+        self.assertEqual(text.count("## Nie sprawdzono"), 1)
+        path.write_text(text.replace("## Nie sprawdzono", section), encoding="utf-8")
+        return path
+
+    # --- plan 077, M2, K1 --------------------------------------------------------------------
+
+    def test_required_states(self):
+        self._write_data(items=ALL_STATE_ITEMS)
+        named = list(NAMED_REVIEW_LINES.values())
+
+        with self.subTest("due, gone and not_checked named, the rest only counted"):
+            code, output = self._run(self._review_report(named + COUNT_LINES,
+                                                         "runall-2026-09-20-1410.md"))
             self.assertEqual(code, 0, f"output:\n{output}")
             self.assertIn("OK", output)
 
+        for item_id, line in NAMED_REVIEW_LINES.items():
+            with self.subTest(f"{item_id} left out"):
+                lines = [other for other in named if other != line] + COUNT_LINES
+                name = f"runall-2026-09-20-14{10 + int(item_id[1:])}.md"
+                code, output = self._run(self._review_report(lines, name))
+                self.assertEqual(code, 1, f"output:\n{output}")
+                self.assertNotIn("OK", output)
+                self.assertIn(f"not named in the report: {item_id}", output)
+
+        with self.subTest("clean data: only no_decision items, no r item named"):
+            self._write_data(items=[_review_item(1, "no_decision"),
+                                    _review_item(2, "no_decision", kind="package")])
+            lines = ["- Bez decyzji: 2. Przegląd startowy: review_dates.py --list."]
+            code, output = self._run(self._review_report(lines, "runall-2026-09-20-1420.md"))
+            self.assertEqual(code, 0, f"output:\n{output}")
+            self.assertIn("OK", output)
+
+    # --- plan 077, M2, K2 --------------------------------------------------------------------
+
+    def test_cut_and_keys(self):
+        listed = [_review_item(1, "no_decision"), _review_item(2, "no_decision")]
+        cut = _review_item(3, "no_decision", kind="package")
+        lines = ["- Bez decyzji: 3. Przegląd startowy: review_dates.py --list.",
+                 "- Pominięto w podsumowaniu: 1, na przykład r3 (fabrikam-pkg)."]
+
+        with self.subTest("a cut r id cited, known from the detail file"):
+            self._write_data(items=listed, detail_items=listed + [cut], truncated=1)
+            summary = json.loads(self.summary_file.read_text(encoding="utf-8"))
+            self.assertNotIn("r3", [item["id"] for item in summary["review"]])
+            code, output = self._run(self._review_report(lines, "runall-2026-09-20-1430.md"))
+            self.assertEqual(code, 0, f"output:\n{output}")
+            self.assertIn("OK", output)
+
+        with self.subTest("a summary without review_counts"):
+            self._write_data(items=listed, detail_items=listed + [cut], truncated=1,
+                             drop_keys=("review_counts",))
+            summary = json.loads(self.summary_file.read_text(encoding="utf-8"))
+            self.assertNotIn("review_counts", summary)
+            code, output = self._run(self._review_report(lines, "runall-2026-09-20-1431.md"))
+            self.assertEqual(code, 1, f"output:\n{output}")
+            self.assertNotIn("OK", output)
+            self.assertIn("review_counts", output)
+
+    # --- plan 063, M1, K6 (the "no r item named" case moved to K1 of plan 077, M2) ----------
+
+    def test_current_format_passes(self):
+        self._write_data()
         with self.subTest("r1 named through ush:detail"):
             line = "- r1: termin przeglądu minął 2026-09-01."
             path = self._write_report([J1_LINE, line], "runall-2026-09-20-1401.md")
