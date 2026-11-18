@@ -306,5 +306,71 @@ class TestPackageDocs(unittest.TestCase):
                         "report-format.md: no ban on 'up to date' / 'aktualny'")
 
 
+class TestRegistryDocs(unittest.TestCase):
+    """Plan 078: the registry files of winget and vscode lookups (M1 K7, M2 K1)."""
+
+    def test_contract_registry_files(self):
+        contract = _read(CONTRACT)
+        for needle in ("`registry_file`", "`registry`", "advice-registry", "`truncated`",
+                       "Microsoft.VisualStudio.Code.PreRelease"):
+            with self.subTest(needle):
+                self.assertIn(needle, contract)
+
+    def test_skill_registry_lookups(self):
+        items = _items(_read(SKILL_MD))
+        checks = {
+            "Invoke-RestMethod with -OutFile into advice-registry":
+                ("Invoke-RestMethod", "-OutFile", "advice-registry"),
+            "the winget git trees request": ("git/trees/master:manifests", "recursive=1"),
+            "the vscode extensionquery request":
+                ("extensionquery", "filterType", '"flags":17',
+                 "-ContentType 'application/json'"),
+            "the stamped file name": ("advice-registry-<YYYYmmdd-HHMMSS>-<n>.json",),
+            "a failed request gives no finding and the package is not checked":
+                ("fail", "no finding", "not checked"),
+        }
+        for what, needles in checks.items():
+            with self.subTest(what):
+                self.assertTrue(_item_with(items, *needles),
+                                f"SKILL.md: no item with {needles}")
+
+        # judge fix 078 M2 #10: these rules are checked sentence by sentence, so other
+        # sentences of the same item cannot meet them.
+        sentences = [s for item in items for s in re.split(r"(?<=[.;:])\s+", item)]
+        sentence_checks = {
+            "never latest_version for winget and vscode":
+                ("never write `latest_version`", "winget", "vscode"),
+            "the saved file is never read by the model":
+                ("never open or read", "advice-registry"),
+            # judge fix 078 M2 #5: a store id is never sent to winget-pkgs
+            "a winget id without a dot is not looked up":
+                ("without a `.`", "microsoft store", "not checked"),
+        }
+        for what, needles in sentence_checks.items():
+            with self.subTest(what):
+                self.assertTrue(_item_with(sentences, *needles),
+                                f"SKILL.md: no sentence with {needles}")
+
+        with self.subTest("judge fix 078 M2 #6: the first rule allows Invoke-RestMethod"):
+            first_rule = next(item for item in items if "Only you go online" in item)
+            self.assertIn("Invoke-RestMethod", first_rule)
+
+        with self.subTest("judge fix 078 M2 #2: step 3 reuses the stamp of step 2"):
+            steps = _items(_section(_read(SKILL_MD), "Steps"))
+            self.assertTrue(_item_with(steps, "advice-findings-", "same stamp",
+                                       "advice-registry"),
+                            "SKILL.md step 3 does not say to reuse the registry files' stamp")
+
+    def test_registry_file_name_everywhere(self):
+        """judge fix 078 M2 #3: the contract and advice.py name the stamped file."""
+        advice = (SKILL_DIR / "scripts" / "advice.py").read_text(encoding="utf-8")
+        for name, text in (("summary-contract.md", _read(CONTRACT)), ("advice.py", advice)):
+            with self.subTest(name):
+                self.assertFalse("advice-registry-<n>.json" in text,
+                                 f"{name} names advice-registry-<n>.json")
+                self.assertTrue("advice-registry-<YYYYmmdd-HHMMSS>-<n>.json" in text,
+                                f"{name} lacks the stamped name")
+
+
 if __name__ == "__main__":
     unittest.main()

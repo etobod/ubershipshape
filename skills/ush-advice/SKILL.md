@@ -65,8 +65,24 @@ Not for: installing updates or a BIOS, running Windows Update, Office, Edge,
 - **Only you go online, never the script.** Use WebFetch on the addresses
   of `data/sources.json` (`release-info`, `msrc`, `kev`, `release-health`)
   and WebSearch for
-  the rest (the BIOS page of the manufacturer, a KB page). No upload, no
-  online tool that takes a file, nothing from this machine sent anywhere.
+  the rest (the BIOS page of the manufacturer, a KB page). The one
+  exception is the winget and vscode package lookup, sent with
+  `Invoke-RestMethod` (next rule). No upload, no online tool that takes a
+  file, nothing from this machine sent anywhere.
+- **A winget or vscode package lookup uses `Invoke-RestMethod`** (built
+  into PowerShell, no dependency), only to the `package_domains` addresses
+  of that manager, with the two requests of the `packages` step. Its answer
+  is saved with `-OutFile` into
+  `<data dir>\work\advice-registry-<YYYYmmdd-HHMMSS>-<n>.json` (the UTC
+  stamp of this run's findings file, `<n>` counting from 1), so a file of
+  an earlier run is never taken for today's answer. You never open or read
+  an `advice-registry` file: the script reads it (CLAUDE.md "The model never
+  reads raw command output"; see "Registry files" in
+  `references/summary-contract.md`).
+- **A winget id without a `.` is a Microsoft Store product id** of the
+  `msstore` catalog and stays not checked, never sent to
+  `microsoft/winget-pkgs`, which has no folder for it. The `packages`
+  reason counts these ids apart from the failed lookups.
 - **A query holds only facts shared by every such machine**: `Windows 11`,
   the version (`25H2`), the architecture (`x64`), the month (`2026-09`);
   for firmware also the manufacturer and the model from
@@ -95,6 +111,11 @@ Not for: installing updates or a BIOS, running Windows Update, Office, Edge,
   with the reason (which managers or how many were looked up). The
   findings of a `partial` search are still used, and the packages without
   a finding are counted as not checked in `package_counts`.
+- **A winget or vscode request that fails** (an error, a 404 because the id
+  has no manifest folder, a GitHub limit message) gives no file and no
+  finding: the package stays not checked, and `packages` is `partial`, with
+  the reason naming how many lookups failed and why. Never guess a version
+  from another source.
 - **Not defended against: a private package name.** A package built or
   installed from a local folder (a private pip project, a private npm
   package) has a name its owner chose, and its exact name is still sent to
@@ -242,13 +263,28 @@ Not for: installing updates or a BIOS, running Windows Update, Office, Edge,
      `manager` and `package` copied word for word from the
      `package_lookups` item (never the name the registry page shows: PyPI
      shows `typing-extensions` for an installed `typing_extensions`),
-     `latest_version` the version the registry page names as the latest
-     release, as written there, and the page as `url`. When `packages` is
-     `null`, give `packages` the status `unreadable` with
-     `packages_input.reason`.
+     and the page as `url`. For pip, pipx, uv, npm and conda,
+     `latest_version` is the version the registry page names as the latest
+     release, as written there. For winget and vscode, pick the findings
+     file's UTC stamp now and save each answer with `Invoke-RestMethod`
+     into `<data dir>\work\advice-registry-<YYYYmmdd-HHMMSS>-<n>.json`
+     (see the rules); each request carries the package name exactly as in
+     `package_lookups` and nothing else from this machine:
+     - winget: `GET https://api.github.com/repos/microsoft/winget-pkgs/git/trees/master:manifests/<first letter of the id, lower case>/<id with every . replaced by />?recursive=1`,
+       sent as `Invoke-RestMethod -Uri '<address>' -OutFile '<file>'`.
+     - vscode: `Invoke-RestMethod -Method Post -Uri https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery -Headers @{Accept='application/json;api-version=3.0-preview.1'} -ContentType 'application/json' -Body '{"filters":[{"criteria":[{"filterType":7,"value":"<publisher>.<name>"}]}],"flags":17}' -OutFile '<file>'`.
+     - The winget or vscode finding has `manager`, `package`,
+       `registry_file` (the bare file name) and as `url` the request
+       address. You never write `latest_version` for winget and vscode, and
+       never pick or copy a version from any page: the script reads the
+       file (see "Registry files" in `references/summary-contract.md`).
+
+     When `packages` is `null`, give `packages` the status `unreadable`
+     with `packages_input.reason`.
 
 3. Write what you found to
-   `<data dir>\work\advice-findings-<YYYYmmdd-HHMMSS>.json` (UTC time), in
+   `<data dir>\work\advice-findings-<YYYYmmdd-HHMMSS>.json` (UTC time; when
+   step 2 saved `advice-registry` files, the same stamp as theirs), in
    the shape of "The findings file" in `references/summary-contract.md`:
    one entry in `searches` for each of the six searches `release-info`,
    `msrc`, `kev`, `release-health`, `firmware` and `packages`,

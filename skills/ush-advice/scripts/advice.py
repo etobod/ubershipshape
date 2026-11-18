@@ -150,6 +150,12 @@ KIND_FIELDS = {
     "package": ("manager", "package", "latest_version"),
 }
 MANAGERS = tuple(PACKAGE_SOURCES.values())
+# Managers whose latest version advice.py reads itself from a saved registry answer
+# (``registry_file`` in <data dir>/work/) instead of a ``latest_version`` in the finding.
+REGISTRY_MANAGERS = ("winget", "vscode")
+REGISTRY_PACKAGE_FIELDS = ("manager", "package", "registry_file")
+REGISTRY_FILE = re.compile(r"advice-registry-[0-9A-Za-z-]+\.json")
+PRE_RELEASE_KEY = "Microsoft.VisualStudio.Code.PreRelease"
 # A version the generic comparator takes: dot-separated runs of digits, nothing else.
 NUMERIC_VERSION = re.compile(r"[0-9]+(?:\.[0-9]+)*")
 # A local path in a query or url (the url without its scheme): a drive path, plain or
@@ -486,13 +492,18 @@ def check_finding(entry) -> dict:
     if not isinstance(kind, str) or kind not in KIND_FIELDS:
         raise ShapeError(f"has the unknown kind {kind!r} (known: "
                          f"{', '.join(KIND_FIELDS)})")
-    expected = set(COMMON_FIELDS) | set(KIND_FIELDS[kind])
+    kind_fields, label = KIND_FIELDS[kind], kind
+    if kind == "package" and entry.get("manager") in REGISTRY_MANAGERS:
+        # winget and vscode name a saved registry answer, never a latest version.
+        kind_fields, label = REGISTRY_PACKAGE_FIELDS, f"package, {entry['manager']}"
+    expected = set(COMMON_FIELDS) | set(kind_fields)
     missing = sorted(expected - set(entry))
-    if missing:
-        raise ShapeError(f"({kind}) has no {', '.join(missing)}")
     extra = sorted(set(entry) - expected)
-    if extra:
-        raise ShapeError(f"({kind}) has unknown fields {', '.join(extra)}")
+    if missing or extra:
+        raise ShapeError(f"({label}) " + " and ".join(
+            part for part in (missing and f"has no {', '.join(missing)}",
+                              extra and f"has unknown fields {', '.join(extra)}")
+            if part))
 
     def required(name):
         value = text(entry[name])
@@ -568,8 +579,11 @@ def check_finding(entry) -> dict:
     elif kind == "package":
         if entry["manager"] not in MANAGERS:
             raise ShapeError(f"(package) 'manager' is not one of {', '.join(MANAGERS)}")
-        out.update(manager=entry["manager"], package=required("package"),
-                   latest_version=required("latest_version"))
+        out.update(manager=entry["manager"], package=required("package"))
+        if entry["manager"] in REGISTRY_MANAGERS:
+            out.update(registry_file=required("registry_file"))
+        else:
+            out.update(latest_version=required("latest_version"))
     return out
 
 
@@ -1301,17 +1315,136 @@ def compare_versions(installed, latest):
     return new + [0] * (width - len(new)) > old + [0] * (width - len(old))
 
 
+class RegistryError(Exception):
+    """A registry answer that gives no latest version; the text is the reason."""
+
+
+def winget_versions(answer, package: str) -> tuple:
+    """``(candidates, not_numeric, pre_release)`` of a git trees answer: the version
+    folders (no ``/`` in the path) that hold the blob ``<folder>/<package>.yaml``."""
+    if (not isinstance(answer, dict) or not isinstance(answer.get("tree"), list)
+            or not isinstance(answer.get("truncated"), bool)):
+        raise RegistryError("the file is not a git trees answer (an object with a list "
+                            "'tree' and 'truncated' true or false)")
+    if answer["truncated"]:
+        raise RegistryError("the trees answer is cut ('truncated' is true), so its "
+                            "version folders are not all listed")
+    entries = answer["tree"]
+    if not all(isinstance(e, dict) and isinstance(e.get("path"), str) for e in entries):
+        raise RegistryError("a 'tree' entry of the trees answer has no text 'path'")
+    blobs = {e["path"].casefold() for e in entries if e.get("type") == "blob"}
+    folders = dict.fromkeys(e["path"] for e in entries
+                            if e.get("type") == "tree" and "/" not in e["path"]
+                            and f"{e['path']}/{package}.yaml".casefold() in blobs)
+    if not folders:
+        raise RegistryError(f"the trees answer has no version folder with a manifest "
+                            f"{package}.yaml, so it does not name the package")
+    candidates = [v for v in folders if NUMERIC_VERSION.fullmatch(v)]
+    return candidates, len(folders) - len(candidates), None
+
+
+def vscode_versions(answer, package: str) -> tuple:
+    """``(candidates, not_numeric, pre_release)`` of an extensionquery answer: the
+    versions of the one extension ``<publisherName>.<extensionName>`` equal to
+    ``package``; a version marked pre-release is never a candidate."""
+    try:
+        extensions = answer["results"][0]["extensions"]
+        if not isinstance(extensions, list):
+            raise TypeError
+        names = [f"{e['publisher']['publisherName']}.{e['extensionName']}"
+                 for e in extensions]
+    except (KeyError, IndexError, TypeError):
+        raise RegistryError("the file is not an extensionquery answer (results[0]."
+                            "extensions with publisher.publisherName and "
+                            "extensionName)") from None
+    own = [e for e, name in zip(extensions, names) if name.casefold() == package.casefold()]
+    if not own:
+        raise RegistryError(f"the extensionquery answer has no extension {package}")
+    if len(own) > 1:
+        raise RegistryError(f"the extensionquery answer has {len(own)} extensions "
+                            f"named {package}")
+    versions = own[0].get("versions")
+    if not isinstance(versions, list) or not all(
+            isinstance(v, dict) and isinstance(v.get("version"), str)
+            and isinstance(v.get("properties", []), list) for v in versions):
+        raise RegistryError(f"the versions of {package} in the extensionquery answer "
+                            f"are not a list of {{version, properties}}")
+    pre_release, release = set(), set()  # one version per text, whatever the platform
+    for entry in versions:
+        marked = any(isinstance(p, dict) and p.get("key") == PRE_RELEASE_KEY
+                     and str(p.get("value")).casefold() == "true"
+                     for p in entry.get("properties", []))
+        (pre_release if marked else release).add(entry["version"])
+    release -= pre_release  # marked pre-release for any platform: never chosen
+    candidates = [v for v in release if NUMERIC_VERSION.fullmatch(v)]
+    return candidates, len(release) - len(candidates), len(pre_release)
+
+
+def read_registry_file(finding: dict, work: Path) -> dict:
+    """The finding's ``latest_version`` and ``registry`` read from its registry file.
+
+    Raises ``RegistryError`` with the reason when the file gives no version.
+    """
+    name = finding["registry_file"]
+    if not REGISTRY_FILE.fullmatch(name):
+        raise RegistryError(f"'{name}' is not a bare advice-registry-<YYYYmmdd-HHMMSS>-<n>.json file name "
+                            f"in the work folder")
+    path = work / name
+    if not path.is_file():
+        raise RegistryError(f"the file {name} is missing from the work folder")
+    try:
+        answer = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeDecodeError, ValueError, RecursionError) as exc:
+        raise RegistryError(f"the file {name} could not be read as JSON: "
+                            f"{type(exc).__name__}: {exc}") from exc
+    read = winget_versions if finding["manager"] == "winget" else vscode_versions
+    candidates, not_numeric, pre_release = read(answer, finding["package"])
+    if not candidates:
+        raise RegistryError(f"the registry answer has no release version of "
+                            f"{finding['package']} made of numbers only")
+    latest = candidates[0]
+    for version in candidates[1:]:
+        if compare_versions(latest, version):
+            latest = version
+    return {"latest_version": latest,
+            "registry": {"file": name, "status": "read", "reason": None,
+                         "versions": len(candidates), "not_numeric": not_numeric,
+                         "pre_release": pre_release}}
+
+
+def read_registry_files(findings, work: Path, not_checked: list) -> None:
+    """Give each winget and vscode ``package`` finding ``latest_version`` and
+    ``registry`` from its saved registry answer, offline. A file that gives no version
+    leaves ``latest_version`` null and is named in ``not_checked``."""
+    for finding in findings or []:
+        if finding["kind"] != "package" or finding["manager"] not in REGISTRY_MANAGERS:
+            continue
+        try:
+            finding.update(read_registry_file(finding, work))
+        except RegistryError as exc:
+            finding.update(latest_version=None,
+                           registry={"file": finding["registry_file"],
+                                     "status": "unreadable", "reason": str(exc),
+                                     "versions": None, "not_numeric": None,
+                                     "pre_release": None})
+            not_checked.append({"what": f"package finding {finding['id']}",
+                                "reason": f"finding {finding['id']} gives no latest "
+                                          f"version: {exc}"})
+
+
 def match_packages(packages, managers, findings: list, not_checked: list):
     """Give each listed package ``checked`` and, from the ``package`` finding of the
     same manager and name (case-folded), ``finding_id``, ``latest_version`` and
     ``newer_available``; return ``package_counts``, or None without a package list.
 
     A finding repeated for one package (the first wins) or matching no package stays
-    in ``findings`` and is named in ``not_checked``.
+    in ``findings`` and is named in ``not_checked``. A finding without a
+    ``latest_version`` (an unreadable registry file, already in ``not_checked``) is
+    not used.
     """
     by_key = {}
     for finding in findings:
-        if finding["kind"] != "package":
+        if finding["kind"] != "package" or finding["latest_version"] is None:
             continue
         key = (finding["manager"], finding["package"].casefold())
         if key in by_key:
@@ -1552,6 +1685,8 @@ def main(argv=None, run_ps=None, now=None) -> int:
     lists, kev_other = compared["lists"], compared["kev_other"]
     packages_input, packages, package_lookups = read_packages(
         work, data_dir / "state", now.date().isoformat(), not_checked)
+    if doc is not None:
+        read_registry_files(compared["findings"], work, not_checked)
     package_counts = (None if doc is None else
                       match_packages(packages, packages_input["managers"],
                                      compared["findings"], not_checked))

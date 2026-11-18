@@ -7,7 +7,8 @@ Interface under test, beyond ``fakes.py`` and ``test_packages_input.py``:
   with ``0`` parts), ``False`` when not greater, ``None`` for anything else.
 - Search id ``packages``; a finding of kind ``package`` has the common fields plus
   ``manager``, ``package`` and ``latest_version`` (non-empty texts, ``manager`` one of the
-  ush-packages managers).
+  ush-packages managers). Since plan 078, ``winget`` and ``vscode`` findings carry
+  ``registry_file`` instead of ``latest_version`` (``test_registry_files.py``).
 - With ``--findings``, every summary ``packages`` item gets ``checked`` and, when checked,
   ``finding_id``, ``latest_version`` and ``newer_available``. ``package_counts`` is
   ``{manager: {listed, checked, not_checked, newer, not_comparable}, "all": {...}}``.
@@ -83,6 +84,36 @@ def package_finding(manager, package, latest_version, url=None, query=None, titl
     }
 
 
+def registry_package_finding(manager, package, registry_file):
+    """An invented winget or vscode ``package`` finding naming a saved registry answer
+    (plan 078: these managers carry ``registry_file``, never ``latest_version``)."""
+    finding = package_finding(manager, package, None)
+    del finding["latest_version"]
+    finding["registry_file"] = registry_file
+    return finding
+
+
+def invented_winget_answer(package_id, versions):
+    """An invented git trees answer: one folder per version with ``<v>/<id>.yaml``."""
+    tree = []
+    for version in versions:
+        tree.append({"path": version, "mode": "040000", "type": "tree",
+                     "sha": "0" * 40, "url": "https://api.github.com/invented"})
+        tree.append({"path": f"{version}/{package_id}.yaml", "mode": "100644",
+                     "type": "blob", "sha": "1" * 40, "size": 512,
+                     "url": "https://api.github.com/invented"})
+    return {"sha": "2" * 40, "url": "https://api.github.com/invented", "tree": tree,
+            "truncated": False}
+
+
+def invented_vscode_answer(publisher, name, versions):
+    """An invented extensionquery answer with one extension and release versions."""
+    return {"results": [{"extensions": [{
+        "publisher": {"publisherName": publisher}, "extensionName": name,
+        "versions": [{"version": v, "flags": "validated", "properties": []}
+                     for v in versions]}]}]}
+
+
 class PackageTestCase(AdviceTestCase):
     def setUp(self):
         super().setUp()
@@ -99,11 +130,15 @@ class PackageTestCase(AdviceTestCase):
         path.write_text(json.dumps(doc, indent=2), encoding="utf-8")
         return path
 
-    def run_packages(self, lists, findings, status="read", reason=None, statuses=None):
-        """Write an invented ush-packages detail file, run with ``--findings`` holding
-        the ``packages`` search and ``findings``; return the summary."""
+    def run_packages(self, lists, findings, status="read", reason=None, statuses=None,
+                     registry_files=None):
+        """Write an invented ush-packages detail file (and ``registry_files``,
+        ``{name: answer}``, under ``work/``), run with ``--findings`` holding the
+        ``packages`` search and ``findings``; return the summary."""
         data_dir = self.data_dir()
         self.write_packages(data_dir, packages_detail(lists, statuses=statuses))
+        for name, answer in (registry_files or {}).items():
+            (data_dir / "work" / name).write_text(json.dumps(answer), encoding="utf-8")
         doc = findings_doc([search("packages", status, reason)], findings)
         return self.collect_findings(FakePowerShell(), doc, data_dir=data_dir,
                                      now=RUN_NOW)
@@ -159,15 +194,28 @@ class TestCompareVersions(PackageTestCase):
 class TestPackageFindings(PackageTestCase):
     # K2
     def test_compare_and_count(self):
-        summary = self.run_packages(k1_lists(), [
+        # Plan 078: winget and vscode read their latest version from a registry file;
+        # the not-comparable case ("1.5.0-beta") moves to npm.
+        lists = k1_lists()
+        lists["npm_packages"].append(npm_item("northwind-cli", "1.4.0"))
+        summary = self.run_packages(lists, [
             package_finding("pip", "contoso-lib", "1.3.0"),
-            package_finding("winget", "Contoso.Tool", "3.1"),
-            package_finding("vscode", "contoso.theme", "1.5.0-beta"),
-        ])
+            registry_package_finding("winget", "Contoso.Tool",
+                                     "advice-registry-20261118-120000-1.json"),
+            registry_package_finding("vscode", "contoso.theme",
+                                     "advice-registry-20261118-120000-2.json"),
+            package_finding("npm", "northwind-cli", "1.5.0-beta"),
+        ], registry_files={
+            "advice-registry-20261118-120000-1.json":
+                invented_winget_answer("Contoso.Tool", ["3.0", "3.1"]),
+            "advice-registry-20261118-120000-2.json":
+                invented_vscode_answer("contoso", "theme", ["1.4.0", "1.3.9"]),
+        })
         for (manager, name, finding_id, latest, expected) in (
                 ("pip", "contoso-lib", "w1", "1.3.0", True),
                 ("winget", "Contoso.Tool", "w2", "3.1", False),
-                ("vscode", "contoso.theme", "w3", "1.5.0-beta", None)):
+                ("vscode", "contoso.theme", "w3", "1.4.0", False),
+                ("npm", "northwind-cli", "w4", "1.5.0-beta", None)):
             with self.subTest(package=name):
                 item = self.package(summary, manager, name)
                 self.assertIs(item.get("checked"), True, item)
@@ -231,7 +279,10 @@ class TestPackageFindings(PackageTestCase):
             lists = {"winget_packages": [winget_item("Contoso Tool", "Contoso.Tool", "3.1")],
                      "vscode_extensions": [vscode_item("contoso.theme", "1.4.0")]}
             summary = self.run_packages(
-                lists, [package_finding("winget", "Contoso.Tool", "3.1")],
+                lists, [registry_package_finding("winget", "Contoso.Tool",
+                                                 "advice-registry-20261118-120000-1.json")],
+                registry_files={"advice-registry-20261118-120000-1.json":
+                                invented_winget_answer("Contoso.Tool", ["3.0", "3.1"])},
                 statuses={"pip_packages": ("unreadable",
                                            "Invented: no Python could be listed")})
             counts = self.counts(summary)

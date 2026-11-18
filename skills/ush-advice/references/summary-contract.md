@@ -200,11 +200,14 @@ and no others:
 | `firmware` | `manufacturer`, `model`, `version` (texts), `release_date` (a date or `null`) |
 | `issue` | the common fields only |
 | `fault` | `fault` (the public fault text, e.g. `CM_PROB_FAILED_POST_START`), `source_item` (the skill and item id that found it, e.g. `ush-health h3`), `advice` (what the page says to do, in the user's language) (texts), `fix` (`available`: the page gives a fix that works today; `none_today`: the page says there is no fix yet; `unknown`: the page does not say) |
-| `package` | `manager` (`pip`, `npm`, `pipx`, `uv`, `conda`, `winget` or `vscode`), `package` (the name exactly as in `package_lookups`), `latest_version` (the version the registry page names as the latest release, as written there) (texts) |
+| `package` | `manager` (`pip`, `npm`, `pipx`, `uv`, `conda`, `winget` or `vscode`), `package` (the name exactly as in `package_lookups`), `latest_version` (the version the registry page names as the latest release, as written there) (texts) for `pip`, `npm`, `pipx`, `uv` and `conda`; for `winget` and `vscode` `registry_file` instead (the bare name `advice-registry-<YYYYmmdd-HHMMSS>-<n>.json` of the saved registry answer in `<data dir>/work/`), never `latest_version` (see "Registry files") |
 
 Any other shape, an unknown `kind`, a `fixed_build` of another form, a
 `fix` other than `available`, `none_today` or `unknown`, or a `manager`
-outside the list exits 2 with the entry's number.
+outside the list exits 2 with the entry's number. So does a `winget` or
+`vscode` finding with `latest_version` or without `registry_file`, and
+a finding of another manager with `registry_file`; the message names the
+field.
 
 `fault` findings belong to no search and fill no list of the summary: they
 are only in the detail file's `findings` (ids `w..`, fetched with
@@ -278,6 +281,48 @@ those with `null`. A manager whose source is `unreadable` has all five
 `null` (never 0); `all` sums the other managers, and an item `package_counts
 all` in `not_checked` names the ones it leaves out. Without `--findings`
 the items have none of these fields and `package_counts` is `null`.
+
+## Registry files
+
+A `winget` or `vscode` finding names in `registry_file` the registry's
+answer the model saved unread; `advice.py` reads it offline, after the
+findings are compared and before the packages are matched, and gives the
+finding (detail file) `latest_version` and `registry`:
+
+| Field | Meaning |
+|---|---|
+| `file` | the `registry_file` |
+| `status` | `read`, or `unreadable` when the file gives no version |
+| `reason` | `null` when `read`, else the cause |
+| `versions` | the number of candidate versions (distinct, digits separated by dots); `null` when `unreadable` |
+| `not_numeric` | the number of versions left out because they are not digits separated by dots; `null` when `unreadable` |
+| `pre_release` | the number of `vscode` versions left out as pre-release; `null` for `winget` and when `unreadable` |
+
+- The file is read only when `registry_file` is a bare name matching
+  `advice-registry-[0-9A-Za-z-]+\.json` of an existing file in
+  `<data dir>/work/`; a path, another name or a missing file is `unreadable`.
+  So is a file that is not JSON or not of the shape below.
+- **winget** (the git trees answer of `microsoft/winget-pkgs`,
+  `?recursive=1`): an object with a list `tree` and `truncated` `false`; a
+  cut answer (`truncated` `true`) is `unreadable`. A version folder is a
+  `tree` entry of type `tree` with no `/` in `path` that holds a blob
+  `<path>/<package>.yaml` (case ignored); a folder of a sub-package (only
+  deeper paths) is not one. No version folder: the answer does not name the
+  package, `unreadable`.
+- **vscode** (the Marketplace `extensionquery` answer):
+  `results[0].extensions` must hold exactly one extension whose
+  `publisher.publisherName` `.` `extensionName` equals `package` (case
+  ignored); none or several is `unreadable`. A version with the property
+  `Microsoft.VisualStudio.Code.PreRelease` = `true` is counted in
+  `pre_release` and never chosen. A version listed once per target platform
+  is one version.
+- `latest_version` is the highest candidate compared part by part as numbers
+  (never the order of the answer, never text order). No candidate (only
+  pre-release or non-numeric versions) is `unreadable`.
+- An `unreadable` file gives `latest_version` `null`, `versions`,
+  `not_numeric` and `pre_release` `null`, and an item `package finding <id>`
+  in `not_checked` with the reason. Its package stays `checked` `false`: it
+  is never counted as `newer` or compared.
 
 ## Updates items
 
