@@ -81,6 +81,20 @@ class TestLogsProgress(unittest.TestCase):
         self.assertRegex(lines[-1], r"^export done \(\d+(?:\.\d+)? s\)$")
         self.assertEqual(len(lines), 2, lines)
 
+    def test_powershell_job_with_no_match_ends_as_failed(self):
+        # logs.py's own PowerShell bodies catch NoMatchingEventsFound, so a non-zero
+        # exit is a real failure that logs.py counts: its window line says failed.
+        def run(*args, **kwargs):
+            return subprocess.CompletedProcess(args[0], 1, "", NO_EVENTS)
+
+        err = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict(os.environ, {"USH_PROGRESS": "1"}), \
+                mock.patch("subprocess.run", run), redirect_stderr(err):
+            os.environ.pop("USH_PROGRESS_MARK", None)
+            self.logs.default_run("verify", "Get-WinEvent", Path(tmp) / "x.json")
+        self.assertEqual(lines_of(err.getvalue()), ["verify ...", "verify failed"])
+
     def test_argv_job_failure_and_timeout_end_as_failed(self):
         def nonzero(*args, **kwargs):
             return subprocess.CompletedProcess(args[0], 5, b"", b"invented access denied")

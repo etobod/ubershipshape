@@ -61,6 +61,7 @@ import datadir
 import dumps
 import events
 import progress
+import psrun
 from dumpfiles import describe, digest, iso
 
 LOGS = ("System", "Application")
@@ -122,9 +123,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 # --- the real machine functions (tests replace both) ----------------------
 def default_run(job: str, command, out_path) -> tuple[int, str]:
-    """Run an argv list directly, a str as a PowerShell script (events.default_run_ps)."""
+    """Run an argv list directly, a str as a PowerShell script (psrun.default_run_ps)."""
     if isinstance(command, str):
-        return events.default_run_ps(job, command, out_path)
+        # No empty markers: these bodies catch NoMatchingEventsFound themselves, so a
+        # non-zero exit is a failure logs.py counts, and the window says failed.
+        return psrun.default_run_ps(job, command, out_path)
     # The export and the clear are the long steps of the run-me window: each gets
     # its start and end line like a PowerShell job.
     progress.step(f"{job} ...")
