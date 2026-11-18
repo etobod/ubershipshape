@@ -69,8 +69,9 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
-from collections import Counter
+from collections import Counter, deque
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -79,6 +80,7 @@ sys.path.insert(0, str(Path(__file__).absolute().parents[2] / "ush-common" / "sc
 import accepted as accepted_file
 import datadir
 import decisions as decisions_file
+import progress
 import review_dates as review_file
 from baseline import parse_utc
 from psrun import dump
@@ -224,42 +226,89 @@ def kill_tree(pid: int) -> bool:
     return getattr(done, "returncode", None) == 0
 
 
+def _read_stdout(stream, sink: list) -> None:
+    """Reader thread: the child's whole stdout (its JSON summary)."""
+    sink.append(stream.read())
+
+
+def _read_stderr(stream, tail: deque, relay: bool) -> None:
+    """Reader thread: the child's stderr line by line, kept in ``tail`` and, when
+    ``relay``, written at once to runall's own stderr (the child's progress lines)."""
+    for line in stream:
+        tail.append(line)
+        if relay:
+            try:
+                sys.stderr.write(line)
+                sys.stderr.flush()
+            except (OSError, ValueError):
+                relay = False  # a closed or broken stderr never stops the run
+
+
+def _join(threads, timeout_s) -> bool:
+    """Wait for the reader threads until ``timeout_s`` has passed in all; True when
+    every one has ended (the child's pipes are closed)."""
+    deadline = time.monotonic() + timeout_s
+    for thread in threads:
+        thread.join(max(0.0, deadline - time.monotonic()))
+    return not any(thread.is_alive() for thread in threads)
+
+
 def default_run_child(argv: list, timeout_s: int) -> dict:
     """Run one child without a shell; raise TimeoutExpired after stopping its tree. The
     raised exception carries ``tree_stopped``: True only when taskkill succeeded and the
     child's pipes closed, so nothing it started can still be running. Any other exception
     while waiting (an interrupt, an overflow) stops the tree the same way and is raised
-    again unchanged."""
+    again unchanged.
+
+    With progress on (``progress.enabled``) the child gets ``USH_PROGRESS=1`` and each
+    line of its stderr is passed on to runall's stderr as it comes; stdout stays the
+    child's summary. The last ``STDERR_TAIL_CHARS`` characters of stderr are kept
+    either way."""
+    relay = progress.enabled()
     env = dict(os.environ)
     env["PYTHONIOENCODING"] = "utf-8"
+    if relay:
+        env["USH_PROGRESS"] = "1"
     started = time.monotonic()
     proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, encoding="utf-8", errors="replace",
                             env=env, shell=False)
-    try:
-        stdout, stderr = proc.communicate(timeout=timeout_s)
-    except subprocess.TimeoutExpired as exc:
-        # The child is still alive, so its tree (with PowerShell) can still be found.
+    stdout = []
+    # Every line holds at least one character, so the last STDERR_TAIL_CHARS lines
+    # always hold the last STDERR_TAIL_CHARS characters.
+    tail = deque(maxlen=STDERR_TAIL_CHARS)
+    readers = [threading.Thread(target=_read_stdout, args=(proc.stdout, stdout), daemon=True),
+               threading.Thread(target=_read_stderr, args=(proc.stderr, tail, relay),
+                                daemon=True)]
+    for reader in readers:
+        reader.start()
+
+    def stop_tree():
+        """Stop the child and its tree; True when taskkill succeeded and the pipes closed."""
         tree_killed = kill_tree(proc.pid) is True
         proc.kill()
         try:
-            proc.communicate(timeout=REAP_TIMEOUT_S)
+            proc.wait(timeout=REAP_TIMEOUT_S)
             reaped = True
         except subprocess.TimeoutExpired:
-            reaped = False  # something it started still holds the pipes
-        exc.tree_stopped = tree_killed and reaped
+            reaped = False
+        return tree_killed and _join(readers, REAP_TIMEOUT_S) and reaped
+
+    try:
+        proc.wait(timeout=timeout_s)
+        # Something the child started can still hold its pipes after it exits.
+        if not _join(readers, max(0.0, timeout_s - (time.monotonic() - started))):
+            raise subprocess.TimeoutExpired(argv, timeout_s)
+    except subprocess.TimeoutExpired as exc:
+        # The child (or what it started) is still alive, so its tree can still be found.
+        exc.tree_stopped = stop_tree()
         raise
     except BaseException:
         # Waiting failed for another reason; the child must not outlive the run.
-        kill_tree(proc.pid)
-        proc.kill()
-        try:
-            proc.communicate(timeout=REAP_TIMEOUT_S)
-        except subprocess.TimeoutExpired:
-            pass  # the original exception below says what went wrong
+        stop_tree()  # the original exception below says what went wrong
         raise
-    return {"returncode": proc.returncode, "stdout": stdout or "",
-            "stderr_tail": (stderr or "")[-STDERR_TAIL_CHARS:],
+    return {"returncode": proc.returncode, "stdout": "".join(stdout),
+            "stderr_tail": "".join(tail)[-STDERR_TAIL_CHARS:],
             "duration_s": round(time.monotonic() - started, 1)}
 
 
@@ -1156,7 +1205,10 @@ def main(argv=None, run_child=None, now=None) -> int:
     outcomes = {}
     for n, child in enumerate(children, 1):
         item_id = f"h{n}"
+        progress.step(f"[{n}/{len(children)}] {child['skill']} ...")
         outcome = run_one(run_child, child, data_dir)
+        progress.step(f"[{n}/{len(children)}] {child['skill']} {outcome['status']} "
+                      f"({outcome['duration_s']} s)")
         outcomes[child["skill"]] = outcome
         item = child_item(item_id, child, outcome)
         items.append(item)

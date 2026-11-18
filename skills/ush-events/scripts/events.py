@@ -33,7 +33,6 @@ import itertools
 import json
 import math
 import os
-import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -46,6 +45,7 @@ sys.path.insert(0, str(Path(__file__).absolute().parents[2] / "ush-common" / "sc
 import datadir
 import dumpfiles
 import ids
+import psrun
 from dumpfiles import iso
 
 DEFAULT_NOISE_FILE = Path(__file__).absolute().parents[1] / "data" / "noise.json"
@@ -633,7 +633,6 @@ PASS_B_IDS = (12, 20, 27, 41, 506, 507, 1001, 6005, 6006, 6008, 6009)
 NO_MATCH = "NoMatchingEventsFound"
 SUMMARY_MAX_CHARS = 35000
 STDERR_MAX = 1000
-PS_TIMEOUT = 300  # seconds; a pass that runs longer is wedged, not slow
 
 # The M2 projection, built object by object. A calculated property in
 # Select-Object makes ConvertTo-Json (PS 5.1) write an array as
@@ -710,27 +709,12 @@ def _ps_time(moment: datetime) -> str:
 
 
 def default_run_ps(job: str, script: str, out_path: Path) -> tuple[int, str]:
-    """Run one script in Windows PowerShell 5.1; return (exit code, stderr).
-
-    The script is a fixed template; nothing from the event log reaches the
-    command line. Data comes back only through the file at out_path.
-    """
-    try:
-        result = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            check=False,  # a non-zero exit is data here
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=PS_TIMEOUT,
-        )
-    except subprocess.TimeoutExpired:
-        return 1, f"{job}: PowerShell did not finish within {PS_TIMEOUT} s and was stopped"
-    except OSError as exc:
-        return 1, f"{job}: powershell.exe could not be started: {type(exc).__name__}: {exc}"
-    return result.returncode, result.stderr or ""
+    """Run one script in Windows PowerShell 5.1 through the shared runner, which
+    prints the job's start and end lines when progress is on; return (exit code,
+    stderr). The script is a fixed template; nothing from the event log reaches the
+    command line. Data comes back only through the file at out_path. A query
+    that finds no events (NO_MATCH) ends as done, not failed, as run_job counts it."""
+    return psrun.default_run_ps(job, script, out_path, empty_markers=(NO_MATCH,))
 
 
 def run_job(run_ps, job: str, script: str, out_path: Path, load=load_capture) -> dict:

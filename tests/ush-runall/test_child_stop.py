@@ -14,6 +14,7 @@ No real process is started: ``run_child`` is a fake, and ``subprocess.Popen`` an
 ``subprocess.run`` refuse every call. Every value is invented.
 """
 
+import io
 import subprocess
 import sys
 import unittest
@@ -30,9 +31,10 @@ ARGV = [sys.executable, "-B", "C:\\invented\\skills\\ush-x\\scripts\\x.py",
 
 
 class ScriptedPopen:
-    """A process that never runs: the first ``communicate`` raises ``first`` (or returns
-    ``("out", "err")`` when it is None); later calls raise ``reap``, or return when it is
-    None. Every step goes to ``events``."""
+    """A process that never runs: the first ``wait`` raises ``first`` (or returns 0 when
+    it is None); later calls raise ``reap``, or return when it is None. Its stdout and
+    stderr are invented streams that runall's reader threads read to the end. Every step
+    goes to ``events``."""
 
     def __init__(self, events, first, reap=None):
         self.events = events
@@ -41,27 +43,26 @@ class ScriptedPopen:
         self.pid = FAKE_PID
         self.returncode = None
         self.calls = 0
+        self.stdout = io.StringIO("invented out")
+        self.stderr = io.StringIO("invented err")
 
-    def communicate(self, input=None, timeout=None):
-        self.events.append(("communicate", timeout))
+    def wait(self, timeout=None):
+        self.events.append(("wait", timeout))
         self.calls += 1
         if self.calls == 1:
             if self.first is not None:
                 raise self.first
             self.returncode = 0
-            return "invented out", "invented err"
+            return self.returncode
         if self.reap is not None:
             raise self.reap
-        return "", ""
+        return self.returncode
 
     def kill(self):
         self.events.append(("kill", self.pid))
         self.returncode = 1
 
     terminate = kill
-
-    def wait(self, timeout=None):
-        return self.returncode
 
     def poll(self):
         return self.returncode

@@ -56,6 +56,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
@@ -209,8 +210,9 @@ class FakeChildren:
 
 
 class FakePopen:
-    """A process that never runs: ``communicate`` with a timeout raises
-    ``TimeoutExpired`` until ``kill`` is called. Every step goes to ``events``."""
+    """A process that never runs: ``communicate`` and ``wait`` with a timeout raise
+    ``TimeoutExpired`` until ``kill`` is called; its stdout and stderr are empty
+    invented streams. Every step goes to ``events``."""
 
     def __init__(self, events, args, **kwargs):
         self.events = events
@@ -218,8 +220,8 @@ class FakePopen:
         self.kwargs = kwargs
         self.pid = FAKE_PID
         self.returncode = None
-        self.stdout = None
-        self.stderr = None
+        self.stdout = io.StringIO("")
+        self.stderr = io.StringIO("")
         self.stdin = None
         self.killed = False
         events.append(("popen", args))
@@ -470,12 +472,27 @@ class TestRunall(RunallTestCase):
         argv = [sys.executable, "-B", "C:/invented/skills/ush-x/scripts/x.py",
                 "--data-dir", "C:/invented-data-dir"]
 
-        class StuckPopen(FakePopen):
-            """A grandchild keeps the pipes open: communicate never returns."""
+        held = threading.Event()  # set at the end, so the reader threads end
+        self.addCleanup(held.set)
 
-            def communicate(self, input=None, timeout=None):
-                self.events.append(("communicate", timeout))
-                raise subprocess.TimeoutExpired(self.args, timeout)
+        class HeldStream(io.StringIO):
+            """A pipe a grandchild keeps open: reading blocks until ``held`` is set."""
+
+            def read(self, *args):
+                held.wait(60)
+                return ""
+
+            def __iter__(self):
+                held.wait(60)
+                return iter(())
+
+        class StuckPopen(FakePopen):
+            """A grandchild keeps the pipes open: the reader threads never end."""
+
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.stdout = HeldStream()
+                self.stderr = HeldStream()
 
         cases = (("taskkill succeeded", FakePopen, True, True),
                  ("taskkill failed", FakePopen, False, False),
@@ -493,6 +510,7 @@ class TestRunall(RunallTestCase):
                 with mock.patch.object(subprocess, "Popen", popen), \
                         mock.patch.object(subprocess, "run", refuse), \
                         mock.patch.object(self.runall, "kill_tree", kill_tree), \
+                        mock.patch.object(self.runall, "REAP_TIMEOUT_S", 0.2), \
                         self.assertRaises(subprocess.TimeoutExpired) as caught:
                     self.runall.default_run_child(argv, 5)
                 self.assertIs(getattr(caught.exception, "tree_stopped", None), expected)

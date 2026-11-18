@@ -18,7 +18,13 @@ model judges.
 
 import json
 import subprocess
+import sys
+import time
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).absolute().parent))
+
+import progress
 
 STDERR_MAX = 1000
 PS_TIMEOUT = 300  # seconds; a job that runs longer is wedged, not slow
@@ -49,12 +55,28 @@ def ps_script(body: str, out_path: Path, depth: int = 4) -> str:
     return PS_TEMPLATE.format(body=body, depth=int(depth), path=ps_quote(out_path))
 
 
-def default_run_ps(job: str, script: str, out_path: Path) -> tuple[int, str]:
+def default_run_ps(job: str, script: str, out_path: Path,
+                   empty_markers=()) -> tuple[int, str]:
     """Run one script in Windows PowerShell 5.1; return (exit code, stderr).
 
     The script is built from fixed templates; data comes back only through
-    the file at out_path.
+    the file at out_path. With progress on (``progress.enabled``), a line on
+    stderr names the job when it starts and when it ends. A non-zero exit
+    whose stderr holds one of ``empty_markers`` is the caller's "read,
+    nothing there" (e.g. NoMatchingEventsFound), so it ends as done, not
+    failed.
     """
+    progress.step(f"{job} ...")
+    started = time.monotonic()
+    code, stderr = _run_ps(job, script)
+    if code == 0 or any(marker in stderr for marker in empty_markers):
+        progress.step(f"{job} done ({round(time.monotonic() - started, 1)} s)")
+    else:
+        progress.step(f"{job} failed")
+    return code, stderr
+
+
+def _run_ps(job: str, script: str) -> tuple[int, str]:
     try:
         result = subprocess.run(
             ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],

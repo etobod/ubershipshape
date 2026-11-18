@@ -156,6 +156,7 @@ sys.path.insert(0, str(Path(__file__).absolute().parents[2] / "ush-common" / "sc
 
 import baseline  # called as baseline.save(...), so tests can patch it
 import datadir
+import progress
 from psrun import dump, with_ids
 
 SKILL = "ush-files"
@@ -347,6 +348,7 @@ def walk_drive(letter: str, scan_dir, settings: dict, counts: dict, large: list,
     folders = [new_folder(root, letter, 0, None)]
     root_status, root_reason = "read", None
     stack = [(root, 0, 0)]  # path, depth, index of its folder (own, or its ancestor's)
+    listed = 0  # directories listed on this drive, for the progress counter
     while stack:
         path, depth, index = stack.pop()
         folder = folders[index]
@@ -366,6 +368,8 @@ def walk_drive(letter: str, scan_dir, settings: dict, counts: dict, large: list,
                 root_status, root_reason = "unreadable", reason
             continue
         counts["dirs_listed"] += 1
+        listed += 1
+        progress.count(f"drive {letter}:", listed)
         if own:
             folder["listed"] = True
         if depth == 0 and not entries:
@@ -439,6 +443,7 @@ def walk_drive(letter: str, scan_dir, settings: dict, counts: dict, large: list,
             "unreadable_key": unreadable_key(paths),
             "skipped_key": unreadable_key(folder["_skip"]),
         })
+    progress.step(f"drive {letter}: {listed} directories")
     return result, root_status, root_reason
 
 
@@ -538,7 +543,7 @@ def root_skip(root: str, scan_dir):
     return None, None
 
 
-def measure_dir(root: str, scan_dir, cutoff, ignore=frozenset()):
+def measure_dir(root: str, scan_dir, cutoff, ignore=frozenset(), label="cleanup"):
     """Sizes of the files on the disk in and under ``root``, by the walk rules.
 
     Returns ``{state, reason, bytes, files, bytes_older, files_older, unreadable}``:
@@ -559,6 +564,7 @@ def measure_dir(root: str, scan_dir, cutoff, ignore=frozenset()):
         result.update({"state": state, "reason": reason})
         return result
     stack = [root]
+    listed = 0  # directories listed, for the progress counter
     while stack:
         path = stack.pop()
         try:
@@ -571,6 +577,8 @@ def measure_dir(root: str, scan_dir, cutoff, ignore=frozenset()):
             if not isinstance(exc, VANISHED):
                 result["unreadable"].append({"path": path, "reason": error_text(exc)})
             continue
+        listed += 1
+        progress.count(label, listed)
         for entry in entries:
             attributes = as_count(entry.get("attributes"))
             if entry.get("is_dir"):
@@ -596,6 +604,7 @@ def measure_cleanup(entries: list, letters: list, scan_dir, environ, now, drives
     ``not_checked`` notes for entries that were not read in full."""
     items, notes = [], []
     for number, entry in enumerate(entries, 1):
+        progress.step(f"cleanup entry {number} / {len(entries)} ...")
         item_id = f"c{number}"
         days = entry["min_age_days"]
         cutoff = (now - timedelta(days=days)).timestamp() if days > 0 else None
@@ -609,7 +618,8 @@ def measure_cleanup(entries: list, letters: list, scan_dir, environ, now, drives
                       else "the drive list could not be read")
         else:
             ignore = frozenset(name.casefold() for name in entry.get("ignore_names", []))
-            results = [measure_dir(path, scan_dir, cutoff, ignore) for path in expanded]
+            results = [measure_dir(path, scan_dir, cutoff, ignore, f"cleanup entry {number}:")
+                       for path in expanded]
         read = [r for r in results if r["state"] in ("read", "missing")]
         roots_unread = [(p, r) for p, r in zip(expanded, results) if r["state"] == "unreadable"]
         roots_skipped = [(p, r) for p, r in zip(expanded, results) if r["state"] == "skipped"]
@@ -668,6 +678,7 @@ def measure_cleanup(entries: list, letters: list, scan_dir, environ, now, drives
                      "_skipped": [{"path": p, "reason": r["reason"]}
                                   for p, r in roots_skipped]})
         items.append(item)
+        progress.step(f"cleanup entry {number} / {len(entries)} done")
         if status in ("unreadable", "partial", "not_measured"):
             note = {"what": f"cleanup entry {entry['id']}", "entry": entry["id"],
                     "item": item_id, "reason": reason}
@@ -731,6 +742,7 @@ def list_downloads(root: str, scan_dir):
         result.update({"state": state, "reason": reason})
         return result
     stack = [(root, "")]
+    listed = 0  # directories listed, for the progress counter
     while stack:
         path, relative = stack.pop()
         try:
@@ -743,6 +755,8 @@ def list_downloads(root: str, scan_dir):
             if not isinstance(exc, VANISHED):
                 result["unreadable"].append({"path": path, "reason": error_text(exc)})
             continue
+        listed += 1
+        progress.count("downloads:", listed)
         for entry in entries:
             name = str(entry["name"])
             inner = f"{relative}\\{name}" if relative else name
@@ -768,6 +782,7 @@ def measure_downloads(shell_folder, scan_dir, environ, now):
     the list file (ids ``w``, or None when nothing was listed), the ``not_checked``
     notes and the detail item. Ages are by last write time only: a file is older than
     ``n`` days when it was last written more than ``n`` days before the run."""
+    progress.step("downloads ...")
     root, state, reason = downloads_root(shell_folder, environ)
     listing = None
     if root is not None:
@@ -829,6 +844,7 @@ def measure_downloads(shell_folder, scan_dir, environ, now):
     detail["path"] = root
     detail["unreadable"] = listing["unreadable"] if listing else []
     files = [{k: v for k, v in f.items() if not k.startswith("_")} for f in records]
+    progress.step("downloads done")
     return item, (files if measured else None), notes, detail
 
 
@@ -1981,7 +1997,8 @@ def main(argv=None, list_drives=None, scan_dir=None, disk_usage=None, is_admin=N
 
     drives, all_folders, large = [], [], []
     statuses, current, watched = {}, {}, {}
-    for letter in letters:
+    for position, letter in enumerate(letters, 1):
+        progress.step(f"drive {position} / {len(letters)} ({letter}:) ...")
         watch = frozenset(reference_sources.get(source_name("large_files", letter)) or {})
         watched[letter] = {}
         drive_large = []
