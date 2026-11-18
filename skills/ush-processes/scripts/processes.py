@@ -1232,7 +1232,9 @@ def fit_budget(summary: dict, parts: dict) -> str:
 
 # --- machine functions ----------------------------------------------------------------
 def default_run_ps(job, script, out_path):
-    return psrun.default_run_ps(job, script, out_path)
+    # The window's end line follows run_job's rule: no port profile is an empty read.
+    markers = (NOT_FOUND,) if job in PORT_JOBS else ()
+    return psrun.default_run_ps(job, script, out_path, empty_markers=markers)
 
 
 def default_is_admin() -> bool:

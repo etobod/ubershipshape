@@ -527,7 +527,7 @@ class TestRunMeElevation(unittest.TestCase):
     # M2 K4
     def test_plugin_version_raised(self):
         plugin = json.loads(read(MANIFEST_DIR / "plugin.json"))
-        self.assertEqual(plugin["version"], "1.0.44")
+        self.assertEqual(plugin["version"], "1.0.45")
 
 
 # loc/inbox/055-plan-1-hard-report-summary.md, M2: the chat answer is the summary

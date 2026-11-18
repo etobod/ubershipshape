@@ -1420,7 +1420,9 @@ def fit_budget(summary: dict) -> str:
 
 # --- machine functions ----------------------------------------------------------
 def default_run_ps(job, script, out_path):
-    return psrun.default_run_ps(job, script, out_path)
+    # The window's end line follows run_job's rule: "no PnP device" is an empty read.
+    markers = (NO_PNP_DEVICE,) if job == "tpm_devices" else ()
+    return psrun.default_run_ps(job, script, out_path, empty_markers=markers)
 
 
 def default_is_admin() -> bool:
