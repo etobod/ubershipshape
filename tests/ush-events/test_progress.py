@@ -55,5 +55,43 @@ class TestEventsProgress(unittest.TestCase):
         self.assertEqual(self.end_line(OTHER_ERR), f"{JOB} failed")
 
 
+class TestLogsProgress(unittest.TestCase):
+    """logs.py runs the export and the clear (an argv, not PowerShell) in the run-me
+    window: each gets a start line and a done or failed end line (plan 071, final review)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.logs = load_script("ush-events", "logs")
+
+    def lines(self, fake_run):
+        err = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict(os.environ, {"USH_PROGRESS": "1"}), \
+                mock.patch("subprocess.run", fake_run), redirect_stderr(err):
+            self.logs.default_run("export", ["wevtutil.exe", "epl", "Invented"],
+                                  Path(tmp) / "x.json")
+        return lines_of(err.getvalue())
+
+    def test_argv_job_ends_as_done(self):
+        def run(*args, **kwargs):
+            return subprocess.CompletedProcess(args[0], 0, b"", b"")
+
+        lines = self.lines(run)
+        self.assertEqual(lines[0], "export ...", lines)
+        self.assertRegex(lines[-1], r"^export done \(\d+(?:\.\d+)? s\)$")
+        self.assertEqual(len(lines), 2, lines)
+
+    def test_argv_job_failure_and_timeout_end_as_failed(self):
+        def nonzero(*args, **kwargs):
+            return subprocess.CompletedProcess(args[0], 5, b"", b"invented access denied")
+
+        def timeout(*args, **kwargs):
+            raise subprocess.TimeoutExpired(args[0], 1)
+
+        for name, fake in (("non-zero exit", nonzero), ("timeout", timeout)):
+            with self.subTest(name):
+                self.assertEqual(self.lines(fake), ["export ...", "export failed"])
+
+
 if __name__ == "__main__":
     unittest.main()

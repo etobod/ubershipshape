@@ -161,6 +161,18 @@ class TestProgress(unittest.TestCase):
                 values.append(int(match.group(1)))
             self.assert_throttled(values, total)
 
+    def test_mark_only_when_runall_asks(self):
+        for mark, expected in (("1", "ush-progress: invented step"), (None, "invented step")):
+            with self.subTest(mark=mark):
+                err = io.StringIO()
+                with mock.patch.dict(os.environ, {"USH_PROGRESS": "1"}), redirect_stderr(err):
+                    if mark is None:
+                        os.environ.pop("USH_PROGRESS_MARK", None)
+                    else:
+                        os.environ["USH_PROGRESS_MARK"] = mark
+                    self.progress.step("invented step")
+                self.assertEqual(lines_of(err.getvalue()), [expected])
+
     def test_silent_when_not_a_console(self):
         err, out = io.StringIO(), io.StringIO()
         calls = []

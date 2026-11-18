@@ -74,6 +74,21 @@ CHILD_STALLS = (
     "time.sleep(120)"
 )
 
+PROGRESS_STEP = "invented step 3 / 7"
+ERROR_LINE = "invented error: the read failed"
+PROGRESS_MARK = "ush-progress: "
+
+# A failing child (plan 071, final review): a progress line marked as runall asked
+# (USH_PROGRESS_MARK=1), then an error line, then exit code 1.
+CHILD_PROGRESS_THEN_ERROR = (
+    "import os, sys; "
+    f"mark = '{PROGRESS_MARK}' if os.environ.get('USH_PROGRESS_MARK') == '1' else ''; "
+    f"sys.stderr.write(mark + '{PROGRESS_STEP}\\n'); sys.stderr.flush(); "
+    f"sys.stderr.write('{ERROR_LINE}\\n'); sys.stderr.flush(); "
+    f"sys.stderr.write(mark + '{PROGRESS_STEP}\\n'); sys.stderr.flush(); "
+    "sys.exit(1)"
+)
+
 END_RE = re.compile(r"^\[(\d+)/(\d+)\] (ush-[a-z]+) (\S+) \((\d+(?:\.\d+)?) s\)$")
 
 
@@ -210,6 +225,16 @@ class TestRunallProgress(RunallTestCase):
         alive = [thread for thread in threading.enumerate()
                  if thread not in threads_before and thread.is_alive()]
         self.assertEqual(alive, [], "the stderr relay thread is still running")
+
+    def test_progress_lines_not_kept_as_error_lines(self):
+        err = io.StringIO()
+        kind, result = self.run_child_real(CHILD_PROGRESS_THEN_ERROR, 60, err,
+                                           progress_env="1")
+        self.assertEqual(kind, "returned", result)
+        self.assertEqual(result["returncode"], 1, result)
+        self.assertEqual(lines_of(result["stderr_tail"]), [ERROR_LINE])
+        self.assertEqual(lines_of(err.getvalue()), [PROGRESS_STEP, ERROR_LINE, PROGRESS_STEP])
+        self.assertEqual(self.runall.last_line(result["stderr_tail"]), ERROR_LINE)
 
     def test_plugin_version_raised(self):
         plugin = json.loads(PLUGIN_JSON.read_text(encoding="utf-8"))

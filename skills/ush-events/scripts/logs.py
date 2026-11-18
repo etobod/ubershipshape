@@ -48,6 +48,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -59,6 +60,7 @@ sys.path.insert(0, str(Path(__file__).absolute().parents[2] / "ush-common" / "sc
 import datadir
 import dumps
 import events
+import progress
 from dumpfiles import describe, digest, iso
 
 LOGS = ("System", "Application")
@@ -123,6 +125,19 @@ def default_run(job: str, command, out_path) -> tuple[int, str]:
     """Run an argv list directly, a str as a PowerShell script (events.default_run_ps)."""
     if isinstance(command, str):
         return events.default_run_ps(job, command, out_path)
+    # The export and the clear are the long steps of the run-me window: each gets
+    # its start and end line like a PowerShell job.
+    progress.step(f"{job} ...")
+    started = time.monotonic()
+    code, text = _run_argv(job, command)
+    if code == 0:
+        progress.step(f"{job} done ({round(time.monotonic() - started, 1)} s)")
+    else:
+        progress.step(f"{job} failed")
+    return code, text
+
+
+def _run_argv(job: str, command) -> tuple[int, str]:
     try:
         result = subprocess.run(
             list(command),

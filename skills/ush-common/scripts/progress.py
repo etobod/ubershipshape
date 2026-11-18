@@ -13,6 +13,9 @@ import os
 import sys
 
 COUNT_EVERY = 1000  # a counter line at most once per this many items
+# ush-runall sets USH_PROGRESS_MARK=1 for its children: each progress line then starts
+# with MARK, so runall can pass it on without keeping it as an error line.
+MARK = "ush-progress: "
 
 
 def enabled() -> bool:
@@ -32,6 +35,8 @@ def step(text) -> None:
     if not enabled():
         return
     line = str(text).encode("ascii", "replace").decode("ascii")
+    if os.environ.get("USH_PROGRESS_MARK") == "1":
+        line = MARK + line
     try:
         sys.stderr.write(line + "\n")
         sys.stderr.flush()

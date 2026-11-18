@@ -232,10 +232,15 @@ def _read_stdout(stream, sink: list) -> None:
 
 
 def _read_stderr(stream, tail: deque, relay: bool) -> None:
-    """Reader thread: the child's stderr line by line, kept in ``tail`` and, when
-    ``relay``, written at once to runall's own stderr (the child's progress lines)."""
+    """Reader thread: the child's stderr line by line, written at once to runall's own
+    stderr when ``relay``. A progress line (it starts with ``progress.MARK``) is passed
+    on without its mark and not kept; every other line is kept in ``tail``, so the
+    last error line of a failed child is never a progress line."""
     for line in stream:
-        tail.append(line)
+        if line.startswith(progress.MARK):
+            line = line[len(progress.MARK):]
+        else:
+            tail.append(line)
         if relay:
             try:
                 sys.stderr.write(line)
@@ -262,13 +267,16 @@ def default_run_child(argv: list, timeout_s: int) -> dict:
 
     With progress on (``progress.enabled``) the child gets ``USH_PROGRESS=1`` and each
     line of its stderr is passed on to runall's stderr as it comes; stdout stays the
-    child's summary. The last ``STDERR_TAIL_CHARS`` characters of stderr are kept
-    either way."""
+    child's summary. The last ``STDERR_TAIL_CHARS`` characters of stderr other than
+    progress lines are kept either way."""
     relay = progress.enabled()
     env = dict(os.environ)
     env["PYTHONIOENCODING"] = "utf-8"
     if relay:
         env["USH_PROGRESS"] = "1"
+        env["USH_PROGRESS_MARK"] = "1"
+    else:
+        env.pop("USH_PROGRESS_MARK", None)
     started = time.monotonic()
     proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, encoding="utf-8", errors="replace",
