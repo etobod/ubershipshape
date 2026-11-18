@@ -24,9 +24,13 @@ absolute at once; see the shared contract):
 - `work/advice-<YYYYmmdd-HHMMSS>.detail.json` - the detail file:
   `schema_version`, `skill`, `generated_at`, `sources`, `searches`,
   `machine`, `comparison`, the full lists `updates`, `exploited`,
-  `firmware` and `issues` (never truncated), `kev_other`, `query_warnings`
-  and `findings` (every finding as written, with `domain` and `listed`).
+  `firmware` and `issues` (never truncated), `kev_other`, `query_warnings`,
+  `findings` (every finding as written, with `domain` and `listed`), and
+  `packages_input`, `packages`, `package_lookups` and `package_counts`
+  (never truncated; see "Packages" and "Package lookups").
 - `state/ush-advice.json` - the baseline (see "Baseline").
+- `state/ush-advice.ids.json` - the stable `p` ids of the packages (the
+  shared id map, keyed by the ush-packages item key).
 
 The PowerShell jobs write their results to `work/advice-<stamp>.<job>.json`
 (raw captures: never read them). The script changes nothing on the machine
@@ -43,7 +47,7 @@ file are checked before any PowerShell runs and before anything is written.
 <path>`, the summary's `detail_file`) and exits 0; an unknown id, or no
 detail file, exits 1. It does not start PowerShell. Ids: `u..` updates,
 `k..` exploited (`exploited` and then `kev_other`, one numbering), `f..`
-firmware, `i..` issues, `w..` findings.
+firmware, `i..` issues, `w..` findings, `p..` packages.
 
 ## Sources
 
@@ -69,6 +73,8 @@ Besides the shared fields (`schema_version`, `skill`, `generated_at`,
 |---|---|---|
 | `truncated` | int | `issues` items cut from the end of the summary |
 | `truncated_exploited` | int | `exploited` items cut from the end of the summary |
+| `truncated_packages` | int | `packages` items cut from the end of the summary |
+| `truncated_lookups` | int | `package_lookups` items cut from the end of the summary |
 | `baseline` | object | the shared baseline object, see "Baseline" |
 | `comparison` | object | `{updates, exploited, firmware, issues}`, each `compared`, `no_baseline` or `not_read` |
 | `searches` | list or `null` | the state of each search, see "Searches"; `null` without `--findings` |
@@ -79,11 +85,71 @@ Besides the shared fields (`schema_version`, `skill`, `generated_at`,
 | `exploited` | list or `null` | KEV findings inside the update months; `null` unless `kev`, `msrc` and `release-info` are all `read` |
 | `firmware` | list or `null` | firmware findings; `null` unless the search `firmware` is `read` |
 | `issues` | list or `null` | known issues; `null` unless the search `release-health` is `read` |
+| `packages_input` | object | what was read of the newest ush-packages run, see "Packages" |
+| `packages` | list or `null` | the packages of that run, see "Packages"; `null` unless `packages_input.status` is `read` |
+| `package_lookups` | list or `null` | `[{manager, name}]`, each manager and name (case ignored) once; `null` when `packages` is |
+| `package_counts` | object or `null` | per manager and `all`, see "Package lookups"; `null` without `--findings` or when `packages` is `null` |
 
 A list is `null` (never `[]`) when its search was not read; `[]` is a search
 that was read and found nothing. Without `--findings` all four lists,
 `searches`, `query_warnings` and `kev_other_count` are `null`, and
-`not_checked` has the item `web search`.
+`not_checked` has the item `web search` (which also says that no package
+was looked up). `packages_input`, `packages` and `package_lookups` do not
+depend on `--findings`.
+
+## Packages
+
+The script reads the newest `<data dir>/work/packages-*.detail.json`
+written by ush-packages (newest by file name: the UTC stamp in the name
+sorts the runs; a normal and an elevated run are both taken). The
+baseline of ush-packages is not read: it has no `from_baseline` mark.
+
+`packages_input` is `{status, reason, generated_at, elevated, listed,
+skipped, managers}`:
+
+| Field | Meaning |
+|---|---|
+| `status` | `read`; `none` (ush-packages has not run: no such file); `unreadable` (the file is not a JSON object) |
+| `reason` | why it is `none` or `unreadable` (with the exception type), else `null` |
+| `generated_at`, `elevated` | of that ush-packages run; `null` unless `read` |
+| `listed` | the number of `packages` items; `null` unless `read` |
+| `skipped` | `{from_baseline, unreadable, no_version}`: the items left out, per cause, each cause above 0 also a `not_checked` item `packages skipped` with its number; `null` unless `read` |
+| `managers` | `{manager: {status, reason}}` for `pip`, `npm`, `pipx`, `uv`, `conda`, `winget` and `vscode`; `null` unless `read` |
+
+`managers` copies the status of each source list from the file's
+`sources` (`pip_packages` is `pip`, `npm_packages` is `npm`,
+`pipx_packages` is `pipx`, `uv_tools` is `uv`, `conda_packages` is `conda`,
+`winget_packages` is `winget`, `vscode_extensions` is `vscode`): `read`,
+`empty` (read, nothing there; also a manager that is not present) or
+`unreadable`. A source missing from `sources` (an older file), with an
+unknown status or without its item list is `unreadable` with that
+reason. Each `unreadable` manager gives an item `packages <manager>` in
+`not_checked`, and its packages are never counted as 0. Not present is
+not told apart from empty: the report says "no packages read", never
+"not installed".
+
+An item is left out when it has `from_baseline` (`from_baseline`), the
+status `unreadable` or no name (`unreadable`), or no version
+(`no_version`). Every other item is one `packages` item, in the order of
+the managers above, then by the ush-packages key:
+
+| Field | Meaning |
+|---|---|
+| `id` | `p<n>`, stable between runs (keyed by the ush-packages item key) |
+| `manager` | one of the managers above |
+| `name` | the winget package identifier (`id` of the item), else the item's `name` (for vscode the extension id) |
+| `version` | the installed version, as read |
+
+No other field is copied: never a folder, a Python, an environment, a
+key or a path. The same name can be listed several times (one per
+Python, conda environment, pipx venv or folder), each with its own
+version; `package_lookups` names it once.
+
+No file gives `packages_input.status` `none`, an unreadable file
+`unreadable`; both give `packages` and `package_lookups` `null` (never
+`[]`) and an item `packages` in `not_checked`. A read file with no item
+gives `[]`. An id map that could not be read or saved, and items whose
+key came twice or was missing, give the shared `stable ids` items.
 
 ## Machine
 
@@ -111,7 +177,7 @@ these two keys, both lists. The model writes it to
 
 Each `searches` entry has exactly `id`, `status` and `reason`:
 
-- `id`: `release-info`, `msrc`, `kev`, `release-health` or `firmware`, each at most once;
+- `id`: `release-info`, `msrc`, `kev`, `release-health`, `firmware` or `packages`, each at most once;
 - `status`: `read`, `partial` (a cut or incomplete document) or
   `unreadable` (the fetch or search failed);
 - `reason`: text or `null`; required for `partial` and `unreadable`.
@@ -121,7 +187,7 @@ and no others:
 
 | Field | Shape |
 |---|---|
-| `kind` | `update`, `exploited`, `firmware`, `issue` or `fault` |
+| `kind` | `update`, `exploited`, `firmware`, `issue`, `fault` or `package` |
 | `url` | an `https://` address with a host name |
 | `title` | non-empty text |
 | `query` | the WebSearch query as text, or `null` for a WebFetch |
@@ -134,23 +200,28 @@ and no others:
 | `firmware` | `manufacturer`, `model`, `version` (texts), `release_date` (a date or `null`) |
 | `issue` | the common fields only |
 | `fault` | `fault` (the public fault text, e.g. `CM_PROB_FAILED_POST_START`), `source_item` (the skill and item id that found it, e.g. `ush-health h3`), `advice` (what the page says to do, in the user's language) (texts), `fix` (`available`: the page gives a fix that works today; `none_today`: the page says there is no fix yet; `unknown`: the page does not say) |
+| `package` | `manager` (`pip`, `npm`, `pipx`, `uv`, `conda`, `winget` or `vscode`), `package` (the name exactly as in `package_lookups`), `latest_version` (the version the registry page names as the latest release, as written there) (texts) |
 
-Any other shape, an unknown `kind`, a `fixed_build` of another form or a
-`fix` other than `available`, `none_today` or `unknown` exits 2 with the
-entry's number.
+Any other shape, an unknown `kind`, a `fixed_build` of another form, a
+`fix` other than `available`, `none_today` or `unknown`, or a `manager`
+outside the list exits 2 with the entry's number.
 
 `fault` findings belong to no search and fill no list of the summary: they
 are only in the detail file's `findings` (ids `w..`, fetched with
-`--detail`). A fault lookup that does none of the five searches leaves
-them out of `searches`, so each is `missing`.
+`--detail`). A fault lookup that does none of the six searches leaves
+them out of `searches`, so each is `missing`, with an item `search <id>` in
+`not_checked` for each, `search packages` included.
 
 ## Searches
 
-`searches` has five items `{name, status, reason}`, in the order
-`release-info`, `msrc`, `kev`, `release-health`, `firmware`. `status` is the one from the file, or
+`searches` has six items `{name, status, reason}`, in the order
+`release-info`, `msrc`, `kev`, `release-health`, `firmware`, `packages`. `status` is the one from the file, or
 `missing` when the file has no entry for it. A search that is not `read`
 gives a `null` list and an item `search <id>` in `not_checked`; its findings
-stay only in the detail file's `findings`.
+stay only in the detail file's `findings`. `packages` fills no list: a
+`packages` search that is not `read` (often `partial`, when only some
+packages were looked up) gives the item `search packages` too, but its
+`package` findings are still matched (see "Package lookups").
 
 | Search | List |
 |---|---|
@@ -159,6 +230,7 @@ stay only in the detail file's `findings`.
 | `kev` | `exploited` (also needs `msrc` and `release-info`) |
 | `release-health` | `issues` |
 | `firmware` | `firmware` |
+| `packages` | no list of its own: `checked`, `finding_id`, `latest_version` and `newer_available` on the `packages` items, and `package_counts` |
 
 `kev` `read` with `msrc` or `release-info` not `read` gives `exploited`
 `null` and an item `exploited`: there is no CVE list of the months (`msrc`
@@ -172,7 +244,40 @@ Every finding of the file, in its order, with the id `w<n>`, its fields
 and `listed`: `true` when `domain` equals a domain of `data/sources.json`
 or is a subdomain of one. For a `firmware` finding the domains of the
 `firmware_domains` entries whose `manufacturer_prefix` starts the
-manufacturer of this machine count too.
+manufacturer of this machine count too. For a `package` finding only the
+`package_domains` entry of its `manager` counts (`pypi.org` for `pip`,
+`pipx` and `uv`, the npm registry for `npm`, `anaconda.org` for `conda`,
+`github.com` for `winget`, the Visual Studio Marketplace for `vscode`);
+the general domains do not.
+
+## Package lookups
+
+With `--findings` and a package list, each `packages` item gets
+`checked`: `true` when a `package` finding has its `manager` and its
+`name` (case ignored), else `false`. A checked item also gets:
+
+| Field | Meaning |
+|---|---|
+| `finding_id` | the `w..` id of that finding |
+| `latest_version` | the finding's `latest_version` |
+| `newer_available` | `true` when `latest_version` is greater than `version`, `false` when it is not, `null` when either is not digits separated by dots (a pre-release tag, an epoch, a local version, a `v` prefix or letters): never guessed |
+
+The versions are compared part by part as numbers, the shorter padded
+with `0` parts (`1.2` equals `1.2.0`). The same name listed several times
+(one per Python or folder) is matched by each item, each compared with
+its own `version`. A second finding for the same manager and name is not
+used (an item `package finding <id>` in `not_checked`, naming the first);
+a finding that matches no listed package gives an item `package finding
+<id>` too. Neither leaves `findings`.
+
+`package_counts` is `{manager: {listed, checked, not_checked, newer,
+not_comparable}}` for the seven managers, and `all`: `listed` the items of
+that manager, `checked` and `not_checked` those with `checked` `true` and
+`false`, `newer` those with `newer_available` `true`, `not_comparable`
+those with `null`. A manager whose source is `unreadable` has all five
+`null` (never 0); `all` sums the other managers, and an item `package_counts
+all` in `not_checked` names the ones it leaves out. Without `--findings`
+the items have none of these fields and `package_counts` is `null`.
 
 ## Updates items
 
@@ -280,21 +385,32 @@ reason, never with the query itself. A fact is also found after one `v`
   instance part holding `&` (`BTHENUM\{<guid>}_LOCALMFG&<n>\<instance>`).
   A hardware id without the instance part (`USB\VID_<vid>&PID_<pid>`), a
   bare GUID in a page path or a class key (`{<guid>}\0001`) gives no
-  warning. The warning never carries the id.
+  warning. The warning never carries the id;
+- `path`: the `query`, or the `url` with its scheme cut off, holds a local
+  path: a drive letter with `:` and `\` or `/` (`%3A` and `%5C` read as
+  the characters they encode) with no letter or digit before it, a
+  `Users` folder between two separators, or `%USERPROFILE%`;
+- `account`: the `query` or `url` holds the value of `USERNAME`,
+  `COMPUTERNAME` or `USERDOMAIN` of the environment as a whole token,
+  ignoring case; a value counts only with at least three characters. The
+  warning never carries the value.
 
-The `build`, `bios_version` and `kb` warnings apply to `fault` findings as
-to any other.
+The `build`, `bios_version`, `kb`, `path` and `account` warnings apply to
+`fault` and `package` findings as to any other.
 
 Each item also gives an item `query warning <finding_id>` in
 `not_checked`. `[]` means no warning.
 
 ## Budget
 
-The summary stays within 35 000 characters. `issues` is cut from its end
-first; only when the summary without any issue is still too long is
-`exploited` cut from its end. `truncated` and `truncated_exploited` count
-the items cut, and `not_checked` gets an item `issues cut from the summary`
-or `exploited cut from the summary`. The detail file has every item.
+The summary stays within 35 000 characters. `packages` is cut from its
+end first, together with `package_lookups` (the same number of items is
+kept of each); only when the summary without any package is still too
+long is `issues` cut from its end, and only when it is still too long
+without any issue is `exploited` cut from its end. `truncated_packages`,
+`truncated_lookups`, `truncated` and `truncated_exploited` count the items
+cut, and `not_checked` gets an item `<list> cut from the summary` for each
+cut list. The detail file has every item.
 
 ## Baseline
 

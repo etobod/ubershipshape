@@ -46,7 +46,8 @@ are ``c`` items. The summary lists every manager of ``data/managers.json`` under
 when none of their locations exists), every other one ``not_read`` and named in
 not_checked as "not read yet" (never "not present").
 Every package of a read manager is a ``k`` item of the flat ``packages`` list.
-No package is checked for a newer version: that needs an ush-advice lookup.
+No package is checked for a newer version here: packages are checked for updates
+only in an ush-advice run with findings.
 
 The summary keeps within ``SUMMARY_MAX_CHARS``: over it, ``packages`` items are
 cut first, then ``c`` items; the detail file keeps them all (``--detail <id>``).

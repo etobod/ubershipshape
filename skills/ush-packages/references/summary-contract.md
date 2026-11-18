@@ -13,8 +13,8 @@ disk: through read-only PowerShell jobs, and for winget and VS Code directly
 in Python (winget's tracking catalogs opened read-only and immutable, VS
 Code's `extensions.json` read as text). No package manager runs (no pip, npm,
 winget or VS Code command), nothing goes
-online, and no package is checked for a newer version: that needs an
-ush-advice lookup, which does not exist yet.
+online, and no package is checked for a newer version here: packages are
+checked for updates only in an ush-advice run with findings.
 
 ## Files and output
 

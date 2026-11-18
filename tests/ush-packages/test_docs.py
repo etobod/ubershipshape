@@ -135,5 +135,28 @@ EMPTY_AS_NOT_PRESENT = re.compile(
 )
 
 
+UPDATE_DOCS = (
+    SKILLS / "ush-packages" / "SKILL.md",
+    SKILLS / "ush-packages" / "references" / "summary-contract.md",
+    SKILLS / "ush-packages" / "references" / "report-format.md",
+    SKILLS / "ush-packages" / "scripts" / "packages.py",
+)
+STALE = re.compile(r"(does not exist yet|exists yet|lookup yet|needs an ush-advice lookup)",
+                   re.IGNORECASE)
+POINTER = re.compile(r"checked for updates only in an ush-advice run with findings",
+                     re.IGNORECASE)
+
+
+class TestUpdateCheckDocs(unittest.TestCase):
+    """Plan 075 M2 K10: the ush-packages docs point to the ush-advice lookup."""
+
+    def test_points_to_advice_findings(self):
+        for path in UPDATE_DOCS:
+            with self.subTest(path=path.name):
+                text = " ".join(path.read_text(encoding="utf-8").split())
+                self.assertIsNone(STALE.search(text), f"{path}: stale 'no lookup yet' text")
+                self.assertRegex(text, POINTER)
+
+
 if __name__ == "__main__":
     unittest.main()

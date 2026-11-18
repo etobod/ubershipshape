@@ -217,6 +217,30 @@ class TestReportProfile(unittest.TestCase):
                              f"no OK line expected; output:\n{output}")
             self.assertIn(TITLE_NUMBER, output)
 
+    def test_package_ids(self):
+        """Plan 075 M1 K9: a package id ``p<n>`` of the summary is an item id."""
+        package_number = "4473"
+        summary_file = self.work / "advice-packages-summary.json"
+        detail_file = self.work / "advice-packages-detail.json"
+        summary = _clean_summary(summary_file, detail_file)
+        summary["packages"] = [{"id": f"p{package_number}", "manager": "pip",
+                                "name": "contoso-lib", "version": "1.2.0"}]
+        summary["truncated_packages"] = 0
+        text = json.dumps(summary)
+        self.assertEqual(text.count(package_number), 1, "the number must be only in the id")
+        self.assertNotIn(package_number, str(self.root), "temp path holds the number")
+        detail_file.write_text(json.dumps(_detail_data(summary)), encoding="utf-8")
+        summary_file.write_text(text, encoding="utf-8")
+        body = _clean_body()
+        body[body.index("## Zalecenia"):body.index("## Zalecenia")] = [
+            "## Pakiety", f"- p{package_number} contoso-lib (pip), wersja 1.2.0.", ""]
+        report = self._write_report(summary_file, body, "advice-2026-09-20-1402.md")
+        code, output = self._run([str(report)])
+        self.assertEqual(code, 0, f"output:\n{output}")
+        self.assertTrue(any(line.startswith("OK") for line in output.splitlines()),
+                        f"expected an OK line; output:\n{output}")
+
+    def test_registered(self):
         with self.subTest("ush-advice is in SKILLS"):
             words = importlib.import_module("tests.ush-common.test_check_report_words")
             self.assertIn(SKILL, words.SKILLS)

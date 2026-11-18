@@ -181,13 +181,13 @@ class TestDocs(unittest.TestCase):
         with self.subTest("machine.product null: no finding from the MSRC document"):
             self.assertTrue(_item_with(rules, "machine.product", "from the MSRC document"),
                             rules)
-        with self.subTest("five searches in step 3"):
-            self.assertTrue(_item_with(steps, "five searches", "`release-info`"), steps)
+        with self.subTest("six searches in step 3"):
+            self.assertTrue(_item_with(steps, "six searches", "`release-info`"), steps)
 
         contract = _read(CONTRACT)
         searches = _section(contract, "Searches")
-        with self.subTest("five searches in the contract"):
-            self.assertIn("five items", searches)
+        with self.subTest("six searches in the contract"):
+            self.assertIn("six items", searches)
             self.assertIn("| `release-info` | `updates`", searches)
         with self.subTest("cves null in the contract"):
             rows = [line for line in contract.splitlines() if line.startswith("| `update` |")]
@@ -280,6 +280,30 @@ class TestDocs(unittest.TestCase):
         self.assertTrue(block, "no '### Faults' section in report-format.md")
         rule = _item_with(_items("\n".join(block)), "digits", "fenced", "w<n> <url>")
         self.assertTrue(rule, "\n".join(block))
+
+
+class TestPackageDocs(unittest.TestCase):
+    """Plan 075 M2 K9: the package lookup in SKILL.md and the Pakiety wordings."""
+
+    def test_package_lookup_documented(self):
+        skill_items = _items(_read(SKILL_MD))
+        self.assertTrue(_item_with(skill_items, "exact", "registry"),
+                        "SKILL.md: no item names the exact-name registry lookup")
+        self.assertTrue(_item_with(skill_items, "installed version", "never", "query"),
+                        "SKILL.md: no item says the installed version is never in a query")
+        self.assertTrue(_item_with(skill_items, "private"),
+                        "SKILL.md: no item names the private-name case")
+        report = _read(REPORT_FORMAT)
+        section = _section(report, "Pakiety")
+        lowered = section.lower()
+        self.assertIn("nie sprawdzono pod kątem aktualizacji", lowered)
+        self.assertIn("newer_available", section)
+        for value in ("true", "false", "null"):
+            self.assertTrue(_item_with(_items(section), "newer_available", value),
+                            f"report-format.md Pakiety: no wording for newer_available {value}")
+        self.assertTrue(_item_with(_items(report), "up to date", "never")
+                        or _item_with(_items(report), "aktualny", "never"),
+                        "report-format.md: no ban on 'up to date' / 'aktualny'")
 
 
 if __name__ == "__main__":

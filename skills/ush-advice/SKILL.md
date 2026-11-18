@@ -1,6 +1,6 @@
 ---
 name: ush-advice
-description: Check this Windows machine against what Microsoft, CISA and the hardware manufacturer publish - whether the latest monthly security update is installed (by build and UBR), whether known exploited vulnerabilities fixed in those updates are patched here, whether the manufacturer offers a newer BIOS, and which known issues Windows release health lists - and what is new since the last check. Use when the user asks whether Windows is up to date, whether the machine is patched against exploited vulnerabilities, whether there is a newer BIOS, or what known problems the current Windows version has. The only ush skill that goes online, and only the model does; a script reads the machine facts and compares the model's findings with them; read-only, it installs nothing.
+description: Check this Windows machine against what Microsoft, CISA and the hardware manufacturer publish - whether the latest monthly security update is installed (by build and UBR), whether known exploited vulnerabilities fixed in those updates are patched here, whether the manufacturer offers a newer BIOS, which known issues Windows release health lists, and whether the public registry of a package manager offers a newer version of a package ush-packages listed - and what is new since the last check. Use when the user asks whether Windows is up to date, whether the machine is patched against exploited vulnerabilities, whether there is a newer BIOS, what known problems the current Windows version has, or whether installed pip, npm, pipx, uv, conda or winget packages or VS Code extensions have newer versions. The only ush skill that goes online, and only the model does; a script reads the machine facts and compares the model's findings with them; read-only, it installs nothing.
 ---
 
 # ush-advice
@@ -48,6 +48,9 @@ another way (a shell command, another folder).
 - The user asks whether the manufacturer has a newer BIOS for this machine.
 - The user asks what known issues the installed Windows version has, or
   what is new in advice since the last check.
+- The user asks whether the packages ush-packages listed (pip, npm, pipx,
+  uv, conda, winget, VS Code extensions) have newer versions in their
+  public registries.
 - Another ush skill found a fault the machine cannot explain offline (a
   device problem code, a crash code of a process) and the user asks to look
   it up online ("sprawdz w sieci"): see "Fault lookup" under Steps.
@@ -68,12 +71,35 @@ Not for: installing updates or a BIOS, running Windows Update, Office, Edge,
   the version (`25H2`), the architecture (`x64`), the month (`2026-09`);
   for firmware also the manufacturer and the model from
   `machine.firmware`; for a fault lookup also the public fault text (the
-  problem code or status, the process or component name).
+  problem code or status, the process or component name); for a package
+  lookup also the package name exactly as in `package_lookups` (never its
+  version).
 - **A query or a fetched address never holds** the build with its UBR
   (`26200.6899`, also written `26200-6899`) that you put there yourself, a KB number read from this machine, the BIOS version, the
   serial number, a device instance id (`USB\VID_...&PID_...\<instance>`),
-  the computer name or the account name. The script reads no
-  serial number and no computer name, so this rule is yours to keep.
+  the computer name, the account name or a local path. The script reads no
+  serial number, so this rule is yours to keep; it warns about a local
+  path (`path`) and the account, computer or domain name (`account`), but
+  that warning is a backstop, not permission.
+- **A package lookup is one exact-name lookup in its manager's registry.**
+  For each `package_lookups` item, look its `name` up exactly as listed in
+  the public registry of its `manager` (`package_domains` in
+  `data/sources.json`: PyPI for pip, pipx and uv, the npm registry for npm,
+  anaconda.org for conda, the `microsoft/winget-pkgs` manifests on
+  github.com for winget, the Visual Studio Marketplace for vscode), never
+  with a general web search. The installed version never goes into a query
+  or a fetched address: it never leaves the machine, and the script
+  compares it.
+- **The `packages` search may be `partial`.** Every package is listed and
+  none has to be looked up; when only some were, `packages` is `partial`
+  with the reason (which managers or how many were looked up). The
+  findings of a `partial` search are still used, and the packages without
+  a finding are counted as not checked in `package_counts`.
+- **Not defended against: a private package name.** A package built or
+  installed from a local folder (a private pip project, a private npm
+  package) has a name its owner chose, and its exact name is still sent to
+  the public registry in a lookup; its version never is. When the user names
+  a package as private, do not look it up; `packages` is then `partial`.
 - **Public ids taken from a fetched source may be used.** A KB or CVE you
   read in an MSRC document, the `release-info` table or a KB page may go
   into a query or an address; a KB that you know only from
@@ -209,12 +235,24 @@ Not for: installing updates or a BIOS, running Windows Update, Office, Edge,
      into `title`; `version` is the version alone as the page writes it
      (`312`, `F.21`), without words such as "BIOS" or "Version" and
      without a date.
+   - `packages`: when `packages` is not `null`, look up the items of
+     `package_lookups` (see the rules): one exact-name lookup per package
+     in its manager's registry, the installed version never in the query
+     or the address. Write one `package` finding per package you looked up:
+     `manager` and `package` copied word for word from the
+     `package_lookups` item (never the name the registry page shows: PyPI
+     shows `typing-extensions` for an installed `typing_extensions`),
+     `latest_version` the version the registry page names as the latest
+     release, as written there, and the page as `url`. When `packages` is
+     `null`, give `packages` the status `unreadable` with
+     `packages_input.reason`.
 
 3. Write what you found to
    `<data dir>\work\advice-findings-<YYYYmmdd-HHMMSS>.json` (UTC time), in
    the shape of "The findings file" in `references/summary-contract.md`:
-   one entry in `searches` for each of the five searches `release-info`,
-   `msrc`, `kev`, `release-health` and `firmware`, with the status `read`, `partial` (a cut document, with what
+   one entry in `searches` for each of the six searches `release-info`,
+   `msrc`, `kev`, `release-health`, `firmware` and `packages`,
+   with the status `read`, `partial` (a cut document, with what
    was cut as the reason) or `unreadable` (with the error as the reason),
    and every finding in `findings`.
 
@@ -229,8 +267,9 @@ Not for: installing updates or a BIOS, running Windows Update, Office, Edge,
 
    Exit 2 names the entry of the file that has the wrong shape: correct the
    file and run again. Check `query_warnings`: an item means a query or an
-   address held a fact of this machine; tell the user which finding and
-   why, and keep that fact out of every later query.
+   address held a fact of this machine (`path` a local path, `account` the
+   account, computer or domain name); tell the user which finding and why,
+   and keep that fact out of every later query.
 
    For an item you need in full (a finding's query, a KEV entry outside the
    update months, an item cut from the summary), fetch it:
@@ -241,7 +280,7 @@ Not for: installing updates or a BIOS, running Windows Update, Office, Edge,
 
    Ids: `u..` months, `k..` exploited vulnerabilities (also those outside
    the update months, in `kev_other`), `f..` firmware, `i..` known issues,
-   `w..` the findings as written. Remember every id you fetched and used.
+   `w..` the findings as written, `p..` packages. Remember every id you fetched and used.
 
 5. Before writing, list `<data dir>/plans/` (not `done/`): its open repair plans,
    by file name, are part 3 of the report's summary section (rule 15 "Summary

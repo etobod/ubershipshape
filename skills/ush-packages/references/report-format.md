@@ -173,7 +173,8 @@ gives the count of low recommendations whose main source no line names.
    „recorded by winget” and the catalog label (`source`), for vscode
    „VS Code extension”. Every package carries the words „not
    checked for updates” (in a Polish report „nie sprawdzono pod kątem
-   aktualizacji”): no ush-advice lookup exists yet. Rule 7 (long lists) of
+   aktualizacji”): packages are checked for updates only in an
+   ush-advice run with findings. Rule 7 (long lists) of
    `<plugin root>/skills/ush-common/references/report-style.md` applies: with
    many packages, the ones you say something about come in full and the
    rest of a manager in one compact line of ids and names, still marked
@@ -220,8 +221,8 @@ gives the count of low recommendations whose main source no line names.
 
    It lists every `not_checked` item with its `what` and `reason` (every
    manager not read yet among them), names every `unreadable` source, and
-   says that no package was checked for a newer version (no ush-advice
-   lookup yet).
+   says that no package was checked for a newer version (packages are
+   checked for updates only in an ush-advice run with findings).
 
 ## Account names
 

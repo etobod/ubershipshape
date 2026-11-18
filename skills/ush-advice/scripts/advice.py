@@ -73,15 +73,24 @@ issue with the title in lower case) as the union of
 every run, so a key seen once is never ``new`` again; a search not read keeps the
 saved keys and a run with no search read does not write the baseline at all.
 
+The packages of the newest ``ush-packages`` run (``work/packages-*.detail.json``,
+newest by file name) are listed in ``packages`` as ``{id: p<n>, manager, name,
+version}`` and nothing else (never a folder, key or path); ``package_lookups`` is the
+de-duplicated ``[{manager, name}]`` and ``packages_input`` says what was read and what
+was left out. No such file, or an unreadable one, gives null lists and a
+``not_checked`` item. The ``p`` ids stay stable in ``state/ush-advice.ids.json``.
+
 Nothing is judged and nothing on the machine is changed. The summary goes to stdout
-and to ``work/advice-<UTC stamp>.summary.json`` (at most 35 000 characters: ``issues``
-and then ``exploited`` are cut from their end); the detail file
+and to ``work/advice-<UTC stamp>.summary.json`` (at most 35 000 characters:
+``packages`` with ``package_lookups``, then ``issues`` and then ``exploited`` are cut
+from their end); the detail file
 ``work/advice-<UTC stamp>.detail.json`` has everything. ``--detail <id>`` prints one
 item of the newest detail file.
 """
 
 import argparse
 import json
+import os
 import re
 import sys
 from datetime import date, datetime, timezone
@@ -91,6 +100,7 @@ sys.path.insert(0, str(Path(__file__).absolute().parents[2] / "ush-common" / "sc
 
 import baseline  # called as baseline.save(...), so tests can patch it
 import datadir
+import ids
 import psrun
 from psrun import dump, ps_script, run_job
 
@@ -102,21 +112,34 @@ PRODUCTS_FILE = DATA_DIR / "products.json"
 SOURCES_FILE = DATA_DIR / "sources.json"
 JOBS = ("os_version", "hotfixes", "firmware")
 FINDINGS_FIELDS = ("updates", "exploited", "firmware", "issues")
-DETAIL_SECTIONS = ("updates", "exploited", "kev_other", "firmware", "issues", "findings")
+DETAIL_SECTIONS = ("updates", "exploited", "kev_other", "firmware", "issues", "findings",
+                   "packages")
 SOURCE_FIELDS = {"id", "url", "kind", "domains"}
 FIRMWARE_DOMAIN_FIELDS = {"manufacturer_prefix", "domains"}
 DOMAIN = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$")
 
+# The packages of the newest ush-packages run: its detail file, the manager of each of
+# its source lists (the inverse of packages.READ_MANAGERS) and why an item is left out.
+PACKAGES_GLOB = "packages-*.detail.json"
+PACKAGE_SOURCES = {"pip_packages": "pip", "npm_packages": "npm", "pipx_packages": "pipx",
+                   "uv_tools": "uv", "conda_packages": "conda",
+                   "winget_packages": "winget", "vscode_extensions": "vscode"}
+PACKAGE_SOURCE_STATUSES = ("read", "empty", "unreadable")
+SKIP_CAUSES = ("from_baseline", "unreadable", "no_version")
+
 # --findings: the searches, the list each one fills and the fields of each kind.
-SEARCH_IDS = ("release-info", "msrc", "kev", "release-health", "firmware")
+SEARCH_IDS = ("release-info", "msrc", "kev", "release-health", "firmware", "packages")
 SEARCH_STATUSES = ("read", "partial", "unreadable")
 LIST_OF_SEARCH = {"release-info": "updates", "kev": "exploited",
                   "release-health": "issues", "firmware": "firmware"}
 SEARCH_OF_LIST = {name: search_id for search_id, name in LIST_OF_SEARCH.items()}
 # What a search that was not read leaves null: msrc fills no list of its own, only the
-# CVE counts of the months (and, with kev, exploited).
+# CVE counts of the months (and, with kev, exploited). The packages search fills no list
+# either: its findings are used even when it is partial, and the packages without a
+# finding stay unchecked.
 NULL_WITHOUT = {**{search_id: f"{name} is null" for search_id, name in LIST_OF_SEARCH.items()},
-                "msrc": "cve_count, critical_count and exploited are null"}
+                "msrc": "cve_count, critical_count and exploited are null",
+                "packages": "packages without a finding are not checked for updates"}
 COMMON_FIELDS = ("kind", "url", "title", "query", "published")
 KIND_FIELDS = {
     "update": ("month", "kb", "fixed_build", "release_type", "cves"),
@@ -124,7 +147,21 @@ KIND_FIELDS = {
     "firmware": ("manufacturer", "model", "version", "release_date"),
     "issue": (),
     "fault": ("fault", "source_item", "advice", "fix"),
+    "package": ("manager", "package", "latest_version"),
 }
+MANAGERS = tuple(PACKAGE_SOURCES.values())
+# A version the generic comparator takes: dot-separated runs of digits, nothing else.
+NUMERIC_VERSION = re.compile(r"[0-9]+(?:\.[0-9]+)*")
+# A local path in a query or url (the url without its scheme): a drive path, plain or
+# percent-encoded, or a user profile folder.
+DRIVE_PATH = re.compile(r"(?<![A-Za-z0-9])[A-Za-z](?::|%3A)(?:\\|/|%5C)", re.IGNORECASE)
+PROFILE_PATH = re.compile(r"(?:\\|/|%5[Cc])Users(?:\\|/|%5[Cc])|%(?i:USERPROFILE)%")
+URL_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
+# The account and computer names come from the environment at run time; tests replace
+# ENVIRON. A value shorter than this is too common to warn about.
+ENVIRON = os.environ
+ACCOUNT_VARIABLES = ("USERNAME", "COMPUTERNAME", "USERDOMAIN")
+ACCOUNT_MIN_CHARS = 3
 RELEASE_TYPES = ("security", "preview")
 # Whether the page gives a fix for a fault today.
 FIX_VALUES = ("available", "none_today", "unknown")
@@ -290,6 +327,14 @@ def load_sources(path: Path) -> dict:
         if not text(entry["manufacturer_prefix"]):
             raise DataFileError(f"{path}: {where} has an empty 'manufacturer_prefix'")
         check_domains(path, where, entry["domains"])
+    packages = data.get("package_domains")
+    if not isinstance(packages, dict) or not packages:
+        raise DataFileError(f"{path} does not hold a non-empty 'package_domains' object")
+    for manager, domains in packages.items():
+        if manager not in MANAGERS:
+            raise DataFileError(f"{path}: package_domains has the unknown manager "
+                                f"{manager!r} (known: {', '.join(MANAGERS)})")
+        check_domains(path, f"package_domains {manager}", domains)
     return data
 
 
@@ -520,6 +565,11 @@ def check_finding(entry) -> dict:
             raise ShapeError(f"(fault) 'fix' is not one of {', '.join(FIX_VALUES)}")
         out.update(fault=required("fault"), source_item=required("source_item"),
                    advice=required("advice"), fix=entry["fix"])
+    elif kind == "package":
+        if entry["manager"] not in MANAGERS:
+            raise ShapeError(f"(package) 'manager' is not one of {', '.join(MANAGERS)}")
+        out.update(manager=entry["manager"], package=required("package"),
+                   latest_version=required("latest_version"))
     return out
 
 
@@ -567,7 +617,10 @@ def load_findings(path: Path) -> dict:
 
 # --- findings compared with the machine ---------------------------------------------
 def domains_for(finding: dict, sources: dict, manufacturer) -> list:
-    domains = [d for source in sources["sources"] for d in source["domains"]]
+    if finding["kind"] == "package":
+        # Only the registry of the package's own manager, never a Windows source.
+        return list(sources["package_domains"].get(finding["manager"], []))
+    domains =[d for source in sources["sources"] for d in source["domains"]]
     if finding["kind"] == "firmware" and manufacturer:
         for entry in sources["firmware_domains"]:
             if manufacturer.casefold().startswith(entry["manufacturer_prefix"].casefold()):
@@ -595,10 +648,12 @@ def search_states(searches: dict, not_checked: list) -> list:
             continue
         states.append({"name": search_id, **entry})
         if entry["status"] != "read":
+            # The findings of the packages search are used even when it is not read.
+            where = ("" if search_id == "packages"
+                     else "; its findings are only in the detail file")
             not_checked.append({"what": f"search {search_id}",
                                 "reason": f"the search {search_id} is {entry['status']} "
-                                          f"({entry['reason']}), so {effect}; its "
-                                          f"findings are only in the detail file"})
+                                          f"({entry['reason']}), so {effect}{where}"})
     return states
 
 
@@ -870,7 +925,10 @@ def has_device_id(value: str) -> bool:
 def query_warnings(findings: list, machine: dict, not_checked: list) -> list:
     """``[{finding_id, reason}]``: a query or url holding a fact of this machine.
 
-    The warning never carries the query.
+    Beyond the build, BIOS version, KB and device id: ``path`` for a local path (a
+    drive path, plain or percent-encoded, or a ``Users`` / ``%USERPROFILE%`` folder) and
+    ``account`` for the account, computer or domain name of ``ENVIRON`` (whole, at least
+    three characters). The warning never carries the query or the name.
     """
     pair = machine_pair(machine)
     build_pattern = None if pair is None else fact_pattern(f"{pair[0]}.{pair[1]}",
@@ -915,9 +973,18 @@ def query_warnings(findings: list, machine: dict, not_checked: list) -> list:
     for kb in machine.get("hotfixes") or []:
         if kb not in found_kbs and KB.fullmatch(kb):
             own_kbs.update({kb.upper(), kb[2:]})
+    # The account and computer names, each matched whole and never written out.
+    account_patterns = []
+    for variable in ACCOUNT_VARIABLES:
+        value = text(ENVIRON.get(variable))
+        if value is not None and len(value) >= ACCOUNT_MIN_CHARS:
+            account_patterns.append(re.compile(rf"(?<![0-9A-Za-z]){re.escape(value)}"
+                                               rf"(?![0-9A-Za-z])", re.IGNORECASE))
     warnings = []
     for finding in findings:
         texts = [t for t in (finding["query"], finding["url"]) if t]
+        # A url's scheme (``https://``) is no path, so it is cut before the path check.
+        path_texts = [finding["query"] or "", URL_SCHEME.sub("", finding["url"] or "")]
         reasons = []
         query, url = finding["query"] or "", finding["url"] or ""
         if build_pattern is not None and (any(build_pattern.search(t) for t in texts)
@@ -931,12 +998,18 @@ def query_warnings(findings: list, machine: dict, not_checked: list) -> list:
             reasons.append("kb")
         if any(has_device_id(t) for t in texts):
             reasons.append("device_id")
+        if any(DRIVE_PATH.search(t) or PROFILE_PATH.search(t) for t in path_texts):
+            reasons.append("path")
+        if any(pattern.search(t) for pattern in account_patterns for t in texts):
+            reasons.append("account")
         for reason in reasons:
             warnings.append({"finding_id": finding["id"], "reason": reason})
+            held = {"path": "a local path",
+                    "account": "the account or computer name"}.get(reason, f"the {reason}")
             not_checked.append({
                 "what": f"query warning {finding['id']}",
-                "reason": f"the query or url of finding {finding['id']} holds the "
-                          f"{reason} of this machine; check what was sent before the "
+                "reason": f"the query or url of finding {finding['id']} holds "
+                          f"{held} of this machine; check what was sent before the "
                           f"next search",
             })
     return warnings
@@ -1092,6 +1165,209 @@ def apply_baseline(state: Path, lists: dict, kev_other, now: datetime,
     return comparison, info
 
 
+# --- packages of the newest ush-packages run ----------------------------------------------
+def package_managers(data: dict, not_checked: list) -> dict:
+    """``{manager: {status, reason}}`` from the detail file's ``sources`` list. A source
+    missing from it, or of an unknown status, is ``unreadable``; every ``unreadable``
+    one is an item of ``not_checked`` (its packages are not counted as 0)."""
+    states = {}
+    for entry in data.get("sources") or []:
+        if isinstance(entry, dict) and entry.get("name") in PACKAGE_SOURCES:
+            states.setdefault(entry["name"], entry)
+    managers = {}
+    for source, manager in PACKAGE_SOURCES.items():
+        entry = states.get(source)
+        if entry is None:
+            status, reason = "unreadable", "not in the detail file"
+        elif entry.get("status") not in PACKAGE_SOURCE_STATUSES:
+            status, reason = "unreadable", f"unknown status {entry.get('status')!r}"
+        elif not isinstance(data.get(source), list):
+            status, reason = "unreadable", "its item list is not in the detail file"
+        else:
+            status = entry["status"]
+            reason = entry.get("reason") if isinstance(entry.get("reason"), str) else None
+        managers[manager] = {"status": status, "reason": reason}
+        if status == "unreadable":
+            not_checked.append({"what": f"packages {manager}",
+                                "reason": f"the ush-packages source {source} is unreadable "
+                                          f"({reason}), so no {manager} package is listed "
+                                          f"and none is counted"})
+    return managers
+
+
+def package_of(manager: str, item):
+    """``(cause, None)`` for an item left out, else ``(None, {manager, name, version})``.
+    The winget name is the package identifier (``id``), every other one the ``name``."""
+    if not isinstance(item, dict):
+        return "unreadable", None
+    if item.get("from_baseline"):
+        return "from_baseline", None
+    if item.get("status") == "unreadable":
+        return "unreadable", None
+    name = item.get("id") if manager == "winget" else item.get("name")
+    if not text(name):
+        return "unreadable", None
+    if not text(item.get("version")):
+        return "no_version", None
+    return None, {"manager": manager, "name": name, "version": item["version"]}
+
+
+def read_packages(work: Path, state: Path, today: str, not_checked: list):
+    """``(packages_input, packages, package_lookups)`` from the newest
+    ``packages-*.detail.json`` (by file name: the UTC stamp sorts it). ``packages`` and
+    ``package_lookups`` are null when that file is missing or unreadable. No folder,
+    key or path of an item is copied; ids ``p<n>`` stay stable through the id map."""
+    info = {"status": None, "reason": None, "generated_at": None, "elevated": None,
+            "listed": None, "skipped": None, "managers": None}
+    files = sorted(work.glob(PACKAGES_GLOB), key=lambda p: p.name)
+    if not files:
+        info.update(status="none", reason="ush-packages has not run: no "
+                                          f"{PACKAGES_GLOB} in the work folder")
+        not_checked.append({"what": "packages",
+                            "reason": f"ush-packages has not run ({info['reason']}), so "
+                                      f"packages is null"})
+        return info, None, None
+    newest = files[-1]
+    try:
+        data = json.loads(newest.read_text(encoding="utf-8-sig"))
+        reason = None if isinstance(data, dict) else f"{newest.name} does not hold a JSON object"
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        reason = f"{newest.name} could not be read: {type(exc).__name__}: {exc}"
+    if reason is not None:
+        info.update(status="unreadable", reason=reason)
+        not_checked.append({"what": "packages",
+                            "reason": f"the newest ush-packages detail file is unreadable "
+                                      f"({info['reason']}), so packages is null"})
+        return info, None, None
+
+    managers = package_managers(data, not_checked)
+    skipped = dict.fromkeys(SKIP_CAUSES, 0)
+    packages, keys = [], []
+    for source, manager in PACKAGE_SOURCES.items():
+        if managers[manager]["status"] == "unreadable":
+            continue  # its not_checked note says none of its packages is listed
+        items = data.get(source) if isinstance(data.get(source), list) else []
+        ordered = sorted(items, key=lambda item: str(item.get("key"))
+                         if isinstance(item, dict) else "")
+        for item in ordered:
+            cause, package = package_of(manager, item)
+            if cause is not None:
+                skipped[cause] += 1
+                continue
+            packages.append({"id": None, **package})
+            key = item.get("key")
+            keys.append(key if isinstance(key, str) and key else None)
+    for cause, count in skipped.items():
+        if count:
+            not_checked.append({"what": "packages skipped",
+                                "reason": f"{count} ush-packages items left out ({cause}): "
+                                          f"not listed and not checked for updates"})
+
+    id_map, reason = ids.load_map(state, SKILL)
+    if reason is not None:
+        not_checked.append(dict(zip(("what", "reason"), ids.load_note(reason))))
+    numbering = ids.Numbering(id_map, today)
+    key_of = dict(zip(map(id, packages), keys))
+    numbering.assign("p", packages, lambda package: key_of[id(package)])
+    reason = ids.save_map(state, SKILL, id_map, today)
+    if reason is not None:
+        not_checked.append(dict(zip(("what", "reason"), ids.save_note(reason))))
+    for what, reason in numbering.repeated_notes():
+        not_checked.append({"what": what, "reason": reason})
+
+    lookups, seen = [], set()
+    for package in packages:
+        lookup_key = (package["manager"], package["name"].casefold())
+        if lookup_key not in seen:
+            seen.add(lookup_key)
+            lookups.append({"manager": package["manager"], "name": package["name"]})
+    elevated = data.get("elevated")
+    info.update(status="read", generated_at=text(data.get("generated_at")),
+                elevated=elevated if isinstance(elevated, bool) else None,
+                listed=len(packages), skipped=skipped, managers=managers)
+    return info, packages, lookups
+
+
+def compare_versions(installed, latest):
+    """``True`` when ``latest`` is greater than ``installed``, ``False`` when not, and
+    ``None`` when either is not dot-separated runs of digits (a pre-release tag, an
+    epoch ``!``, a local version ``+``, a ``v`` prefix or letters). The shorter one is
+    padded with ``0`` parts, so ``1.2`` and ``1.2.0`` are equal."""
+    if not all(isinstance(v, str) and NUMERIC_VERSION.fullmatch(v)
+               for v in (installed, latest)):
+        return None
+    old, new = ([int(part) for part in v.split(".")] for v in (installed, latest))
+    width = max(len(old), len(new))
+    return new + [0] * (width - len(new)) > old + [0] * (width - len(old))
+
+
+def match_packages(packages, managers, findings: list, not_checked: list):
+    """Give each listed package ``checked`` and, from the ``package`` finding of the
+    same manager and name (case-folded), ``finding_id``, ``latest_version`` and
+    ``newer_available``; return ``package_counts``, or None without a package list.
+
+    A finding repeated for one package (the first wins) or matching no package stays
+    in ``findings`` and is named in ``not_checked``.
+    """
+    by_key = {}
+    for finding in findings:
+        if finding["kind"] != "package":
+            continue
+        key = (finding["manager"], finding["package"].casefold())
+        if key in by_key:
+            not_checked.append({"what": f"package finding {finding['id']}",
+                                "reason": f"finding {finding['id']} repeats finding "
+                                          f"{by_key[key]['id']} for the same package, so "
+                                          f"it is not used"})
+        else:
+            by_key[key] = finding
+    used = set()
+    for package in packages or []:
+        finding = by_key.get((package["manager"], package["name"].casefold()))
+        package["checked"] = finding is not None
+        if finding is not None:
+            used.add(finding["id"])
+            package.update(finding_id=finding["id"],
+                           latest_version=finding["latest_version"],
+                           newer_available=compare_versions(package["version"],
+                                                            finding["latest_version"]))
+    for finding in by_key.values():
+        if finding["id"] not in used:
+            why = ("no package list was read" if packages is None
+                   else "no listed package has its manager and name")
+            not_checked.append({"what": f"package finding {finding['id']}",
+                                "reason": f"finding {finding['id']} gives no result: "
+                                          f"{why}"})
+    if packages is None:
+        return None
+
+    fields = ("listed", "checked", "not_checked", "newer", "not_comparable")
+    counts, total, left_out = {}, dict.fromkeys(fields, 0), []
+    for manager in MANAGERS:
+        if managers[manager]["status"] == "unreadable":
+            counts[manager] = dict.fromkeys(fields)  # unknown, never 0
+            left_out.append(manager)
+            continue
+        own = [p for p in packages if p["manager"] == manager]
+        checked = [p for p in own if p["checked"]]
+        counts[manager] = {
+            "listed": len(own),
+            "checked": len(checked),
+            "not_checked": len(own) - len(checked),
+            "newer": sum(1 for p in checked if p["newer_available"] is True),
+            "not_comparable": sum(1 for p in checked if p["newer_available"] is None),
+        }
+        for field in fields:
+            total[field] += counts[manager][field]
+    counts["all"] = total
+    if left_out:
+        not_checked.append({"what": "package_counts all",
+                            "reason": f"the sources of {', '.join(left_out)} are "
+                                      f"unreadable, so their counts are null and "
+                                      f"package_counts.all leaves them out"})
+    return counts
+
+
 # --- summary budget -------------------------------------------------------------------
 def most_that_fit(fits, high: int) -> int:
     """The largest n in 0..high with ``fits(n)``, by bisection; ``fits(0)`` holds."""
@@ -1108,45 +1384,55 @@ def most_that_fit(fits, high: int) -> int:
 def fit_budget(summary: dict) -> str:
     """The summary text within SUMMARY_MAX_CHARS.
 
-    ``issues`` is cut from its end first; only when the summary without any issue is
-    still too long is ``exploited`` cut from its end, and then as many issues as fit
-    come back. ``truncated`` and ``truncated_exploited`` count the items cut, and a
-    ``not_checked`` item names each cut list. Notes are in place while measuring.
+    ``packages`` (and with it ``package_lookups``, the same number of items) is cut from
+    its end first; only when the summary without any package is still too long is
+    ``issues`` cut from its end, and only when it is still too long without any issue is
+    ``exploited`` cut from its end, and then as many issues as fit come back. Each cut
+    list's count (``truncated_packages``, ``truncated_lookups``, ``truncated``,
+    ``truncated_exploited``) gives the items cut, and a ``not_checked`` item names each
+    cut list. Notes are in place while measuring.
     """
-    full = {"issues": summary["issues"], "exploited": summary["exploited"]}
-    counts = {"issues": "truncated", "exploited": "truncated_exploited"}
+    counts = {"packages": "truncated_packages", "package_lookups": "truncated_lookups",
+              "issues": "truncated", "exploited": "truncated_exploited"}
+    full = {name: summary[name] for name in counts}
     notes = {name: {"what": f"{name} cut from the summary", "reason": ""} for name in full}
 
-    def fits(kept_issues: int, kept_exploited: int) -> bool:
-        for name, kept in (("issues", kept_issues), ("exploited", kept_exploited)):
+    def fits(kept_packages: int, kept_issues: int, kept_exploited: int) -> bool:
+        kept = {"packages": kept_packages, "package_lookups": kept_packages,
+                "issues": kept_issues, "exploited": kept_exploited}
+        for name, number in kept.items():
             if full[name] is None:
                 continue
-            summary[name] = full[name][:kept]
-            summary[counts[name]] = len(full[name]) - kept
+            summary[name] = full[name][:number]
+            summary[counts[name]] = len(full[name]) - len(summary[name])
             notes[name]["reason"] = (f"{summary[counts[name]]} {name} items at the end of "
                                      f"the list are only in the detail file; summary "
                                      f"budget {SUMMARY_MAX_CHARS} characters")
         return len(dump(summary)) <= SUMMARY_MAX_CHARS
 
-    n_issues, n_exploited = len(full["issues"] or []), len(full["exploited"] or [])
-    if fits(n_issues, n_exploited):
+    n_packages, n_issues, n_exploited = (len(full[name] or [])
+                                         for name in ("packages", "issues", "exploited"))
+    if fits(n_packages, n_issues, n_exploited):
         return dump(summary)
     added = [notes[name] for name in full if full[name]]
     summary["not_checked"].extend(added)
-    if fits(0, n_exploited):
-        fits(most_that_fit(lambda n: fits(n, n_exploited), n_issues), n_exploited)
-    elif fits(0, 0):
-        kept = most_that_fit(lambda n: fits(0, n), n_exploited)
-        fits(most_that_fit(lambda n: fits(n, kept), n_issues), kept)
+    if fits(0, n_issues, n_exploited):
+        fits(most_that_fit(lambda n: fits(n, n_issues, n_exploited), n_packages),
+             n_issues, n_exploited)
+    elif fits(0, 0, n_exploited):
+        fits(0, most_that_fit(lambda n: fits(0, n, n_exploited), n_issues), n_exploited)
+    elif fits(0, 0, 0):
+        kept = most_that_fit(lambda n: fits(0, 0, n), n_exploited)
+        fits(0, most_that_fit(lambda n: fits(0, n, kept), n_issues), kept)
     else:
         # Something else is too long: cutting would lose the lists for nothing.
-        fits(n_issues, n_exploited)
+        fits(n_packages, n_issues, n_exploited)
         for note in added:
             summary["not_checked"].remove(note)
         summary["not_checked"].append({
             "what": "summary budget",
             "reason": f"the summary exceeds {SUMMARY_MAX_CHARS} characters even without "
-                      f"issues and exploited and was not cut",
+                      f"packages, issues and exploited and was not cut",
         })
         return dump(summary)
     for name in full:
@@ -1256,13 +1542,19 @@ def main(argv=None, run_ps=None, now=None) -> int:
                             "reason": "the search was not done: no --findings file was "
                                       "given, so updates, exploited vulnerabilities, "
                                       "firmware and known issues are not compared with "
-                                      "this machine"})
+                                      "this machine, and no package is looked up in its "
+                                      "registry (package_lookups)"})
         compared = {"searches": None, "findings": None,
                     "lists": {field: None for field in FINDINGS_FIELDS},
                     "kev_other": None, "query_warnings": None}
     else:
         compared = compare_findings(doc, machine, source_list, not_checked)
     lists, kev_other = compared["lists"], compared["kev_other"]
+    packages_input, packages, package_lookups = read_packages(
+        work, data_dir / "state", now.date().isoformat(), not_checked)
+    package_counts = (None if doc is None else
+                      match_packages(packages, packages_input["managers"],
+                                     compared["findings"], not_checked))
     comparison, baseline_info = apply_baseline(data_dir / "state", lists, kev_other, now,
                                                not_checked)
 
@@ -1278,6 +1570,10 @@ def main(argv=None, run_ps=None, now=None) -> int:
         "kev_other": kev_other,
         "query_warnings": compared["query_warnings"],
         "findings": compared["findings"],
+        "packages_input": packages_input,
+        "packages": packages,
+        "package_lookups": package_lookups,
+        "package_counts": package_counts,
     }
     detail_file.write_text(dump(detail) + "\n", encoding="utf-8")
 
@@ -1291,6 +1587,8 @@ def main(argv=None, run_ps=None, now=None) -> int:
         "detail_file": str(detail_file),
         "truncated": 0,
         "truncated_exploited": 0,
+        "truncated_packages": 0,
+        "truncated_lookups": 0,
         "baseline": baseline_info,
         "comparison": comparison,
         "searches": compared["searches"],
@@ -1298,6 +1596,10 @@ def main(argv=None, run_ps=None, now=None) -> int:
         "query_warnings": compared["query_warnings"],
         "kev_other_count": None if kev_other is None else len(kev_other),
         **lists,
+        "packages_input": packages_input,
+        "packages": packages,
+        "package_lookups": package_lookups,
+        "package_counts": package_counts,
     }
     text_out = fit_budget(summary)
     summary_file.write_text(text_out, encoding="utf-8")

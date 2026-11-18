@@ -1,12 +1,14 @@
 {
-  "detail_sections": ["updates", "exploited", "kev_other", "firmware", "issues", "findings"],
-  "id_letters": "ukfiw",
+  "detail_sections": ["updates", "exploited", "kev_other", "firmware", "issues", "findings",
+                      "packages"],
+  "id_letters": "ukfiwp",
   "path_keys": ["summary_file", "detail_file", "url", "domain", "query", "title"],
   "id_keys": ["id", "finding_id"],
   "required_lists": ["updates", "exploited", "firmware"],
   "truncated": [
     {"list": "issues", "prefix": "i", "count_key": "truncated"},
-    {"list": "exploited", "prefix": "k", "count_key": "truncated_exploited"}
+    {"list": "exploited", "prefix": "k", "count_key": "truncated_exploited"},
+    {"list": "packages", "prefix": "p", "count_key": "truncated_packages"}
   ],
   "required_keys": ["machine", "updates", "exploited", "firmware"],
   "report_prefix": "advice-",

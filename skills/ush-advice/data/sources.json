@@ -38,5 +38,14 @@
     {"manufacturer_prefix": "Lenovo", "domains": ["lenovo.com"]},
     {"manufacturer_prefix": "Acer", "domains": ["acer.com"]},
     {"manufacturer_prefix": "Micro-Star", "domains": ["msi.com"]}
-  ]
+  ],
+  "package_domains": {
+    "pip": ["pypi.org"],
+    "pipx": ["pypi.org"],
+    "uv": ["pypi.org"],
+    "npm": ["registry.npmjs.org", "www.npmjs.com"],
+    "conda": ["anaconda.org"],
+    "winget": ["github.com"],
+    "vscode": ["marketplace.visualstudio.com"]
+  }
 }

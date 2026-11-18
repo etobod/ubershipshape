@@ -222,6 +222,11 @@ such sources go in one fenced `text` block after the list, one line
 `w<n> <url>` (or `w<n> <title>`) each. A source without digits stays in
 inline code.
 
+### Packages
+
+Only with `--findings` and a package list (`package_counts` not `null`):
+see „Pakiety” below.
+
 ### New since the last check
 
 First the baseline: compared with the baseline
@@ -289,6 +294,41 @@ names every `unreadable` job of `sources` and every search of
 warning names its finding id and reason, never the query. If
 `not_checked` is `[]`, it says „nothing”.
 
+## Pakiety
+
+The package section (its heading in a Polish report; „Packages” in an
+English one), from `packages` and `package_counts` of the summary run with
+`--findings`. Without `--findings`, or with `packages` `null`, it says that
+no package was looked up and why (`packages_input.reason`).
+
+- One bullet per package with `checked` `true` (`p..`, with `manager`,
+  `name` and `version`), worded by its `newer_available`; a Polish report
+  uses these wordings exactly:
+  - `newer_available` `true`: „nowsza wersja <latest_version> w rejestrze
+    (stan z <date>)”, the date being the `published` of its finding
+    (`finding_id`, fetched with `--detail` and named in the `ush:detail`
+    line) or, when that is `null`, the date of the run (`generated_at`);
+  - `newer_available` `false`: „rejestr podaje tę samą lub starszą wersję”;
+  - `newer_available` `null`: „wersji nie da się porównać: zainstalowana
+    <version>, w rejestrze <latest_version>”.
+- Then one line per manager of `package_counts` (not `all`): „<manager>:
+  nie sprawdzono pod kątem aktualizacji: <not_checked>”. A manager with
+  `listed` `null` (its source unreadable) gets „<manager>: pakietów nie
+  odczytano” instead, never 0; one with `listed` 0 gets „<manager>: brak
+  odczytanych pakietów”, never „nie zainstalowano”.
+- A package with `checked` `false` is counted in that line only and gets
+  no wording of its own. A package finding that matched no package, or
+  repeated another, is named under „Not checked” with its `w..` id.
+- A package whose finding has `listed` `false` (a page outside its
+  manager's registry) is described in „Unverified”, with a pointer here.
+- Items ush-packages listed but advice left out (`packages_input.skipped`
+  above 0: kept from an earlier run, unreadable, or without a version) are
+  in no count above; each cause is named under „Not checked” with its
+  number (its `packages skipped` item).
+- Never call a package „aktualny” or "up to date": `newer_available`
+  `false` says only what the registry page showed, and a package without a
+  finding was not checked.
+
 ## Account names
 
 A report never carries the account name, except in the data directory path
@@ -327,7 +367,8 @@ Never report missing data as „up to date”, „none” or „no changes”:
 - `query_warnings` not empty: a query or address held a fact of this
   machine; say so in the dashboard section (`## Przegląd`, item 3), below
   the summary section, with the finding ids and the reasons (`device_id`: a
-  device instance id; never repeat the id itself).
+  device instance id; never repeat the id itself; `path`: a local path;
+  `account`: the account, computer or domain name, never repeated).
 - First run (`baseline.status` `none`): „no comparison: this is the first
   run; the next run compares with this one”.
 - A baseline that could not be read (`baseline.status` `unreadable`):

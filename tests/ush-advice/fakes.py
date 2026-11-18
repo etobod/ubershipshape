@@ -304,6 +304,10 @@ def pscustomobject_keys(body):
     return result
 
 
+NEUTRAL_ENVIRON = {"USERNAME": "inventedperson", "COMPUTERNAME": "INVENTED-BOX",
+                   "USERDOMAIN": "INVENTED-BOX"}
+
+
 class AdviceTestCase(unittest.TestCase):
     advice = None
 
@@ -318,6 +322,10 @@ class AdviceTestCase(unittest.TestCase):
                                     create=True)
         patcher.start()
         self.addCleanup(patcher.stop)
+        # Invented names, so no test reads the account or computer name of this machine.
+        environ = mock.patch.object(self.advice, "ENVIRON", dict(NEUTRAL_ENVIRON), create=True)
+        environ.start()
+        self.addCleanup(environ.stop)
 
     def data_dir(self):
         tmp = tempfile.TemporaryDirectory()

@@ -1,6 +1,6 @@
 ---
 name: ush-packages
-description: List the packages the package managers of this Windows machine have installed, and the packages winget recorded, read offline from disk - pip for every Python registered in PEP 514, the global npm packages, pipx apps, uv tools, conda environments, and the VS Code extensions - with each version and what was added, removed or changed since the last run. A manager none of whose disk locations exists is listed as not present, every other package manager as not read yet. Use when the user asks which Python, npm, pipx, uv or conda packages or VS Code extensions are installed, which packages winget recorded, which versions, or what changed in them. Read-only; no package manager runs and nothing goes online, so no package is checked for a newer version.
+description: List the packages the package managers of this Windows machine have installed, and the packages winget recorded, read offline from disk - pip for every Python registered in PEP 514, the global npm packages, pipx apps, uv tools, conda environments, and the VS Code extensions - with each version and what was added, removed or changed since the last run. A manager none of whose disk locations exists is listed as not present, every other package manager as not read yet. Use when the user asks which Python, npm, pipx, uv or conda packages or VS Code extensions are installed, which packages winget recorded, which versions, or what changed in them. Read-only; no package manager runs and nothing goes online, so no package is checked for a newer version here (an ush-advice run with findings does that).
 ---
 
 # ush-packages
@@ -51,8 +51,8 @@ another way (a shell command, another folder).
   longer period ("since last week").
 
 Not for: installing, updating or removing a package (the skill gives no
-block), whether a newer version exists (that needs an ush-advice lookup,
-which does not exist yet), go and the other package managers (listed as
+block), whether a newer version exists (packages are checked for updates
+only in an ush-advice run with findings), go and the other package managers (listed as
 not read yet), winget packages installed outside winget, the extensions of
 VS Code Insiders, VSCodium and portable VS Code, installed programs, drivers and
 autostart (`ush-inventory`). Say so if the user asks for these.
@@ -65,8 +65,9 @@ autostart (`ush-inventory`). Say so if the user asks for these.
   updates or removes a package.
 - **Nothing leaves the machine.** No web search, no upload, no online tool,
   also not to look up a package or its newest version.
-- **Not checked for updates.** No package is checked for a newer version:
-  that needs an ush-advice lookup, which does not exist yet. Every package
+- **Not checked for updates.** No package is checked for a newer version
+  here: packages are checked for updates only in an ush-advice run with
+  findings. Every package
   in the report is marked as not checked for updates; never call a version
   old or current.
 - **Read only the summary JSON.** Never open the raw captures or other files

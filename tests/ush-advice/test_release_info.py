@@ -31,7 +31,7 @@ from .fakes import (
     update_finding,
 )
 
-SEARCH_ORDER = ("release-info", "msrc", "kev", "release-health", "firmware")
+SEARCH_ORDER = ("release-info", "msrc", "kev", "release-health", "firmware", "packages")
 
 
 def low(value):
