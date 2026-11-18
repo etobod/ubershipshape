@@ -50,6 +50,12 @@ Plan 063, M2, criterion K5 (``test_written_file_is_read``): the writer
 is run as a child process on the detail file of a fake pass (the real clock and the real
 ``local_date``, since the writer stores the real local date); the next pass reads its file.
 
+Plan 072, M2 (``test_portable_programs``, ``test_portable_not_read_is_not_gone``): an
+inventory ``programs[]`` item of source ``portable_programs`` (key
+``portable:<casefolded folder>``, ``own`` ``false``, ``name`` the folder name,
+``install_location``, ``executables``, ``found_by``) gets an ``r`` item of ``kind``
+``program`` like a win32 or msix program; the source sits in the child's ``sources``.
+
 Apart from that writer, no process is started: the children are fakes (``test_runall.py``, ``test_accepted.py``)
 that write invented summaries and detail files in temporary directories. Every value is
 invented (Contoso, Fabrikam).
@@ -660,6 +666,201 @@ class TestRunallReviewDates(RunallTestCase):
         self.assert_state(self.for_key(second, NOTES["key"]), "no_decision")
         self.assert_state(self.for_key(second, TOOL["key"]), "no_decision")
         self.assert_counts_match(second, self.review(self.detail(second)))
+
+    # --- plan 072, M2, K1 ------------------------------------------------------------------
+
+    def test_portable_programs(self):
+        with self.subTest("no review-dates.json: one no_decision item per portable program"):
+            summary, data_dir, _ = self.run_pass(
+                None, inventory=portable_inventory_child([TRAY, FAB, LOCAL_TOOL]),
+                packages=packages_child([]))
+            self.assertFalse((data_dir / "state" / "review-dates.json").exists())
+            for where, data in (("summary", summary), ("detail", self.detail(summary))):
+                with self.subTest(where=where):
+                    items = self.review(data)
+                    self.assertEqual({item.get("key") for item in items},
+                                     {TRAY["key"], FAB["key"], LOCAL_TOOL["key"]}, items)
+                    for program in (FAB, LOCAL_TOOL):
+                        item = self.for_key(data, program["key"])
+                        self.assertRegex(str(item.get("id")), r"^r[1-9][0-9]*$", item)
+                        self.assertEqual(item.get("kind"), "program", item)
+                        self.assertEqual(item.get("name"), program["name"], item)
+                        self.assert_state(item, "no_decision")
+            self.assert_counts_match(summary, self.review(self.detail(summary)))
+            self.assertEqual(summary["review_counts"].get("no_decision"), 3, summary)
+
+        with self.subTest("an entry gives due or not_due"):
+            entries = [
+                entry("program", FAB["key"], "Fab", "2026-09-20"),          # that day
+                entry("program", LOCAL_TOOL["key"], "Invented", "2026-09-21"),  # next day
+            ]
+            summary, _, _ = self.run_pass(
+                entries, inventory=portable_inventory_child([TRAY, FAB, LOCAL_TOOL]),
+                packages=packages_child([]))
+            self.assert_state(self.for_key(summary, FAB["key"]), "due")
+            self.assert_state(self.for_key(summary, LOCAL_TOOL["key"]), "not_due")
+            self.assert_state(self.for_key(summary, TRAY["key"]), "no_decision")
+            for key in (FAB["key"], LOCAL_TOOL["key"]):
+                self.assertEqual(self.for_key(summary, key).get("kind"), "program")
+            self.assert_counts_match(summary, self.review(self.detail(summary)))
+
+        with self.subTest("--set writes the portable key and the next pass reads it"):
+            # The writer stores the real local date: real clock, no local_date patch.
+            now = datetime.now(timezone.utc)
+            inventory = portable_inventory_child([TRAY, FAB, LOCAL_TOOL])
+            data_dir = self.data_dir()
+            first = self.collect(data_dir, AcceptedChildren(
+                self.temp(), inventory=inventory, packages=packages_child([])), now=now)
+            ids = {item.get("key"): item.get("id")
+                   for item in self.review(self.detail(first))}
+            self.assertIn(FAB["key"], ids, ids)
+
+            self.run_set(data_dir, ids[FAB["key"]], "1y", first["detail_file"])
+
+            loaded = self.review_dates.load(data_dir)
+            self.assertEqual(loaded.get("status"), "read", loaded)
+            by_key = {item.get("key"): item for item in loaded.get("entries") or []}
+            self.assertEqual(set(by_key), {FAB["key"]}, loaded)
+            self.assertEqual(by_key[FAB["key"]].get("kind"), "program", by_key)
+
+            second = self.collect(data_dir, AcceptedChildren(
+                self.temp(), inventory=inventory, packages=packages_child([])), now=now)
+            self.assertEqual(self.review_notes(second), [], second.get("not_checked"))
+            self.assert_state(self.for_key(second, FAB["key"]), "not_due")
+            self.assert_state(self.for_key(second, LOCAL_TOOL["key"]), "no_decision")
+            self.assert_state(self.for_key(second, TRAY["key"]), "no_decision")
+            self.assert_counts_match(second, self.review(self.detail(second)))
+
+    # --- plan 072, M2, K2 ------------------------------------------------------------------
+
+    def test_portable_not_read_is_not_gone(self):
+        entries = [
+            entry("program", TRAY["key"], "Contoso Tray", "2026-09-01"),
+            entry("program", FAB["key"], "Fab", "2026-09-01"),
+            entry("program", LOCAL_TOOL["key"], "Invented", "2027-03-01"),
+        ]
+
+        def items_of(summary):
+            return self.review(self.detail(summary))
+
+        def assert_never_gone(summary):
+            for item in items_of(summary):
+                self.assertNotEqual(item.get("state"), "gone", item)
+
+        with self.subTest("portable_programs not read, its items absent"):
+            summary, _, _ = self.run_pass(
+                entries, portable_inventory_child([TRAY], portable_status="unreadable"),
+                packages_child([]))
+            self.assert_not_checked(self.for_key(summary, FAB["key"]))
+            self.assert_not_checked(self.for_key(summary, LOCAL_TOOL["key"]))
+            self.assert_state(self.for_key(summary, TRAY["key"]), "due")
+            assert_never_gone(summary)
+            self.assert_counts_match(summary, items_of(summary))
+
+        with self.subTest("portable_programs not read, an item carried from the baseline"):
+            carried = portable("D:\\Tools\\Fab", ["D:\\Tools\\Fab\\fab.exe"], ["shortcut"],
+                               from_baseline=True)
+            summary, _, _ = self.run_pass(
+                entries, portable_inventory_child([TRAY, carried],
+                                                  portable_status="unreadable"),
+                packages_child([]))
+            self.assert_not_checked(self.for_key(summary, FAB["key"]))
+            self.assert_not_checked(self.for_key(summary, LOCAL_TOOL["key"]))
+            assert_never_gone(summary)
+
+        with self.subTest("source read, clean data: no not_checked item"):
+            removed = "portable:e:\\portable\\fabrikamremoved"
+            with_removed = entries + [entry("program", removed, "FabrikamRemoved",
+                                            "2026-12-01")]
+            summary, _, _ = self.run_pass(
+                with_removed,
+                portable_inventory_child([TRAY, FAB, LOCAL_TOOL, WINDOWS_PART]),
+                packages_child([]))
+            items = items_of(summary)
+            self.assertEqual([item for item in items if item.get("state") == "not_checked"],
+                             [], items)
+            self.assert_state(self.for_key(summary, FAB["key"]), "due")
+            self.assert_state(self.for_key(summary, LOCAL_TOOL["key"]), "not_due")
+            self.assert_state(self.for_key(summary, TRAY["key"]), "due")
+            self.assert_state(self.for_key(summary, removed), "gone")
+            self.assertEqual(summary["review_counts"].get("not_checked", 0), 0, summary)
+            self.assertEqual(self.review_notes(summary), [], summary.get("not_checked"))
+
+    def test_portable_inputs_not_read(self):
+        """Plan 072 final review round 1 (reverses M2 review round 1): ush-inventory drops
+        a portable item only when ``portable_exists`` confirms every executable missing,
+        so only an unread existence check keeps a missing portable key ``not_checked``;
+        unread shortcuts or process paths cannot give a false ``gone`` and leave it
+        ``gone`` (``process_paths_unread`` is above 0 on every real machine)."""
+        removed_win32 = win32("FabrikamGone", "Fabrikam Gone", own=False)["key"]
+        entries = [entry("program", FAB["key"], "Fab", "2026-09-01"),
+                   entry("program", removed_win32, "Fabrikam Gone", "2026-09-01")]
+        with self.subTest("portable_exists not read whole: not_checked"):
+            note = {"what": "portable_exists",
+                    "reason": "1: X:\\Invented\\a.exe; existence not known"}
+            summary, _, _ = self.run_pass(
+                entries, portable_inventory_child([TRAY], not_checked=[note]),
+                packages_child([]))
+            self.assert_not_checked(self.for_key(summary, FAB["key"]))
+            self.assert_state(self.for_key(summary, removed_win32), "gone")
+
+        notes = {
+            "shortcuts not read": {"what": "shortcuts not read",
+                                   "reason": "1: X:\\Invented\\a.lnk (denied); not looked at"},
+            "process_paths unreadable": {"what": "process_paths", "reason": FAILURE},
+        }
+        for label, note in notes.items():
+            with self.subTest(label + ": gone"):
+                summary, _, _ = self.run_pass(
+                    entries, portable_inventory_child([TRAY], not_checked=[note]),
+                    packages_child([]))
+                self.assert_state(self.for_key(summary, FAB["key"]), "gone")
+                self.assert_state(self.for_key(summary, removed_win32), "gone")
+
+        def with_process_paths(unread):
+            detail, extra = portable_inventory_child([TRAY])
+            detail["sources"].append(dict(source("process_paths"),
+                                          process_paths_unread=unread))
+            return detail, extra
+
+        with self.subTest("process paths read, some of them unreadable: gone"):
+            summary, _, _ = self.run_pass(entries, with_process_paths(208),
+                                          packages_child([]))
+            self.assert_state(self.for_key(summary, FAB["key"]), "gone")
+            self.assert_state(self.for_key(summary, removed_win32), "gone")
+
+        with self.subTest("a sources entry that is not an object: no crash"):
+            detail, extra = with_process_paths(2)
+            detail["sources"].insert(0, "invented")
+            summary, _, _ = self.run_pass(entries, (detail, extra), packages_child([]))
+            self.assertEqual(summary["children"][3]["status"], "ok", summary)
+            self.assert_state(self.for_key(summary, FAB["key"]), "gone")
+
+
+# --- plan 072, M2: invented portable programs --------------------------------------------
+
+def portable(folder, executables, found_by, from_baseline=False):
+    """A ``portable_programs`` item of an ``ush-inventory`` detail (plan 072, Goal)."""
+    item = {"key": f"portable:{folder.casefold()}", "source": "portable_programs",
+            "own": False, "name": folder.rstrip("\\").rsplit("\\", 1)[-1],
+            "install_location": folder, "executables": list(executables),
+            "found_by": sorted(found_by)}
+    if from_baseline:
+        item["from_baseline"] = True
+    return item
+
+
+def portable_inventory_child(programs, portable_status="read", not_checked=()):
+    """An ``ush-inventory`` child whose ``sources`` also hold ``portable_programs``."""
+    detail, extra = inventory_child(programs, not_checked=not_checked)
+    detail["sources"].insert(2, source("portable_programs", portable_status))
+    return detail, extra
+
+
+FAB = portable("D:\\Tools\\Fab", ["D:\\Tools\\Fab\\fab.exe"], ["shortcut"])
+LOCAL_TOOL = portable("C:\\Users\\Invented\\AppData\\Local\\Invented",
+                      ["C:\\Users\\Invented\\AppData\\Local\\Invented\\inv.exe"],
+                      ["autostart", "process"])
 
 
 if __name__ == "__main__":

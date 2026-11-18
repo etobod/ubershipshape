@@ -1,0 +1,8 @@
+{
+  "roots": [
+    "%ProgramData%\\Microsoft\\Windows Defender",
+    "%TEMP%",
+    "%TMP%",
+    "%SystemRoot%\\Temp"
+  ]
+}

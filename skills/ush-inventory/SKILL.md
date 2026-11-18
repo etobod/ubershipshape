@@ -5,7 +5,9 @@ description: List what is installed on this Windows machine (Win32 programs and 
 
 # ush-inventory
 
-Reads the installed programs, the autostart entries, the Windows
+Reads the installed programs (and the portable programs: folders of
+executables that an autostart entry, a Start menu or Desktop shortcut or a
+running process starts), the autostart entries, the Windows
 components, the drivers, the third-party packages of the driver store and
 the things added to the system (firewall rules,
 root certificates, hosts entries, members of Administrators, Defender

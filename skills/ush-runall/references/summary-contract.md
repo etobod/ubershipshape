@@ -382,6 +382,7 @@ summaries:
 |---|---|---|---|
 | `win32:` | `program` | `ush-inventory` `programs` | `win32_programs` |
 | `msix:` | `program` | `ush-inventory` `programs` | `msix_programs` |
+| `portable:` | `program` | `ush-inventory` `programs` | `portable_programs` |
 | `pip:` | `package` | `ush-packages` `packages` | `pip_packages` |
 | `npm:` | `package` | `ush-packages` `packages` | `npm_packages` |
 
@@ -410,12 +411,19 @@ States:
   `not_checked` (summary or detail file) names a part of that source it
   could not read (`what` the source name, or the source name and a space:
   `win32_programs key ...`, `pip_packages <python> <folder>`,
-  `npm_packages <folder>\<scope>`). Such an entry is never `gone`; any
-  partial skip of a source covers every missing key of it. An entry whose
+  `npm_packages <folder>\<scope>`). A `portable:` key is also covered
+  by a `portable_exists` note: ush-inventory drops a portable item when that
+  check confirms every executable missing, or when its folder no longer
+  passes the portable rules (an installed program now owns it, or it lies
+  under a removed program's folder or a newly excluded root: the program
+  is then counted elsewhere, its files need not be gone), so unread
+  shortcuts or process paths never cover it. Such an entry is never `gone`; any partial skip of a source covers every
+  missing key of it. An entry whose
   key has none of the prefixes, or whose kind does not fit its prefix, is
   also `not_checked`.
 - `gone`: an entry whose key is in no list (`own: true` programs included)
-  and whose source was read whole.
+  and whose source (with `portable_exists`, for a `portable:` key) was read
+  whole.
 - `no_decision`: a listed item without an entry.
 - `no_limit`: an entry with period `none`.
 - `due`: `review_on` is the local date of the run or earlier; `not_due`:

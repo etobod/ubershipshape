@@ -206,7 +206,8 @@ class TestCleanData(FootprintLinksTestCase):
         other_exe = f"{PROGRAM_FILES_DIR}\\Other\\o.exe"
         svchost_raw = "%SystemRoot%\\system32\\svchost.exe"
         svchost = "C:\\Windows\\system32\\svchost.exe"
-        tools_exe = "D:\\Tools\\t.exe"
+        # Directly in the drive root: a folder below it would be a portable program.
+        tools_exe = "D:\\t.exe"
         programs = [
             # Locations under which no trace may be linked: drive roots,
             # %ProgramFiles% itself and the Windows directory.

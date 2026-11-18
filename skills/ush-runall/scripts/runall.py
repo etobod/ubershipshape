@@ -114,9 +114,17 @@ SKILL_PACKAGES = "ush-packages"
 REVIEW_SOURCES = {
     "win32:": ("program", SKILL_INVENTORY, "win32_programs", "programs"),
     "msix:": ("program", SKILL_INVENTORY, "msix_programs", "programs"),
+    "portable:": ("program", SKILL_INVENTORY, "portable_programs", "programs"),
     "pip:": ("package", SKILL_PACKAGES, "pip_packages", "packages"),
     "npm:": ("package", SKILL_PACKAGES, "npm_packages", "packages"),
 }
+# key prefix -> the inputs of its source that ush-inventory notes under their own names
+# (plan 072): a missing key is never ``gone`` while one of them was not read whole. A
+# portable item is dropped when ``portable_exists`` confirms every executable missing,
+# or when its folder no longer passes the portable rules (an installed program owns
+# it now): neither depends on shortcuts or process paths, so their gaps cover nothing.
+# ``gone`` then means the key is gone, not that the files are.
+REVIEW_INPUTS = {"portable:": ("portable_exists",)}
 CATALOGUE_FILE = SKILLS_DIR / SKILL_SETTINGS / "data" / "settings-catalogue.json"
 # vendor_absent match -> ((skill, source, detail section, field compared), ...)
 VENDOR_LISTS = {
@@ -1047,16 +1055,18 @@ def review_prefix(key):
     return None
 
 
-def partial_skip(outcome: dict, detail: dict, source: str):
+def partial_skip(outcome: dict, detail: dict, source: str, inputs=()):
     """The first ``not_checked`` entry of a child (summary or detail file) naming a part
-    of ``source`` it could not read (``what`` is the source, or starts with it and a
-    space), as a reason; None when there is none."""
+    of ``source`` or of one of its ``inputs`` it could not read (``what`` is the name,
+    or starts with it and a space), as a reason; None when there is none."""
     notes = list((outcome.get("summary") or {}).get("not_checked") or [])
     if isinstance(detail.get("not_checked"), list):
         notes += detail["not_checked"]
+    names = (source, *inputs)
     for note in notes:
         what = note.get("what") if isinstance(note, dict) else None
-        if isinstance(what, str) and (what == source or what.startswith(source + " ")):
+        if isinstance(what, str) and any(what == name or what.startswith(name + " ")
+                                         for name in names):
             why = str(note.get("reason") or "no reason given")
             return f"{what} was not read in this pass: {why}"[:REASON_MAX]
     return None
@@ -1094,7 +1104,8 @@ def build_review(outcomes: dict, entries: list, today) -> list:
             unread[prefix] = reason
             continue
         unread[prefix] = source_reason(detail, skill, source)
-        partial[prefix] = partial_skip(outcomes[skill], detail, source)
+        partial[prefix] = partial_skip(outcomes[skill], detail, source,
+                                       REVIEW_INPUTS.get(prefix, ()))
         for item in detail[section]:
             key = item.get("key") if isinstance(item, dict) else None
             if review_prefix(key) != prefix or (kind, key) in listed:

@@ -127,7 +127,11 @@ the summary goes out over the limit and `not_checked` gets the item
 | `startup_approved` | `Explorer\StartupApproved\Run`, `Run32` and `StartupFolder` in `HKCU` and `HKLM` | no items: the `approved` and `enabled` fields of `run_keys` and `startup_folders` entries |
 | `scheduled_tasks` | `Get-ScheduledTask`; only tasks with a logon (`MSFT_TaskLogonTrigger`) or boot (`MSFT_TaskBootTrigger`) trigger | autostart entries |
 | `services` | `Win32_Service` with `StartMode` `Auto`, with `Type`, `DelayedAutostart` and `ServiceDll` from the service's registry key | autostart entries |
+| `shortcuts` | the targets of the `.lnk` files in the Start menu (`Programs` and `CommonPrograms`, with subfolders) and on the Desktop (`Desktop` and `CommonDesktopDirectory`, top level only), read with `WScript.Shell` `CreateShortcut` (read-only); a shortcut or folder that could not be read is named in the `not_checked` item `shortcuts not read` | no items: candidates of `portable_programs` |
+| `process_paths` | the image path of every running process (`Get-Process`); a process whose path could not be read (without administrator rights most processes of other accounts) is counted in `process_paths_unread` of this source entry (`null` when the job failed), never turned into a path or into "not running". Read, but no path readable at all, is `unreadable` | no items: candidates of `portable_programs` |
 | `file_facts` | for every target file of the autostart entries: the expanded path, whether it exists, its Authenticode status, signer and company, and the SHA-256 of its bytes (`Get-FileHash`, read-only) | no items: the `facts` of the entries |
+| `portable_exists` | only when a `portable_programs` item of the previous baseline was not found in this run: whether each of its `executables` exists (`exists` `true`/`false`/`null`, as for `file_facts`); an unknown existence is named in the `not_checked` item `portable_exists` with its cause | no items |
+| `portable_programs` | no job of its own: the folders of the executables started by an autostart entry, a shortcut or a running process (see "Portable programs") | programs |
 | `optional_features` | `Win32_OptionalFeature` (no administrator rights needed) | components (`feature`) |
 | `capabilities` | `Get-WindowsCapability -Online`, only with administrator rights; without them the job is not run and the source is `unreadable` with the reason `requires administrator rights (not read in this run, which is not elevated); this is not an empty list` | components (`capability`) |
 | `drivers` | `Win32_PnPSignedDriver`, one row per device; a row without `InfName` is no item: `drivers_without_inf` counts the `Win32_PnPSignedDriver` rows without an INF file (for example software devices, or a device without a driver), not device state; device state is measured by `ush-health` | drivers |
@@ -170,6 +174,7 @@ Every item has a stable `key`, the same in every run:
 |---|---|
 | `win32_programs` | `win32:<hklm64 / hklm32 / hkcu>:<subkey name>` |
 | `msix_programs` | `msix:<PackageFamilyName>`; of two packages of one family the higher `Version` stays |
+| `portable_programs` | `portable:<folder, case-folded>` |
 | `run_keys` | `run:<hkcu / hklm64 / hklm32>\<Run / RunOnce>:<value name>` |
 | `startup_folders` | `startup:<user / common>:<file name>` |
 | `scheduled_tasks` | `task:<TaskPath><TaskName>` |
@@ -203,7 +208,7 @@ Besides the shared fields (`schema_version`, `skill` = `"ush-inventory"`,
 |---|---|---|
 | `elevated` | bool | the run had administrator rights; it then reads and writes the elevated baseline |
 | `baseline` | object | shared contract, "Baseline": `status` (`none`, `compared`, `unreadable`), `created_at`, `age_days`, `saved`, `reason`, `reference` (`latest` or the `--compare-to` value, e.g. `7d`) and `reference_file` (the history copy compared with, or `null`). `created_at` and `age_days` are those of the state compared with |
-| `comparison` | object | per item source (`win32_programs`, `msix_programs`, `run_keys`, `startup_folders`, `scheduled_tasks`, `services`, `optional_features`, `capabilities`, `drivers`, `driver_packages`, `firewall_rules`, `root_certificates`, `hosts`, `administrators`, `defender_exclusions`): `compared`, `no_baseline` or `not_read` (shared contract). A source added to the skill after the baseline was made is `no_baseline` on the first run |
+| `comparison` | object | per item source (`win32_programs`, `msix_programs`, `portable_programs`, `run_keys`, `startup_folders`, `scheduled_tasks`, `services`, `optional_features`, `capabilities`, `drivers`, `driver_packages`, `firewall_rules`, `root_certificates`, `hosts`, `administrators`, `defender_exclusions`): `compared`, `no_baseline` or `not_read` (shared contract). A source added to the skill after the baseline was made is `no_baseline` on the first run |
 | `truncated_vendor_folders`, `truncated_driver_packages`, `truncated_drivers`, `truncated_components`, `truncated_additions`, `truncated_autostart`, `truncated_changes` | int | the items cut from `vendor_folders`, `driver_packages`, `drivers`, `components`, `additions`, `autostart` and `changes` (see "Files and output"), `0` when none (also when the list is `null`) |
 | `autostart_counts` | object or `null` | `{kind: number}` of the whole `autostart` list when it was cut, else `null` |
 | `change_counts` | object or `null` | `{source: {added, removed, changed}}` of the whole `changes` list (a collapsed entry by its `count`) when it was cut, else `null` |
@@ -243,8 +248,8 @@ position in each run.
 
 | Field | Meaning |
 |---|---|
-| `key`, `source` | the item key and its source (`win32_programs`, `msix_programs`); `source` only in the detail file |
-| `own` | `true` only for an MSIX app whose `signature_kind` is listed in `windows-own.json`; always `false` for a Win32 program. Only in the detail file (a summary program is always not own) |
+| `key`, `source` | the item key and its source (`win32_programs`, `msix_programs`, `portable_programs`); in the summary `source` is given only for `portable_programs` |
+| `own` | `true` only for an MSIX app whose `signature_kind` is listed in `windows-own.json`; always `false` for a Win32 or portable program. Only in the detail file (a summary program is always not own) |
 | `per_user_pair` | list of `{id, name}`, sorted by the number in `id` (`a2` before `a10`): the other installs of the same program, with the same name and the same publisher (see "Install pairs"). Absent when the program has no pair, and on every program when `per_user_suffixes.json` could not be used |
 | `name`, `version`, `publisher` | as read; for MSIX `publisher` is the `O=` value of the package `Publisher`, else its `CN=` value |
 | `install_date` | `YYYY-MM-DD` or `null`. Win32: the registry `InstallDate` when it is `YYYYMMDD`; any other format or no value is `null`, never a guessed date. MSIX: PowerShell 5.1 has no install date, so this is the UTC creation date of the `InstallLocation` folder, which is the install **or the last update** of the current version; `null` when the folder is not there. Not compared |
@@ -252,7 +257,9 @@ position in each run.
 | `scope` | Win32 only: `machine` (`HKLM`) or `user` (`HKCU`) |
 | `system_component` | Win32 only: `true` when `SystemComponent` = 1 (hidden in Settings), otherwise `false` |
 | `signature_kind` | MSIX only: `Store`, `System`, `Developer` and so on, as read |
-| `from_baseline` | `true` when the subkey could not be opened in this run and the item is the previous baseline's (see "Values not read") |
+| `executables` | portable only: the sorted started `.exe` paths seen in the folder (see "Portable programs") |
+| `found_by` | portable only: the sorted set of `autostart`, `shortcut` and `process` that ever found it |
+| `from_baseline` | `true` when the subkey could not be opened in this run and the item is the previous baseline's (see "Values not read"); for a portable program, when it was not found in this run and whether any of its `executables` exists is not known |
 
 #### Install pairs
 
@@ -272,6 +279,52 @@ the partner may be own or cut from the summary. A missing file, invalid JSON
 or anything other than a list of non-empty strings gives the `not_checked`
 item `per_user_suffixes.json`, and no program has the field: that means "not
 checked", not "no pairs".
+
+#### Portable programs
+
+`portable_programs` lists a folder as a program (`name` the folder name,
+`install_location` the folder; no `version` or `publisher`) when an
+executable in it (a full drive-letter path of an `.exe`, without a variable)
+is the `expanded_path` of a fact of an autostart entry whose `own` is not
+`true` (a target confirmed missing or not checked does not count; only when
+`file_facts` was read), the target of a shortcut (`shortcuts`) or the image of
+a running process (`process_paths`), and the folder:
+
+- is not a drive root, a user-profile root or the profile of this account,
+  and not a folder many programs share (`ProgramData`, `Program Files`, a
+  profile's `Downloads`, `Desktop`, `Documents` or `AppData` folders) or the
+  Windows folder or one under it (an executable started straight from such a
+  folder makes no portable program);
+- lies under no `file_facts` directory (`ProgramFiles`, `ProgramFilesX86`,
+  `SystemRoot`, `System32`) and under no root of `data/portable-excluded.json`
+  (`{"roots": [non-empty strings]}`, environment variables expanded with this
+  run's environment; a root that cannot be expanded excludes nothing and gives
+  the `not_checked` item `portable-excluded.json` when a candidate was found);
+- lies under no `install_location` of a `win32_programs` or `msix_programs`
+  item, and under no folder of a `win32_programs` item's `DisplayIcon` or
+  `UninstallString` executable (read on the collector only, never stored in the
+  item; a drive root, profile root, `file_facts` directory or shared folder is
+  not used); folder boundaries count, names never do;
+- is not, does not lie under and does not hold the `install_location` of a
+  removed `win32_programs` or `msix_programs` program (the previous baseline's
+  and `state/inventory-removed.json`'s, see "Leftovers"): an entry still
+  starting a file there is that program's leftover, not a new program. When
+  the state file cannot be read, the `not_checked` item
+  `portable_programs removed programs` says so.
+
+A portable program of the previous baseline is judged again by these rules
+(failing them, it is `removed`). Found again, its `executables` are this
+run's plus the earlier ones not confirmed missing, and `found_by` grows. Not
+found, it stays without `from_baseline` while one of its executables exists
+(`portable_exists`), is `removed` when every one is confirmed missing, and
+otherwise stays with `from_baseline` and a `not_checked` item. The source is
+`empty` when nothing is found and the baseline holds none; it is `unreadable`
+(the baseline items stay) when none of `file_facts`, `shortcuts` and
+`process_paths` was read, when `portable-excluded.json` cannot be used, when
+`win32_programs` or `msix_programs` was not read, or when the Program Files and
+Windows folders are not known. Facts of autostart entries are matched to all
+program sources, so a target inside a portable folder gets that program with
+`linked_by` `path`.
 
 ### Autostart entries (`s..`)
 
@@ -514,11 +567,13 @@ keeps what was read and `path_is_default` is `null`. The detail file adds
 
 ### Leftovers (`l..`)
 
-A program is removed when its key is in a program source of the previous
-baseline (of the same elevation) and not in that source now; a source not
-read in this run removes nothing, and neither does a program whose display
-name (case-insensitive, exact) is installed now under any key (an upgrade
-that wrote a new key). The removed programs are kept in
+A program is removed when its key is in `win32_programs` or `msix_programs`
+of the previous baseline (of the same elevation) and not in that source now; a
+source not read in this run removes nothing, and neither does a program whose
+display name (case-insensitive, exact) is installed now under any
+`win32_programs` or `msix_programs` key (an upgrade that wrote a new key). A
+`portable_programs` item is inferred from what is started, not an installer's
+record: it is never a removed program and its name keeps none installed. The removed programs are kept in
 `<data dir>/state/inventory-removed.json`
 (`{version: 1, skill, removed: [{key, source, name, publisher,
 install_location, first_seen_gone, seen_elevated, hkcu_absent}]}`,
@@ -624,7 +679,10 @@ Only explicit facts make a part:
 Never a part: an item that is part of Windows (`own: true`); an item with a
 target under the `install_location` of a program installed now; anything of
 a removed program whose `install_location` is, contains or lies under that
-of a program installed now (that program gives no leftover); a missing
+of a program installed now (that program gives no leftover). Here a program
+installed now is a `win32_programs` or `msix_programs` one: a portable
+program is inferred from what is started, not from an installer's record,
+so it hides no leftover; a missing
 target under `%SystemRoot%` (when `%SystemRoot%` is not known, missing
 targets are not grouped and the `not_checked` item `leftovers of missing
 targets` says how many). A similar name is never a fact. Order: the
@@ -669,7 +727,10 @@ A similar name is never a match. Every other folder is unmatched (`matched`
 `false`): no installed program matches it. That is a fact, not a judgement:
 the folder may hold data, settings or a shared component. When a source the
 `target` rule uses, a program source (`win32_programs` or `msix_programs`, whose
-baseline programs then stand in), the target path of an autostart entry, or a
+baseline programs then stand in), `portable_programs` (cause `the source
+portable_programs`; its baseline never stands in: a folder may be a new portable
+program's) or, with `portable_programs` read, one of its inputs `file_facts`,
+`shortcuts` or `process_paths` (cause `the input <name> of portable_programs`), the target path of an autostart entry, or a
 program registry key that is in no baseline was not read, a folder that no rule matches
 has `matched` `null` (not judged): it is listed with that `null` and the
 cause, never as unmatched (the `not_checked` item `vendor_folders` says why and
@@ -686,7 +747,9 @@ path of 1 autostart entry`); and, when `has_entries` is `null`,
 `unread_fields: ["has_entries"]` and `has_entries_reason`. It is `null` when
 the data file could not be used, when no root could be listed, or when
 `win32_programs` or `msix_programs` was not read and the baseline holds none
-of its programs (the `not_checked` item `vendor_folders` names the source).
+of its programs (the `not_checked` item `vendor_folders` names the source);
+`portable_programs` not read never makes it `null`, only leaves the folders no
+rule matches not judged (see above).
 The list is cut to the budget from its end (stages 2 and 11 of "Files and
 output"): `truncated_vendor_folders` counts the cut folders, `--cut` lists
 them (`name` the folder name) and the detail file keeps them; a cut folder is
@@ -807,6 +870,7 @@ Compared fields:
 |---|---|
 | `win32_programs` | `name`, `version`, `publisher` |
 | `msix_programs` | `name`, `version`, `publisher`, `signature_kind` |
+| `portable_programs` | `name`, `executables` |
 | `run_keys`, `startup_folders`, `scheduled_tasks`, `services` | `command`, `targets`, `enabled`, and, per target present on both sides, `facts[<path>].exists`, `.signature_status`, `.signer`, `.program` |
 | `optional_features`, `capabilities` | `state` |
 | `drivers` | `provider`, `version`, `date`, `signer`, `third_party` (not `inf_name`: Windows numbers `oem<N>.inf` anew) |
@@ -1007,6 +1071,10 @@ Besides one item per `unreadable` source (`what` = the source name):
 | `win32_programs key <hive>:<subkey>`, `startup_folders <key>`, `scheduled_tasks <key>`, `services <name>`, `file_facts <target>`, `file_facts more`, `file_facts exists` | one item could not be read (see "Values not read") |
 | `startup_approved <hive>\<key>:<name>` | a `StartupApproved` value that is not binary |
 | `autostart facts` | entries with `own: null`; the reason gives their number |
+| `shortcuts not read` | shortcuts or Start menu / Desktop folders that could not be read; their targets were not looked at for portable programs |
+| `portable_exists` | executables of portable programs whose existence is not known, one item per cause; the program is kept from the baseline |
+| `portable-excluded.json` | roots of the data file that could not be expanded with this run's environment, given only when a candidate folder was found |
+| `portable_programs removed programs` | `state/inventory-removed.json` could not be read, so the folders of programs removed in earlier runs were not kept out of the portable programs |
 | `per_user_suffixes.json` | the suffix file could not be used; no program has `per_user_pair` (see "Install pairs") |
 | `windows-own.json` | the data file could not be used; nothing is own except a certificate trusted by a decision kept in `state/ush-inventory.first-run.json` |
 | `first-run certificates` | `ush-inventory.first-run.json` could not be read (nothing is decided or written; deleting the file starts a new first run), or a new decision could not be saved (it applies to this run only); the reason names the file |
@@ -1033,7 +1101,7 @@ Besides one item per `unreadable` source (`what` = the source name):
 | `leftovers <name>` | a removed program with no leftover found is kept in the state file because this run did not read everything that could hold one; the reason says what |
 | `leftovers of missing targets` | `%SystemRoot%` is not known in this run, so entries with missing targets were not grouped |
 | `summary budget` | the summary is over the budget even with all eight cut lists empty |
-| `vendor_folders` | the data file `vendor-folders.json` could not be used (the reason names it; the source `vendor_folders` is `unreadable`); or `win32_programs` or `msix_programs` was not read and the baseline holds none of its programs; or folders that no rule matches are listed with `matched` `null` (not judged) because an autostart source, a target path or a program registry key was not read (the reason names what and how many). The list `vendor_folders` is `null` in the first two cases |
+| `vendor_folders` | the data file `vendor-folders.json` could not be used (the reason names it; the source `vendor_folders` is `unreadable`); or `win32_programs` or `msix_programs` was not read and the baseline holds none of its programs; or folders that no rule matches are listed with `matched` `null` (not judged) because an autostart source, a program source, `portable_programs` or one of its inputs (`file_facts`, `shortcuts`, `process_paths`), a target path or a program registry key was not read (the reason names what and how many). The list `vendor_folders` is `null` in the first two cases |
 | `vendor_folders <root>` | that root could not be listed; its folders are in no list, those of the other roots are |
 | `vendor_folders rows` | child folder rows of the job that are not a direct child of their root or lack `reparse_point`; the reason gives their number |
 | `collapsed_names.json` | the collapse rule file could not be used; no change is collapsed in the summary `changes` |

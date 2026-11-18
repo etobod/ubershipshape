@@ -2,7 +2,7 @@
 
 The file holds ``{"schema_version": 1, "entries": [...]}``. Each entry is
 ``{kind, key, name, decided_on, period, review_on}``: ``kind`` is ``program`` (an
-inventory program, key ``win32:...`` or ``msix:...``) or ``package`` (a pip or npm
+inventory program, key ``win32:...``, ``msix:...`` or ``portable:...``) or ``package`` (a pip or npm
 package, key ``pip:...`` or ``npm:...``), ``key`` the child's stable key, ``name`` the
 name at decision time (a string, or ``null`` for a pip package whose metadata was not
 read), ``decided_on`` the local date of the decision, ``period`` ``<N>d``, ``<N>m``,

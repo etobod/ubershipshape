@@ -210,8 +210,18 @@ COLLAPSED_NAMES_FILE = (Path(__file__).absolute().parents[1] / "data"
 # run time.
 DRIVER_PACKAGE_GROUPS_FILE = (Path(__file__).absolute().parents[1] / "data"
                               / "driver-package-groups.json")
+# The roots (with environment variables) under which no folder is a portable
+# program; read at run time.
+PORTABLE_EXCLUDED_FILE = (Path(__file__).absolute().parents[1] / "data"
+                          / "portable-excluded.json")
+# The run's environment: the excluded roots and USERPROFILE are expanded with it.
+ENVIRON = os.environ
 
-PROGRAM_SOURCES = ("win32_programs", "msix_programs")
+PROGRAM_SOURCES = ("win32_programs", "msix_programs", "portable_programs")
+# The installed program sources: a folder inside one of their install_location is
+# no portable program.
+INSTALLED_SOURCES = ("win32_programs", "msix_programs")
+
 AUTOSTART_SOURCES = ("run_keys", "startup_folders", "scheduled_tasks", "services")
 COMPONENT_SOURCES = ("optional_features", "capabilities")
 # Things added to the system: the kind of each source's items, in list order.
@@ -228,12 +238,15 @@ ADDITION_SOURCES = ("firewall_rules", "root_certificates", "hosts", "administrat
 SOURCES = (PROGRAM_SOURCES + AUTOSTART_SOURCES + COMPONENT_SOURCES
            + ("drivers", "driver_packages") + ADDITION_SOURCES)
 READ_STATUSES = ("read", "empty")
+# The sources portable_programs finds its executables in (plan 072).
+PORTABLE_INPUTS = ("file_facts", "shortcuts", "process_paths")
 # The fields compared with the baseline, per source. inf_name is not compared:
 # Windows numbers oem<N>.inf anew when a driver is installed again.
 AUTOSTART_FIELDS = ("command", "targets", "enabled")
 COMPARED_FIELDS = {
     "win32_programs": ("name", "version", "publisher"),
     "msix_programs": ("name", "version", "publisher", "signature_kind"),
+    "portable_programs": ("name", "executables"),
     **{source: AUTOSTART_FIELDS for source in AUTOSTART_SOURCES},
     "optional_features": ("state",),
     "capabilities": ("state",),
@@ -462,6 +475,8 @@ foreach ($v in $views) {
         InstallDate = S $k.GetValue('InstallDate')
         SystemComponent = N $k.GetValue('SystemComponent')
         InstallLocation = S $k.GetValue('InstallLocation')
+        DisplayIcon = S $k.GetValue('DisplayIcon')
+        UninstallString = S $k.GetValue('UninstallString')
       })
       $k.Close()
     }
@@ -557,6 +572,48 @@ foreach ($scope in @(@('user', 'Startup'), @('common', 'CommonStartup'))) {
       Arguments = $arguments
     })
   }
+}
+$result = $rows.ToArray()
+"""
+
+# The .lnk files of the Start menu (recursively) and of the Desktop, the
+# account's and the common ones. CreateShortcut on an existing .lnk only reads
+# it; nothing is saved. A shortcut that cannot be read, or a folder that cannot
+# be listed, is one row with Error.
+SHORTCUTS_BODY = r"""$shell = New-Object -ComObject WScript.Shell
+$rows = New-Object System.Collections.Generic.List[object]
+foreach ($place in @(@('Programs', $true), @('CommonPrograms', $true), @('Desktop', $false), @('CommonDesktopDirectory', $false))) {
+  $dir = [Environment]::GetFolderPath($place[0])
+  if (-not $dir -or -not [System.IO.Directory]::Exists($dir)) { continue }
+  $errs = $null
+  $files = @(Get-ChildItem -LiteralPath $dir -Force -File -Filter '*.lnk' -Recurse:$($place[1]) -ErrorAction SilentlyContinue -ErrorVariable errs)
+  foreach ($e in $errs) { $rows.Add([pscustomobject]@{ Folder = $place[0]; Error = S $e.Exception.Message }) }
+  foreach ($f in $files) {
+    try {
+      $lnk = $shell.CreateShortcut($f.FullName)
+      $rows.Add([pscustomobject]@{
+        Folder = $place[0]
+        FileName = S $f.Name
+        FullName = S $f.FullName
+        TargetPath = S $lnk.TargetPath
+        Arguments = S $lnk.Arguments
+      })
+    } catch {
+      $rows.Add([pscustomobject]@{ Folder = $place[0]; FileName = S $f.Name; FullName = S $f.FullName; Error = S $_.Exception.Message })
+    }
+  }
+}
+$result = $rows.ToArray()
+"""
+
+# The image path of each running process. Path is empty, with no error, for
+# most processes of other accounts and of the system without administrator
+# rights: such a row has Path null.
+PROCESS_PATHS_BODY = r"""$rows = New-Object System.Collections.Generic.List[object]
+foreach ($p in @(Get-Process)) {
+  $path = $null
+  try { $path = S $p.Path } catch { $path = $null }
+  $rows.Add([pscustomobject]@{ Name = S $p.ProcessName; Id = $p.Id; Path = $path })
 }
 $result = $rows.ToArray()
 """
@@ -773,6 +830,35 @@ foreach ($p in $paths) {
       SignatureStatus = $status; Signer = $signer; Company = $company
       Sha256 = $sha; Sha256Error = $shaError
     })
+  } catch {
+    $rows.Add([pscustomobject]@{ Kind = 'file'; Path = $path; Error = S $_.Exception.Message })
+  }
+}
+$result = $rows.ToArray()
+"""
+
+# __INPUT__ is replaced by the quoted path of {"paths": [...]} (the executables
+# of the portable programs of the previous baseline, full paths). Nothing is
+# written. Exists is false only when Confirm-Missing confirms it on a local
+# drive; else null with ExistsReason not_local or not_confirmed, as file_facts.
+PORTABLE_EXISTS_BODY = CONFIRM_MISSING_PS + r"""$in = [System.IO.File]::ReadAllText(__INPUT__, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+$rows = New-Object System.Collections.Generic.List[object]
+foreach ($p in @($in.paths)) {
+  $path = S $p
+  if (-not $path) { continue }
+  try {
+    $exists = [System.IO.File]::Exists($path)
+    $reason = $null
+    if (-not $exists) {
+      $exists = $null
+      if (Test-LocalPath $path) {
+        $exists = Confirm-Missing $path
+        if ($null -eq $exists) { $reason = 'not_confirmed' }
+      } else {
+        $reason = 'not_local'
+      }
+    }
+    $rows.Add([pscustomobject]@{ Kind = 'file'; Path = $path; ExpandedPath = $path; Exists = $exists; ExistsReason = $reason })
   } catch {
     $rows.Add([pscustomobject]@{ Kind = 'file'; Path = $path; Error = S $_.Exception.Message })
   }
@@ -1583,6 +1669,9 @@ class Collector:
         self.unread_keys = set()
         # set by apply_firewall_apps: {raw App value, case-folded: expanded path}
         self.firewall_expanded = {}
+        # set by collect_win32: {key: [folder]} of the files its DisplayIcon and
+        # UninstallString name; not stored in the items, so they make no change
+        self.win32_folders = {}
 
     def job(self, job: str, body: str, depth: int = 4, file_name: str | None = None) -> dict:
         """Run one job; its output file is named by ``file_name`` (default: ``job``)."""
@@ -1641,6 +1730,11 @@ def collect_win32(col: Collector, previous: dict) -> tuple[str, dict]:
             "system_component": system_component(row.get("SystemComponent")),
             "install_location": text(row.get("InstallLocation")),
         }
+        folders = [ntpath.dirname(path) for path in (target_path(row.get("DisplayIcon")),
+                                                     target_path(row.get("UninstallString")))
+                   if path and ntpath.dirname(path)]
+        if folders:
+            col.win32_folders[key] = folders
     status, reason = result["status"], result["reason"]
     if status == "read" and not items and denied:
         status = "unreadable"  # every program subkey that came was denied
@@ -2103,10 +2197,11 @@ def null_fact(path) -> dict:
             "linked_by": None}
 
 
-def program_matcher(programs: dict, dirs: dict):
+def program_matcher(programs: dict, dirs: dict, sources=PROGRAM_SOURCES):
     """``match(expanded path, unique=False) -> program key or None``: the longest
-    ``install_location`` that is a folder prefix of the path, case-insensitively;
-    of several programs with that location the first key. With ``unique`` a
+    ``install_location`` of the programs of ``sources`` that is a folder prefix of
+    the path, case-insensitively; of several programs with that location the first
+    key. With ``unique`` a
     location several programs share gives None: the path is not one program's.
 
     A drive root and the four directories of ``dirs`` (``%ProgramFiles%`` and the
@@ -2114,7 +2209,7 @@ def program_matcher(programs: dict, dirs: dict):
     """
     skipped = {d.rstrip("\\/").casefold() for d in dirs.values() if text(d)}
     owners = {}
-    for source in PROGRAM_SOURCES:
+    for source in sources:
         for key, item in (programs.get(source) or {}).items():
             location = clean_path(item.get("install_location") if isinstance(item, dict) else None)
             location = location.rstrip("\\/") if location else None
@@ -2135,6 +2230,23 @@ def program_matcher(programs: dict, dirs: dict):
         return None
 
     return match
+
+
+def link_fact(fact: dict, match) -> None:
+    """Set ``program`` (the program whose location holds the fact's expanded path) and
+    ``linked_by`` (``path`` when only that program has the location) of a fact."""
+    fact["program"] = match(fact.get("expanded_path"))
+    fact["linked_by"] = "path" if match(fact.get("expanded_path"), True) else None
+
+
+def link_facts(current: dict, match) -> None:
+    """Match the facts of every autostart entry read in this run again (``link_fact``)."""
+    for source in AUTOSTART_SOURCES:
+        for item in (current.get(source) or {}).values():
+            if not item.get("from_baseline"):
+                for fact in item.get("facts") or []:
+                    if isinstance(fact, dict):
+                        link_fact(fact, match)
 
 
 def entry_own(item: dict, config: dict):
@@ -2243,16 +2355,14 @@ def collect_facts(col: Collector, current: dict, previous: dict, programs: dict,
                 elif target is not None:
                     fact["sha256_error"] = "the job gave no row for this file"
                     unread.add("facts")
-                fact["program"] = match(fact["expanded_path"])
-                fact["linked_by"] = "path" if match(fact["expanded_path"], True) else None
+                link_fact(fact, match)
                 facts.append(hash_reason(fact, "the file could not be checked"))
         else:
             for target in item["targets"]:
                 fact = null_fact(target)
                 if target in known:
                     fact.update(carried_fact(known[target]))
-                    fact["program"] = match(fact["expanded_path"])
-                    fact["linked_by"] = "path" if match(fact["expanded_path"], True) else None
+                    link_fact(fact, match)
                     item["facts_from_baseline"] = True
                     col.carried_facts.setdefault((source, key), set()).add(target)
                 elif target is not None:
@@ -2292,6 +2402,350 @@ EXISTS_UNKNOWN = {
                      "it is missing (access denied, or the drive is not ready)",
     None: "the check gave no answer",
 }
+
+
+# --- portable programs ------------------------------------------------------
+# A started file that can make a portable program: a full path on a drive letter
+# ending in .exe.
+PORTABLE_EXE = re.compile(r"^[a-z]:\\.+\.exe$", re.IGNORECASE)
+# How a portable program was found, in item order.
+FOUND_BY = ("autostart", "shortcut", "process")
+ENV_VARIABLE = re.compile(r"%([^%]+)%")
+
+
+def env_value(name: str):
+    """The run's environment variable ``name`` (``ENVIRON``, case-insensitively),
+    or None when it is not set or empty."""
+    folded = name.casefold()
+    for key, value in ENVIRON.items():
+        if str(key).casefold() == folded:
+            return text(value)
+    return None
+
+
+def expand_environment(value: str):
+    """``value`` with each ``%NAME%`` replaced from the run's environment; None when a
+    variable is not set or the result still holds a ``%``."""
+    missing = []
+
+    def replace(match):
+        found = env_value(match.group(1))
+        if found is None:
+            missing.append(match.group(1))
+            return match.group(0)
+        return found
+
+    result = ENV_VARIABLE.sub(replace, value)
+    return None if missing or "%" in result else result
+
+
+def load_portable_excluded(path: Path):
+    """The raw roots of ``portable-excluded.json`` as ``(list, None)``, or
+    ``(None, reason)``. The file holds ``{"roots": [non-empty strings]}``."""
+    name = Path(path).name
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        return None, f"{name} could not be read: {type(exc).__name__}: {exc}"
+    roots = data.get("roots") if isinstance(data, dict) else None
+    if not is_strings(roots) or not all(root.strip() for root in roots):
+        return None, f"{name} does not hold an object with roots, a list of non-empty strings"
+    return roots, None
+
+
+def portable_exe(path):
+    """``path`` without quotes when it is a full drive-letter path of an ``.exe``
+    without a variable, else None (a URL, a document, a UNC path, no path)."""
+    path = clean_path(path)
+    if path is None or "%" in path or not PORTABLE_EXE.match(path):
+        return None
+    return path
+
+
+def skip_named(col: Collector, what: str, items: list, reason: str) -> None:
+    """One not_checked item naming ``items`` (at most ``APP_UNREAD_NAMED``, then a
+    count of the rest) with ``reason``."""
+    items = list(dict.fromkeys(items))
+    named = ", ".join(items[:APP_UNREAD_NAMED])
+    more = len(items) - APP_UNREAD_NAMED
+    if more > 0:
+        named += f" and {more} more"
+    col.skip(what, f"{len(items)}: {named}; {reason}")
+
+
+def collect_shortcuts(col: Collector) -> tuple[str, list]:
+    """``(status, [target])``: the targets of the ``.lnk`` files of the Start menu
+    (recursively) and of the Desktop; a shortcut or a folder that could not be read
+    is named in not_checked."""
+    result = col.job("shortcuts", SHORTCUTS_BODY)
+    targets, failed = [], []
+    for row in result["rows"]:
+        error = text(row.get("Error"))
+        if error is not None:
+            failed.append(f"{text(row.get('FullName')) or text(row.get('Folder'))} ({error})")
+            continue
+        name = text(row.get("FileName"))
+        target = text(row.get("TargetPath"))
+        if name is not None and name.casefold().endswith(".lnk") and target is not None:
+            targets.append(target)
+    status, reason = entry_status("shortcuts", result, targets, len(failed))
+    col.record("shortcuts", status, reason)
+    if failed:
+        skip_named(col, "shortcuts not read", failed,
+                   "these shortcuts or folders could not be read, so their targets were "
+                   "not looked at for portable programs")
+    return status, targets
+
+
+def collect_process_paths(col: Collector) -> tuple[str, list]:
+    """``(status, [image path])`` of the running processes. A process whose path
+    could not be read (null or empty, most of the other accounts' processes
+    without administrator rights) is counted in ``process_paths_unread`` of its
+    source entry, never a path."""
+    result = col.job("process_paths", PROCESS_PATHS_BODY)
+    paths, unread = [], 0
+    for row in result["rows"]:
+        path = text(row.get("Path"))
+        if path is None or not path.strip():
+            unread += 1
+        else:
+            paths.append(path)
+    status, reason = result["status"], result["reason"]
+    if status == "read" and not paths:
+        status = "unreadable"
+        reason = f"the path of none of the {unread} process(es) could be read"
+    col.record("process_paths", status, reason,
+               process_paths_unread=unread if result["status"] == "read" else None)
+    return status, paths
+
+
+def check_portable_exists(col: Collector, paths: list) -> dict:
+    """``{path, case-folded: True | False | None}`` by the ``portable_exists`` job;
+    None (not known) is named in not_checked by its cause."""
+    known = {path.casefold(): None for path in paths}
+    if not paths:
+        return known
+    input_path = col.work / f"inventory-{col.stamp}.portable_exists.input.json"
+    try:
+        input_path.write_text(json.dumps({"paths": paths}, ensure_ascii=True), encoding="utf-8")
+    except OSError as exc:
+        result = {"status": "unreadable", "rows": [],
+                  "reason": f"the path list could not be written: {type(exc).__name__}: {exc}"}
+    else:
+        body = PORTABLE_EXISTS_BODY.replace("__INPUT__", psrun.ps_quote(input_path))
+        result = col.job("portable_exists", body)
+    col.record("portable_exists", result["status"], result["reason"])
+    if result["status"] not in READ_STATUSES:
+        return known
+    rows = {}
+    for row in result["rows"]:
+        if text(row.get("Path")):
+            rows.setdefault(text(row.get("Path")).casefold(), row)
+    causes = {}
+    for path in paths:
+        row = rows.get(path.casefold())
+        if row is None:
+            cause = "the job gave no row for it"
+        elif text(row.get("Error")) is not None:
+            cause = f"it could not be checked: {text(row.get('Error'))}"
+        elif isinstance(row.get("Exists"), bool):
+            known[path.casefold()] = row["Exists"]
+            continue
+        else:
+            cause = EXISTS_UNKNOWN.get(text(row.get("ExistsReason")), EXISTS_UNKNOWN[None])
+        causes.setdefault(cause, []).append(path)
+    for cause, unknown in sorted(causes.items()):
+        skip_named(col, "portable_exists", unknown,
+                   f"existence not known: {cause}; a portable program with no executable "
+                   f"known to exist is kept from the baseline")
+    return known
+
+
+def portable_blocker(statuses: dict, dirs: dict, excluded_reason):
+    """Why no folder can be judged in this run, or None."""
+    if excluded_reason is not None:
+        return f"the excluded roots are not known: {excluded_reason}"
+    unread = [source for source in INSTALLED_SOURCES
+              if statuses.get(source) not in READ_STATUSES]
+    if unread:
+        return (f"{' and '.join(unread)} not read, so a folder of an installed program "
+                f"could pass for a portable one")
+    if not all(text(dirs.get(name)) for name in ("ProgramFiles", "SystemRoot")):
+        return ("the Program Files and Windows folders are not known (file_facts gave "
+                "them neither in this run nor in the baseline)")
+    return None
+
+
+def collect_portable(col: Collector, current: dict, previous: dict, programs: dict,
+                     statuses: dict, shortcuts: tuple, processes: tuple,
+                     removed_state: tuple) -> tuple[str, dict]:
+    """``(status, {key: item})`` of ``portable_programs``.
+
+    A folder holding an executable that an autostart entry not ``own`` starts (its
+    fact's ``expanded_path``; a target confirmed missing or not checked in this run
+    does not count), that a Start menu or Desktop shortcut targets
+    (``shortcuts``), or that a running process was started from (``processes``) is
+    a portable program, unless it is a drive root or a user-profile root, lies under
+    a ``file_facts`` directory or a ``portable-excluded.json`` root, lies under an
+    ``install_location`` of ``INSTALLED_SOURCES``, or under the folder of a
+    ``win32_programs`` item's ``DisplayIcon`` or ``UninstallString`` file (one that
+    ``usable_folder`` accepts), or is, lies under or holds the ``install_location`` of
+    a removed ``INSTALLED_SOURCES`` program (``removed_programs`` over the previous
+    baseline and ``removed_state``, the ``(entries, reason)`` of
+    ``state/inventory-removed.json``): an entry still starting a file there is that
+    program's leftover, not a new program. Key ``portable:<folder, case-folded>``.
+
+    An item of the previous baseline is judged by the same rules (failing them, it
+    is removed); not found in this run, it stays while one of its executables
+    exists (``portable_exists``), is removed when all are confirmed missing, and is
+    kept with ``from_baseline`` otherwise. When no folder can be judged
+    (``portable_blocker``) the source is unreadable, so the baseline items stay.
+    """
+    before = {key: item for key, item in (previous.get("portable_programs") or {}).items()
+              if isinstance(item, dict)}
+    dirs = {name: value.get("path") for name, value in (current.get("file_facts") or {}).items()
+            if isinstance(value, dict)}
+    inputs = {"file_facts": statuses.get("file_facts"), "shortcuts": shortcuts[0],
+              "process_paths": processes[0]}
+    if not any(status in READ_STATUSES for status in inputs.values()):
+        col.record("portable_programs", "unreadable",
+                   f"none of {', '.join(inputs)} was read, so nothing tells which "
+                   f"executables are started")
+        return "unreadable", {}
+
+    # {folder, case-folded: {folder, exes {path, case-folded: path}, found_by}}
+    found = {}
+
+    def add(path, how):
+        exe = portable_exe(path)
+        if exe is None:
+            return
+        folder = ntpath.dirname(exe).rstrip("\\/")
+        entry = found.setdefault(folder.casefold(),
+                                 {"folder": folder, "exes": {}, "found_by": set()})
+        entry["exes"].setdefault(exe.casefold(), exe)
+        entry["found_by"].add(how)
+
+    if statuses.get("file_facts") in READ_STATUSES:
+        for source in AUTOSTART_SOURCES:
+            for item in (current.get(source) or {}).values():
+                if item.get("from_baseline") or item.get("own") is True:
+                    continue
+                for fact in item.get("facts") or []:
+                    if isinstance(fact, dict) and fact.get("exists") is True \
+                            and "check_error" not in fact:
+                        add(fact.get("expanded_path"), "autostart")
+    for target in shortcuts[1]:
+        add(target, "shortcut")
+    for path in processes[1]:
+        add(path, "process")
+    if not found and not before:
+        col.record("portable_programs", "empty", None)
+        return "empty", {}
+
+    raw_roots, excluded_reason = load_portable_excluded(PORTABLE_EXCLUDED_FILE)
+    blocker = portable_blocker(statuses, dirs, excluded_reason)
+    if blocker is not None:
+        col.record("portable_programs", "unreadable", blocker)
+        return "unreadable", {}
+
+    roots, unexpanded = [], []
+    for raw in raw_roots:
+        root = expand_environment(raw)
+        root = root.rstrip("\\/") if root else None
+        if root and FULL_PATH.match(root + "\\"):
+            roots.append(root)
+        else:
+            unexpanded.append(raw)
+    dir_folders = [path for path in dirs.values() if text(path)]
+    skipped = {path.rstrip("\\/").casefold() for path in dir_folders + roots}
+    system_root = text(dirs.get("SystemRoot"))
+    profile = env_value("USERPROFILE")
+    installed = program_matcher(programs, dirs, INSTALLED_SOURCES)
+    named_folders = [folder for folders in col.win32_folders.values() for raw in folders
+                     for folder in [usable_folder(raw, skipped, system_root)]
+                     if folder and not PROFILE_ROOT.fullmatch(folder)]
+    removed_entries, removed_reason = removed_state
+    removed, _ = removed_programs(previous, programs, removed_entries, "")
+    removed_folders = [folder for entry in removed if entry.get("source") in INSTALLED_SOURCES
+                       for folder in [usable_folder(entry.get("install_location"), skipped,
+                                                    system_root)]
+                       if folder]
+    if removed_reason is not None and found:
+        col.skip("portable_programs removed programs",
+                 f"the programs removed in earlier runs are not known, so their folders "
+                 f"were not kept out of the portable programs: {removed_reason}")
+
+    def portable_folder(folder):
+        return not (usable_folder(folder, skipped, system_root) is None
+                    or DRIVE_ROOT.match(folder) or PROFILE_ROOT.fullmatch(folder)
+                    or (profile is not None
+                        and folder.casefold() == profile.rstrip("\\/").casefold())
+                    or any(under(folder, root) for root in dir_folders + roots)
+                    or installed(folder + "\\") is not None
+                    or any(under(folder, other) or under(other, folder)
+                           for other in removed_folders)
+                    or any(under(folder, other) for other in named_folders))
+
+    found = {folded: entry for folded, entry in found.items()
+             if portable_folder(entry["folder"])}
+    if unexpanded and found:
+        col.skip("portable-excluded.json",
+                 f"the roots {', '.join(unexpanded)} could not be expanded with this "
+                 f"run's environment, so folders under them were not excluded from the "
+                 f"portable programs")
+
+    # The baseline items that still pass the rules; the others are removed.
+    kept = {}
+    for key, item in sorted(before.items()):
+        folder = clean_path(item.get("install_location"))
+        if folder and portable_folder(folder.rstrip("\\/")):
+            kept[key] = item
+    seen = {folded for entry in found.values() for folded in entry["exes"]}
+    unseen = {}
+    for item in kept.values():
+        for exe in item.get("executables") or []:
+            if isinstance(exe, str) and exe.casefold() not in seen:
+                unseen.setdefault(exe.casefold(), exe)
+    exists = check_portable_exists(col, list(unseen.values()))
+
+    def still_there(exes):
+        return {exe.casefold(): exe for exe in exes
+                if isinstance(exe, str) and exists.get(exe.casefold()) is not False}
+
+    items = {}
+    for folded, entry in sorted(found.items()):
+        key = f"portable:{folded}"
+        old = kept.get(key) or {}
+        folder = text(old.get("install_location")) or entry["folder"]
+        exes = {**still_there(old.get("executables") or []), **entry["exes"]}
+        items[key] = {
+            "name": text(old.get("name")) or ntpath.basename(folder),
+            "install_location": folder,
+            "executables": sorted(exes.values(), key=lambda p: (p.casefold(), p)),
+            "found_by": sorted(entry["found_by"] | {how for how in old.get("found_by") or []
+                                                    if how in FOUND_BY}),
+        }
+    for key, old in kept.items():
+        if key in items:
+            continue
+        exes = [exe for exe in old.get("executables") or [] if isinstance(exe, str)]
+        states = [exists.get(exe.casefold()) for exe in exes]
+        if True in states:
+            item = copy.deepcopy(old)
+            item.pop("from_baseline", None)
+            item["executables"] = list(still_there(exes).values())
+            items[key] = item
+        elif exes and all(state is False for state in states):
+            continue  # every executable confirmed missing: removed
+        elif exes:
+            item = copy.deepcopy(old)
+            item["from_baseline"] = True  # not confirmed in this run
+            items[key] = item
+            col.unread_keys.add(("portable_programs", key))
+    status = "read" if items else "empty"
+    col.record("portable_programs", status, None)
+    return status, items
 
 
 def skip_keyless(col: Collector, source: str, field: str, count: int) -> None:
@@ -3182,16 +3636,30 @@ def collect(run_ps, work: Path, stamp: str, previous: dict, config: dict, admin:
         col, previous.get("scheduled_tasks") or {}, admin)
     statuses["services"], current["services"] = collect_services(
         col, previous.get("services") or {}, (reference or {}).get("services") or {})
+    # The starts that can show a portable program, read with the autostart sources.
+    shortcuts = collect_shortcuts(col)
+    processes = collect_process_paths(col)
 
     # Targets are matched to the programs as they will be saved: an unread
     # program source brings its items from the previous baseline.
+    programs = baseline.merge_sources(
+        {s: previous[s] for s in INSTALLED_SOURCES if s in previous},
+        {s: current[s] for s in INSTALLED_SOURCES},
+        {s: statuses[s] for s in INSTALLED_SOURCES},
+    )
+    statuses["file_facts"], current["file_facts"] = collect_facts(
+        col, current, previous, programs, config)
+    statuses["portable_programs"], current["portable_programs"] = collect_portable(
+        col, current, previous, programs, statuses, shortcuts, processes,
+        load_removed(first_run["dir"]))
+    # The facts are matched again with the portable programs as they will be saved.
     programs = baseline.merge_sources(
         {s: previous[s] for s in PROGRAM_SOURCES if s in previous},
         {s: current[s] for s in PROGRAM_SOURCES},
         {s: statuses[s] for s in PROGRAM_SOURCES},
     )
-    statuses["file_facts"], current["file_facts"] = collect_facts(
-        col, current, previous, programs, config)
+    link_facts(current, program_matcher(
+        programs, {n: v.get("path") for n, v in current["file_facts"].items()}))
 
     statuses["optional_features"], current["optional_features"] = collect_features(col)
     statuses["capabilities"], current["capabilities"] = collect_capabilities(col, admin)
@@ -3681,9 +4149,11 @@ def summary_addition(entry: dict) -> dict:
 
 def summary_program(program: dict) -> dict:
     """One listed program as it goes to the summary: without ``install_location``,
-    ``source`` and ``own`` (the detail file keeps them)."""
+    ``own`` and ``source`` (the detail file keeps them); a portable program keeps
+    ``source``, as it has no version or publisher that would tell what it is."""
     return {k: v for k, v in program.items()
-            if k not in ("install_location", "source", "own")}
+            if k not in ("install_location", "own")
+            and not (k == "source" and v != "portable_programs")}
 
 
 def summary_fact(fact):
@@ -3725,8 +4195,8 @@ def compare_autostart(before_items: dict, after_items: dict, skip_facts: bool,
     sides have, as ``facts[<path>].<field>``.
 
     ``facts`` is skipped when ``file_facts`` was not read in this run or either side
-    has it in ``unread_fields``; ``program`` likewise when a program source was not
-    read, or when ``compare_view`` took a program from the history copy (it names
+    has it in ``unread_fields``; ``program`` likewise when a win32 or msix program
+    source was not read, or when ``compare_view`` took a program from the history copy (it names
     ``program`` in ``unread_fields``). A target added or removed is a change of
     ``targets`` only.
     """
@@ -3890,16 +4360,19 @@ def removed_programs(previous: dict, programs_now: dict, state_entries: list,
                      today: str) -> tuple[list, list]:
     """``(entries, new)``: the removed programs to look for leftovers of.
 
-    First the entries of the state file whose program is not installed now, then
-    the programs of the previous baseline that are not installed now (``new``, the
+    Only win32 and msix programs count (``INSTALLED_SOURCES``): a portable item is
+    inferred from what is started, not an installer's record, so it neither removes
+    nor keeps a program. First the entries of the state file whose program is not
+    installed now, then the win32/msix programs of the previous baseline that are
+    not installed now (``new``, the
     ones first seen gone ``today``). ``programs_now`` are the program sources as
     they are saved, so a source not read in this run removes nothing. A program
     whose display name (case-insensitive, exact) is installed now under any key is
     not removed: an upgrade may write a new key, often without ``InstallLocation``.
     """
-    installed = {(source, key) for source in PROGRAM_SOURCES
+    installed = {(source, key) for source in INSTALLED_SOURCES
                  for key in (programs_now.get(source) or {})}
-    names = {name.casefold() for source in PROGRAM_SOURCES
+    names = {name.casefold() for source in INSTALLED_SOURCES
              for item in (programs_now.get(source) or {}).values() if isinstance(item, dict)
              for name in [text(item.get("name"))] if name}
 
@@ -3915,7 +4388,7 @@ def removed_programs(previous: dict, programs_now: dict, state_entries: list,
             kept["seen_elevated"] = entry.get("seen_elevated") is True
             kept["hkcu_absent"] = entry.get("hkcu_absent") is True
             entries.append(kept)
-    for source in PROGRAM_SOURCES:
+    for source in INSTALLED_SOURCES:
         for key, item in sorted((previous.get(source) or {}).items()):
             ident = (source, key)
             if ident in installed or ident in seen or not isinstance(item, dict)                     or still_there(text(item.get("name"))):
@@ -4183,14 +4656,16 @@ def find_vendor_folders(col: Collector, config, rows: list, programs: dict, auto
     and its ``matched`` (false, or null when not judged).
 
     ``listed`` and every count are None when the data file could not be used or no
-    root could be listed; ``listed`` is None also when a program source was not read
-    and the baseline has none of its programs. Whenever ``listed`` is None the
-    section's ``folders`` is None too; its ``roots`` is None only when the data file
-    could not be used (the roots are then unknown). When an autostart source, a
-    program source (whose baseline programs stand in), a target path or a program
-    registry key was not read, a folder no rule matches is listed with ``matched``
-    None and ``not_judged`` (the shared cause text, also in not_checked), counted in
-    ``vendor_folders_unknown``: no folder is unmatched because something was not read.
+    root could be listed; ``listed`` is None also when a win32 or msix program
+    source was not read and the baseline has none of its programs (portable_programs
+    never stops the listing). Whenever ``listed`` is None the section's ``folders``
+    is None too; its ``roots`` is None only when the data file could not be used
+    (the roots are then unknown). When an autostart source, a win32 or msix program
+    source (whose baseline programs stand in), portable_programs or one of
+    its inputs (``PORTABLE_INPUTS``), a target path or a program registry key was not read,
+    a folder no rule matches is listed with ``matched`` None and ``not_judged`` (the
+    shared cause text, also in not_checked), counted in ``vendor_folders_unknown``:
+    no folder is unmatched because something was not read.
     """
     counts = dict.fromkeys(VENDOR_COUNTS)
     section = {"roots": None if config is None else
@@ -4203,7 +4678,7 @@ def find_vendor_folders(col: Collector, config, rows: list, programs: dict, auto
     counts.update(vendor_folders_read=len(folders), reparse_points=reparse,
                   installer_guid_folders=guid)
 
-    missing = [s for s in PROGRAM_SOURCES
+    missing = [s for s in INSTALLED_SOURCES
                if statuses.get(s) not in READ_STATUSES and not previous.get(s)]
     if missing:
         col.skip("vendor_folders",
@@ -4241,7 +4716,23 @@ def find_vendor_folders(col: Collector, config, rows: list, programs: dict, auto
     causes = [f"the source {s}" for s in AUTOSTART_SOURCES
               if statuses.get(s) not in READ_STATUSES]
     causes += [f"the source {s} (only its baseline programs were matched)"
-               for s in PROGRAM_SOURCES if statuses.get(s) not in READ_STATUSES]
+               for s in INSTALLED_SOURCES if statuses.get(s) not in READ_STATUSES]
+    # A portable program is found only from what is started, so its baseline cannot
+    # stand in: not read, or read without one of its inputs, an unowned folder may
+    # be a portable program's: not judged, never unmatched.
+    if statuses.get("portable_programs") not in READ_STATUSES:
+        causes.append("the source portable_programs")
+    else:
+        input_status = {e.get("name"): e.get("status") for e in col.sources}
+        causes += [f"the input {name} of portable_programs" for name in PORTABLE_INPUTS
+                   if input_status.get(name) not in READ_STATUSES]
+        # Read with gaps: a shortcut that could not be read may start one.
+        # (process_paths_unread is left out: other accounts' processes are unread
+        # on every machine without administrator rights.)
+        if input_status.get("shortcuts") in READ_STATUSES and any(
+                item.get("what") == "shortcuts not read" for item in col.not_checked):
+            causes.append("the input shortcuts of portable_programs (some shortcuts "
+                          "could not be read)")
     if unknown_targets:
         causes.append(f"the target path of {unknown_targets} autostart entr"
                       f"{'y' if unknown_targets == 1 else 'ies'}")
@@ -4446,9 +4937,10 @@ def find_leftovers(col: Collector, removed: list, programs_now: dict, dirs: dict
       target.
 
     Never a leftover: an item that is Windows' own, anything with a target under
-    the ``install_location`` of a program installed now, the folder of a removed
-    program that is, contains or lies under such a location (nor anything under
-    it), and a missing target under ``%SystemRoot%``. When ``%SystemRoot%`` is not
+    the ``install_location`` of a win32/msix program installed now (a portable
+    program is inferred from what is started, not an installer's record), the folder
+    of a removed program that is, contains or lies under such a location (nor
+    anything under it), and a missing target under ``%SystemRoot%``. When ``%SystemRoot%`` is not
     known, missing targets are not grouped and not_checked says so. A removed
     program without a usable ``install_location`` (see ``usable_folder``: also a
     folder many programs share, or one under the Windows folder) is looked at no
@@ -4467,8 +4959,8 @@ def find_leftovers(col: Collector, removed: list, programs_now: dict, dirs: dict
     dir_paths = {name: value.get("path") for name, value in (dirs or {}).items()
                  if isinstance(value, dict)}
     skipped = {d.rstrip("\\/").casefold() for d in dir_paths.values() if text(d)}
-    current_match = program_matcher(programs_now, dir_paths)
-    installed = [folder for source in PROGRAM_SOURCES
+    current_match = program_matcher(programs_now, dir_paths, INSTALLED_SOURCES)
+    installed = [folder for source in INSTALLED_SOURCES
                  for item in (programs_now.get(source) or {}).values()
                  if isinstance(item, dict)
                  for folder in [usable_folder(item.get("install_location"), skipped,
@@ -6238,7 +6730,7 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
     changes, listed_changes, own_changes = build_changes(
         reference_sources, compared, comparison, own_kinds,
         skip_facts=statuses["file_facts"] not in READ_STATUSES,
-        skip_program=any(statuses[s] not in READ_STATUSES for s in PROGRAM_SOURCES),
+        skip_program=any(statuses[s] not in READ_STATUSES for s in INSTALLED_SOURCES),
     )
     programs, own_count = build_programs(current, own_kinds, numbering)
     collapse_rules, collapse_reason = load_collapsed(COLLAPSED_NAMES_FILE)

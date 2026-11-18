@@ -75,6 +75,7 @@ from .fakes_vendor_folders import (
     listing,
     root_row,
 )
+from .test_portable import exists_row, portable_key, shortcut
 
 DAY1 = NOW
 DAY2 = NOW + timedelta(days=3)
@@ -751,6 +752,59 @@ class TestVendorFolderNotListed(FootprintsTestCase):
         self.collect(machine(), data_dir=data_dir, now=DAY2)
         self.assert_trace(self.trace(data_dir, CONTOSO_KEY, CONTOSO_FOLDER_KEY),
                           day(DAY1), True, None)
+
+
+PORTABLE_FOLDER = "D:\\Tools\\Fab"
+PORTABLE_KEY = portable_key(PORTABLE_FOLDER)
+PORTABLE_EXE = f"{PORTABLE_FOLDER}\\fab.exe"
+PORTABLE_TRAY_EXE = f"{PORTABLE_FOLDER}\\fabtray.exe"
+PORTABLE_TRAY = run_value("FabrikamTray", f'"{PORTABLE_TRAY_EXE}" --tray')
+PORTABLE_TRAY_KEY = "run:hkcu\\Run:FabrikamTray"
+
+
+class TestPortableProgram(FootprintsTestCase):
+    """Plan 072, milestone M1, K7: a portable program has a footprint like any program.
+
+    The ``shortcuts``, ``process_paths`` and ``portable_exists`` row shapes are those of
+    ``test_portable.py``."""
+
+    def test_portable_program(self):
+        data_dir = self.data_dir()
+        # Day 1: a Start menu shortcut and a Run value start executables in D:\Tools\Fab.
+        self.collect(machine(runs=(PORTABLE_TRAY,), rules=(), folders=(),
+                             file_facts=facts(*CLEAN_FILES, *FILES,
+                                              file_row(PORTABLE_TRAY_EXE, signer=VENDOR)),
+                             shortcuts=ok([shortcut(PORTABLE_EXE, name="Fab.lnk")]),
+                             process_paths=ok([])),
+                     data_dir=data_dir, now=DAY1)
+        with self.subTest(day=1, point="entry for the portable program"):
+            entry = self.program(data_dir, PORTABLE_KEY)
+            self.assertEqual(entry.get("name"), "Fab", entry)
+            self.assert_dates(entry, day(DAY1), None)
+        with self.subTest(day=1, point="autostart trace in its folder linked by path"):
+            trace = self.trace(data_dir, PORTABLE_KEY, PORTABLE_TRAY_KEY)
+            self.assert_trace(trace, day(DAY1), True, None)
+            self.assertEqual(trace.get("linked_by"), "path", trace)
+
+        # Day 2: nothing that feeds portable_programs could be read.
+        self.collect(machine(runs=(), rules=(), folders=(),
+                             run_keys=failure("Invented registry error"),
+                             shortcuts=failure("Invented WScript.Shell error"),
+                             process_paths=failure("Invented Get-Process error"),
+                             portable_exists=failure("Invented Test-Path error")),
+                     data_dir=data_dir, now=DAY2)
+        with self.subTest(day=2, point="portable_programs not read: entry kept"):
+            self.assert_dates(self.program(data_dir, PORTABLE_KEY), day(DAY1), None)
+
+        # Day 3: everything read; nothing starts the executables and both are confirmed
+        # missing, so the program is removed.
+        self.collect(machine(runs=(), rules=(), folders=(),
+                             shortcuts=ok([]), process_paths=ok([]),
+                             portable_exists=ok([exists_row(PORTABLE_EXE, False),
+                                                 exists_row(PORTABLE_TRAY_EXE, False)])),
+                     data_dir=data_dir, now=DAY3)
+        with self.subTest(day=3, point="removed program gets gone_since"):
+            self.assert_dates(self.program(data_dir, PORTABLE_KEY), day(DAY1), day(DAY3))
 
 
 class TestInventoryRun(FootprintsTestCase):

@@ -317,7 +317,8 @@ def slim_program_rows(count):
 
 
 def slim_tray_target(i):
-    return f"C:\\Invented\\Slim Tray {i:02d}\\tray.exe"
+    # Under Program Files: a target outside it would make a portable program.
+    return f"C:\\Program Files\\Invented Slim Tray {i:02d}\\tray.exe"
 
 
 def slim_agent_target(i):

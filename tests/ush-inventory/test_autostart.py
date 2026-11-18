@@ -401,9 +401,12 @@ class TestTasks(AutostartTestCase):
 
 
 class TestProgram(AutostartTestCase):
-    def run_with(self, programs, targets):
-        """Run with ``programs`` as Win32 rows and one hkcu Run value per target."""
-        responses = clean_responses(extra_files=[file_row(p) for p in targets.values()])
+    def run_with(self, programs, targets, missing=()):
+        """Run with ``programs`` as Win32 rows and one hkcu Run value per target;
+        the targets named in ``missing`` are not on disk (so no portable program)."""
+        responses = clean_responses(extra_files=[
+            file_row(p, exists=False, signer=None) if name in missing else file_row(p)
+            for name, p in targets.items()])
         responses["win32_programs"] = ok(programs)
         responses["run_keys"] = ok([run_value(name, path) for name, path in targets.items()])
         return self.collect(FakePowerShell(responses))
@@ -425,7 +428,7 @@ class TestProgram(AutostartTestCase):
                 "InTool2": "C:\\Apps\\Tool2\\x.exe",
                 "Outside": "D:\\Elsewhere\\y.exe",
                 "InProgramFiles": "C:\\Program Files\\Other\\o.exe",
-            })
+            }, missing=("InTool2", "Outside"))
             self.assertEqual(self.program_of(summary, "InTool"), "win32:hklm64:InventedTool")
             self.assertIsNone(self.program_of(summary, "InTool2"))
             self.assertIsNone(self.program_of(summary, "Outside"))
@@ -455,10 +458,10 @@ class TestFacts(AutostartTestCase):
         data_dir = self.data_dir()
         tool_target = "%ProgramFiles%\\Tool\\t.exe"
         tool_expanded = "C:\\Program Files\\Tool\\t.exe"
-        vendor_target = "C:\\Apps\\Svc\\svc.exe"
+        vendor_target = "C:\\Program Files\\Apps\\Svc\\svc.exe"
         win_target = "C:\\Windows\\System32\\inventedwin.exe"
         new_svc_target = "C:\\Windows\\System32\\inventednew.exe"
-        new_run_target = "C:\\Apps\\NewRun\\n.exe"
+        new_run_target = "C:\\Program Files\\Apps\\NewRun\\n.exe"
 
         programs = ok([win32("InventedTool", "Invented Tool",
                              install_location="C:\\Program Files\\Tool")])
@@ -538,15 +541,15 @@ class TestFacts(AutostartTestCase):
 class TestChanges(AutostartTestCase):
     def test_autostart_changes(self):
         data_dir = self.data_dir()
-        vendor_target = "C:\\Apps\\Vendor\\vsvc.exe"
+        vendor_target = "C:\\Program Files\\Apps\\Vendor\\vsvc.exe"
         ms_target = "C:\\Windows\\System32\\inventedms.exe"
-        new_target = "C:\\Apps\\New\\new.exe"
-        toggle_run = run_value("InventedToggle", "C:\\Apps\\Toggle\\toggle.exe")
-        not_set_run = run_value("InventedNotSet", "C:\\Apps\\NotSet\\notset.exe")
+        new_target = "C:\\Program Files\\Apps\\New\\new.exe"
+        toggle_run = run_value("InventedToggle", "C:\\Program Files\\Apps\\Toggle\\toggle.exe")
+        not_set_run = run_value("InventedNotSet", "C:\\Program Files\\Apps\\NotSet\\notset.exe")
         vendor_svc = service("InventedVendorSvc", f'"{vendor_target}"')
         common_files = [
-            file_row("C:\\Apps\\Toggle\\toggle.exe", signer=VENDOR),
-            file_row("C:\\Apps\\NotSet\\notset.exe", signer=VENDOR),
+            file_row("C:\\Program Files\\Apps\\Toggle\\toggle.exe", signer=VENDOR),
+            file_row("C:\\Program Files\\Apps\\NotSet\\notset.exe", signer=VENDOR),
             file_row(new_target, signer=VENDOR),
             file_row(ms_target),
         ]
@@ -646,10 +649,10 @@ class TestSources(AutostartTestCase):
 
         with self.subTest(case="startup_approved unread between runs"):
             data_dir = self.data_dir()
-            off = run_value("InventedOff", "C:\\Apps\\Off\\off.exe")
-            late = run_value("InventedLate", "C:\\Apps\\Late\\late.exe")
-            files = facts(file_row("C:\\Apps\\Off\\off.exe", signer=VENDOR),
-                          file_row("C:\\Apps\\Late\\late.exe", signer=VENDOR))
+            off = run_value("InventedOff", "C:\\Program Files\\Apps\\Off\\off.exe")
+            late = run_value("InventedLate", "C:\\Program Files\\Apps\\Late\\late.exe")
+            files = facts(file_row("C:\\Program Files\\Apps\\Off\\off.exe", signer=VENDOR),
+                          file_row("C:\\Program Files\\Apps\\Late\\late.exe", signer=VENDOR))
 
             self.collect(FakePowerShell({
                 "run_keys": ok([off]),
