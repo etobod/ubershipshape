@@ -32,7 +32,20 @@ ITEM_SOURCES = ("win32_programs", "msix_programs", "run_keys", "startup_folders"
                 "scheduled_tasks", "services")
 TRAY = "C:\\Program Files\\Invented Editor\\tray.exe"
 DETAIL_SECTIONS = ("programs", "autostart", "changes", "components", "drivers", "additions",
-                   "driver_packages")
+                   "driver_packages", "footprint_time_links")
+# Plan 074 M2: every inventory summary carries footprint_counts (with the time link
+# counts of M1) and footprint_time_links. None of these numbers is one a test below
+# guards as unbacked (147, 731, 652, 658, 14, 17, 23, 27, 36, 48, 7342, 8163).
+FOOTPRINT_COUNTS = {
+    "programs": 41,
+    "programs_gone": 3,
+    "traces": 57,
+    "traces_present": 52,
+    "shared": 7,
+    "gone_with_present_traces": 2,
+    "time_links": 0,
+    "time_links_present": 0,
+}
 # Plan 052 M3: summary keys the real profile requires, and the new id letters.
 REQUIRED_KEYS_052 = ("components", "component_counts", "drivers", "additions", "hosts_file")
 SOURCES_052 = ("optional_features", "capabilities", "drivers", "firewall_rules",
@@ -132,6 +145,11 @@ def _summary_data(summary_file, detail_file, *, programs, changes, truncated, ba
         "driver_packages": [],
         # Plan 025 M1: vendor_folders joins the profile's required_keys, empty here.
         "vendor_folders": [],
+        # Plan 074 M2: footprint_counts and footprint_time_links join the profile's
+        # required_keys; no time link here.
+        "footprint_counts": dict(FOOTPRINT_COUNTS),
+        "footprint_time_links": [],
+        "truncated_time_links": 0,
     }
 
 
@@ -932,19 +950,63 @@ class TestNoPackageManagersProfile(unittest.TestCase):
         self.assertNotIn("package_managers", output)
 
 
-# Plan 064 M2 (K7): until part 7b gives it report wording, footprint_counts sits in the
-# inventory summary, and a report in the current format must still pass the profile.
-FOOTPRINT_COUNTS = {
-    "programs": 41,
-    "programs_gone": 3,
-    "traces": 57,
-    "traces_present": 52,
-    "shared": 7,
-    "gone_with_present_traces": 2,
+# Plan 074 M2 (K1, K2): a time link of the footprints file (t..) is a required list of
+# the profile, and footprint_counts and footprint_time_links are required keys.
+TIME_LINK_ITEM = {
+    "id": "t1",
+    "program": "win32:hklm64:InventedEditor",
+    "name": "Invented Editor",
+    "kind": "run_keys",
+    "trace_name": "InventedTray",
+    "first_seen": "2026-09-30",
 }
+T1_LINE = ("- t1: autostart entry InventedTray (run_keys) appeared together with "
+           "Invented Editor, not confirmed.")
+FOOTPRINT_COUNTS_LINE = ("- Programs tracked: 41, gone: 3; traces: 57, present: 52; "
+                         "shared: 7; gone with present traces: 2; time links: 1, present: 1.")
+FOOTPRINTS_NOT_CHECKED = {"what": "program footprints",
+                          "reason": "the footprints file could not be read"}
+FOOTPRINTS_NOT_CHECKED_LINE = "- program footprints: the footprints file could not be read."
 
 
-class TestFootprintCountsProfile(unittest.TestCase):
+def _summary_time_link(summary_file, detail_file):
+    """The clean summary with one present time link, t1."""
+    summary = _clean_summary(summary_file, detail_file)
+    summary["footprint_counts"] = dict(FOOTPRINT_COUNTS, time_links=1, time_links_present=1)
+    summary["footprint_time_links"] = [dict(TIME_LINK_ITEM)]
+    return summary
+
+
+def _report_time_link_lines(summary_file, *, with_t1=True):
+    """The clean report plus a Program footprints section; numbers from
+    _summary_time_link."""
+    lines = _clean_report_lines(summary_file)
+    at = lines.index("## Not checked")
+    lines[at:at] = [
+        "## Program footprints",
+        FOOTPRINT_COUNTS_LINE,
+        *([T1_LINE] if with_t1 else []),
+        "",
+    ]
+    return lines
+
+
+def _summary_without_footprint_counts(summary_file, detail_file):
+    summary = _clean_summary(summary_file, detail_file)
+    del summary["footprint_counts"]
+    return summary
+
+
+def _summary_footprints_unread(summary_file, detail_file):
+    """footprint_counts null (the file could not be read) and no time link listed."""
+    summary = _clean_summary(summary_file, detail_file)
+    summary["footprint_counts"] = None
+    summary["footprint_time_links"] = []
+    summary["not_checked"].append(dict(FOOTPRINTS_NOT_CHECKED))
+    return summary
+
+
+class TestFootprintTimeLinksProfile(unittest.TestCase):
     # The helpers of TestProfile, without running its tests a second time.
     setUp = TestProfile.setUp
     _assert_real_profile = TestProfile._assert_real_profile
@@ -952,22 +1014,55 @@ class TestFootprintCountsProfile(unittest.TestCase):
     _write_report = TestProfile._write_report
     _run = TestProfile._run
     _run_guarded = TestProfile._run_guarded
-    _write_vendor_summary = TestVendorFoldersProfile._write_vendor_summary
 
-    def test_summary_with_footprint_counts_passes(self):
+    def test_time_link_must_be_named(self):
         self._assert_real_profile()
-        summary_file = self._write_vendor_summary("inventory-trace-counts")
-        summary = json.loads(Path(summary_file).read_text(encoding="utf-8"))
-        summary["footprint_counts"] = dict(FOOTPRINT_COUNTS)
-        Path(summary_file).write_text(json.dumps(summary), encoding="utf-8")
+        summary_file, summary = self._write_summary("inventory-time-links",
+                                                    _summary_time_link)
+        self.assertEqual([item["id"] for item in summary["footprint_time_links"]], ["t1"])
 
-        lines = _report_vendor_folders_lines(summary_file)
-        self.assertFalse(any("footprint" in line for line in lines))
+        named = _report_time_link_lines(summary_file)
         code, output = self._run_guarded(
-            self._write_report(lines, "inventory-2026-11-09-1400.md"))
-        self.assertEqual(code, 0,
-                         f"the report with footprint_counts should pass; output:\n{output}")
+            self._write_report(named, "inventory-2026-11-18-1500.md"))
+        self.assertEqual(code, 0, f"the report naming t1 should pass; output:\n{output}")
         self.assertIn("OK", output)
+
+        left_out = _report_time_link_lines(summary_file, with_t1=False)
+        self.assertFalse(any(re.search(r"\bt1\b", line) for line in left_out[1:]))
+        code, output = self._run_guarded(self._write_report(left_out, "no-time-link.md"))
+        self.assertEqual(code, 1, f"output:\n{output}")
+        self.assertNotIn("OK", output)
+        self.assertTrue(
+            any(re.search(r"not named in the report: .*\bt1\b", line)
+                for line in output.splitlines()),
+            f"expected 'not named in the report: t1'; output:\n{output}")
+
+    def test_footprint_keys_required(self):
+        self._assert_real_profile()
+        self.assertNotIn("footprint", str(self.root), "temp path contains the key name")
+
+        with self.subTest("no footprint_counts in the summary"):
+            summary_file, summary = self._write_summary("inventory-no-counts",
+                                                        _summary_without_footprint_counts)
+            self.assertNotIn("footprint_counts", summary)
+            self.assertEqual(summary["footprint_time_links"], [])
+            lines = _clean_report_lines(summary_file)
+            self.assertFalse(any("footprint_counts" in line for line in lines))
+            code, output = self._run_guarded(self._write_report(lines, "no-counts.md"))
+            self.assertEqual(code, 1, f"output:\n{output}")
+            self.assertNotIn("OK", output)
+            self.assertIn("footprint_counts", output)
+
+        with self.subTest("footprint_counts null and an empty footprint_time_links"):
+            summary_file, summary = self._write_summary("inventory-counts-null",
+                                                        _summary_footprints_unread)
+            self.assertIsNone(summary["footprint_counts"])
+            self.assertEqual(summary["footprint_time_links"], [])
+            lines = _clean_report_lines(summary_file) + [FOOTPRINTS_NOT_CHECKED_LINE]
+            code, output = self._run_guarded(
+                self._write_report(lines, "inventory-2026-11-18-1501.md"))
+            self.assertEqual(code, 0, f"output:\n{output}")
+            self.assertIn("OK", output)
 
 
 if __name__ == "__main__":

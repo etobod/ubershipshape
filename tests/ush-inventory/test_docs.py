@@ -216,5 +216,46 @@ class TestBudgetDocs(unittest.TestCase):
             self.assertIn("`truncated_changes` counts changes", paragraph)
 
 
+# Plan 074 M2 (K4): a time link is shown unconfirmed and never offered for removal.
+TIME_LINK = re.compile(r"time link|footprint_time_links|t<n>", re.IGNORECASE)
+REMOVAL = re.compile(r"remov|uninstall|delete|leftover|usu[nń]|odinstal|pozosta[łl]",
+                     re.IGNORECASE)
+NEGATED = re.compile(r"(?<!\w)(never|not|no|nigdy|nie|ani)(?!\w)", re.IGNORECASE)
+# The wording every time-link sentence carries anyway: it must not count as the negation
+# of a removal or a leftover.
+REQUIRED_WORDING = re.compile(r"(not|never) confirmed|niepotwierdzone|no block|only a guess",
+                              re.IGNORECASE)
+
+
+def _removal_negated(sentence):
+    """True when a negation (other than the required wording) stands before the first
+    removal or leftover word of ``sentence``, or when it has no such word."""
+    # Code spans name keys and commands (`leftovers`), never offer anything.
+    text = REQUIRED_WORDING.sub(" ", re.sub(r"`[^`]*`", " ", sentence))
+    found = REMOVAL.search(text)
+    return found is None or NEGATED.search(text[:found.start()]) is not None
+
+
+class TestTimeLinkDocs(unittest.TestCase):
+    def test_time_link_wording(self):
+        self.assertFalse(_removal_negated(
+            "A time link (appeared together with X, not confirmed) is a leftover; "
+            "offer its removal."), "the check cannot fail")
+        self.assertFalse(_removal_negated(
+            "`t..` time links (never confirmed) are leftovers to remove."),
+            "the required wording counts as a negation")
+        self.assertTrue(_removal_negated(
+            "A time link is not confirmed and never a reason to remove anything."))
+        for path in (SKILL_MD, REFERENCES / "report-format.md"):
+            text = path.read_text(encoding="utf-8")
+            with self.subTest(file=path.name):
+                self.assertIn("niepotwierdzone", text)
+                about = [s for s in _sentences(_flat(text)) if TIME_LINK.search(s)]
+                self.assertTrue(about, "no sentence about the time links")
+                for sentence in about:
+                    self.assertTrue(_removal_negated(sentence),
+                                    f"a time link offered for removal: {sentence}")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -527,5 +527,41 @@ class TestDocs(unittest.TestCase):
             self.assertTrue(found, f"no item on ports_without_path vs 'Nie sprawdzono':\n{firewall}")
 
 
+# Plan 074 M2 (K5): the time links of h4 carry the inventory wording, never as leftovers.
+TIME_LINK = re.compile(r"time link|footprint_time_links|ush-inventory t<n>", re.IGNORECASE)
+LEFTOVER = re.compile(r"leftover|remov|uninstall|recommendation|usu[nń]|pozosta[łl]|rekomendac",
+                      re.IGNORECASE)
+# The wording every time-link sentence carries anyway: it must not count as the negation
+# of a leftover.
+REQUIRED_WORDING = re.compile(r"(not|never) confirmed|niepotwierdzone|only a guess",
+                              re.IGNORECASE)
+
+
+def _leftover_negated(sentence):
+    """True when a negation (other than the required wording) stands before the first
+    leftover, removal or recommendation word of ``sentence``, or when it has none."""
+    # Code spans name keys and commands (`leftovers`), never offer anything.
+    text = REQUIRED_WORDING.sub(" ", re.sub(r"`[^`]*`", " ", sentence))
+    found = LEFTOVER.search(text)
+    return found is None or NEGATION.search(text[:found.start()]) is not None
+
+
+class TestFootprintDocs(unittest.TestCase):
+    def test_footprint_wording(self):
+        self.assertFalse(_leftover_negated(
+            "list each time link (not confirmed, only a guess) among the leftovers"),
+            "the check cannot fail")
+        for path in (SKILL_MD, REPORT_FORMAT):
+            text = _read(path)
+            with self.subTest(file=path.name):
+                self.assertIn("niepotwierdzone", text)
+                self.assertIn("ush-inventory t<n>", text)
+                about = [s for s in _sentences(text) if TIME_LINK.search(s)]
+                self.assertTrue(about, "no sentence about the time links")
+                for sentence in about:
+                    self.assertTrue(_leftover_negated(sentence),
+                                    f"a time link listed as a leftover: {sentence}")
+
+
 if __name__ == "__main__":
     unittest.main()

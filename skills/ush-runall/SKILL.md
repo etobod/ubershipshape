@@ -202,6 +202,17 @@ or running anything on a schedule. Say so if the user asks for these.
   line) and names the `runall` detail file, which keeps the full lists of
   each child ("Changes since the last run" in
   `references/report-format.md`).
+- **Program footprints of h4 are facts, the time links unconfirmed.** In
+  "Changes since the last run" the report gives the `footprint_counts` of
+  the `h4` item (`ush-inventory`) each as given, never summed, and each
+  `footprint_time_links` item cited as `ush-inventory t<n>` with the
+  program's name and the trace, worded "appeared together with <program>,
+  not confirmed" (in a Polish report ending in "niepotwierdzone"; the
+  wording is in `references/report-format.md`). A time link is never a leftover and never a recommendation,
+  and nothing is offered for removal from it. `footprint_counts` `null` is
+  "not checked" with the reason of its `not_checked` item, never 0. The
+  `h4` item is named on the `ush:detail` line, as for every number of a
+  child.
 - **Packages are not checked for updates.** The report says once, in one
   sentence for the whole `ush-packages` item, that its packages are "not
   checked for updates" (its Polish wording is in

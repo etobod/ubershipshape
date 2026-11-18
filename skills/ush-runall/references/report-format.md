@@ -321,6 +321,16 @@ exists, but it is a short summary, not the full lists:
   0, also that number of change items cut from its summary; a source of
   its `comparison` that is
   `no_baseline` or `not_read` gives "no comparison", never "no changes";
+- program footprints of the `h4` item (`ush-inventory`): each number of its
+  `footprint_counts` as given, never summed, then one line per
+  `footprint_time_links` item cited as `ush-inventory t<n>` with the
+  program's `name`, the trace `kind` and `trace_name`, worded „pojawił się
+  razem z <program>, niepotwierdzone” (English "appeared together with
+  <program>, not confirmed"); a time link is never listed as a leftover and
+  never gets a recommendation, since it is only a guess from the day the
+  trace appeared; with its `truncated_time_links` above 0, that number of
+  time links cut, never their ids; `footprint_counts` `null` is "not
+  checked" with the reason of the child's `not_checked` item, never 0;
 - disks as growth, plus what can be removed (see the clean-up section);
 - settings in one line.
 

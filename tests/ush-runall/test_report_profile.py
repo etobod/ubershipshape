@@ -791,6 +791,117 @@ class TestReviewProfile(TestDecisionsProfile):
     test_decision_must_be_named = None
 
 
+# --- plan 074, M2, K3 ----------------------------------------------------------------------
+
+# The footprint counts and one time link of the ush-inventory child summary (h4), in the
+# shape of plan 074 M1. The counts are in no other JSON of the pass, so only h4 named on
+# the ush:detail line backs them.
+H4_FOOTPRINT_COUNTS = {"programs": 6241, "programs_gone": 6259, "traces": 6317,
+                       "traces_present": 6353, "shared": 6389,
+                       "gone_with_present_traces": 6421, "time_links": 2,
+                       "time_links_present": 1}
+H4_TIME_LINK = {"id": "t1", "program": "win32:hklm64:InventedEditor",
+                "name": "Invented Editor", "kind": "run_keys", "trace_name": "InventedTray",
+                "first_seen": "2026-09-19"}
+FOOTPRINT_NUMBERS = ("6241", "6317", "6353")
+FOOTPRINT_LINES = [
+    "- Ślady programów według h4 ush-inventory: programy 6241, ślady 6317, obecne 6353.",
+    ("- ush-inventory t1: wpis autostartu InventedTray (run_keys) pojawił się razem z "
+     "Invented Editor, niepotwierdzone."),
+]
+
+
+class TestFootprintTimeLinksProfile(unittest.TestCase):
+    """A runall report cites the footprint counts and the time link t1 of its ``h4`` item
+    (ush-inventory) as ``ush-inventory t1``; the numbers are backed only when ``h4`` is on
+    the report's ``ush:detail`` line (plan 074, M2, K3)."""
+
+    setUp = TestDecisionsProfile.setUp
+    _run = TestDecisionsProfile._run
+
+    def _write_data(self):
+        summary = _clean_summary(self.summary_file, self.detail_file)
+        detail = _detail_data(summary)
+        h4 = next(child for child in detail["children"] if child["id"] == "h4")
+        self.assertEqual(h4["summary"]["skill"], "ush-inventory")
+        h4["summary"]["footprint_counts"] = dict(H4_FOOTPRINT_COUNTS)
+        h4["summary"]["footprint_time_links"] = [dict(H4_TIME_LINK)]
+        h4["summary"]["truncated_time_links"] = 0
+        self.summary_file.write_text(json.dumps(summary), encoding="utf-8")
+        self.detail_file.write_text(json.dumps(detail), encoding="utf-8")
+        return summary, detail
+
+    def _write_report(self, detail_ids, name):
+        lines = [
+            f"<!-- ush:summary {self.summary_file} -->",
+            "# Raport zbiorczy, 2026-09-20",
+            "",
+            f"<!-- ush:detail {detail_ids} -->",
+            "",
+            "## Stan przebiegu",
+            "- h1 ush-health: ok, 1.5 s.",
+            "- h2 ush-events: ok, 1.5 s.",
+            "- h3 ush-settings: ok, 1.5 s.",
+            "- h4 ush-inventory: ok, 1.5 s.",
+            "- h5 ush-processes: ok, 1.5 s.",
+            "- h6 ush-files: ok, 1.5 s.",
+            "- h7 ush-advice: ok, 1.5 s.",
+            "- h8 ush-packages: ok, 1.5 s.",
+            "- Cały przebieg trwał 10.5 s.",
+            "",
+            "## Zmiany od ostatniego przebiegu",
+            *FOOTPRINT_LINES,
+            "",
+            "## Zalecenia",
+            "Brak zaleceń w tym przebiegu.",
+            "",
+            "## Powiązania między skillami",
+            "Brak powiązań między ustaleniami różnych skilli.",
+            "",
+            "## Zapora wobec portów nasłuchu",
+            ("- w1: reguła ush-inventory x2 (Invented Server) dopuszcza port 8080; program "
+             "słucha tylko na pętli zwrotnej (127.0.0.1), profil Private; sieci Private: 1."),
+            ("- Pozostałe reguły przychodzące: bez nasłuchu 2, nieporównane 4, UDP 2, "
+             "inny protokół 0."),
+            "",
+            "## Sprzeczne ustalenia",
+            "Brak.",
+            "",
+            "## Nie sprawdzono",
+            "<!-- ush:not-checked -->",
+            "Nic.",
+        ]
+        path = self.reports_dir / name
+        path.write_text("\n".join(with_summary(lines, SKILL, accepted="not_checked")) + "\n",
+                        encoding="utf-8")
+        return path
+
+    def test_footprint_time_link_cited_from_h4(self):
+        summary, detail = self._write_data()
+
+        # Fixture guards: the cited counts live only in h4, not in the runall summary
+        # or in another child, and not in the temp path.
+        h4 = next(child for child in detail["children"] if child["id"] == "h4")
+        others = [child for child in detail["children"] if child["id"] != "h4"]
+        for number in FOOTPRINT_NUMBERS:
+            self.assertIn(int(number), _numbers(h4), number)
+            self.assertNotIn(int(number), _numbers(summary), number)
+            for child in others:
+                self.assertNotIn(int(number), _numbers(child), (number, child["id"]))
+            self.assertNotIn(number, str(self.root), "temp path collides with the number")
+
+        with self.subTest("h4 on the ush:detail line"):
+            code, output = self._run(self._write_report("h4", "runall-2026-09-20-1500.md"))
+            self.assertEqual(code, 0, f"output:\n{output}")
+            self.assertIn("OK", output)
+
+        with self.subTest("h4 not on the ush:detail line"):
+            code, output = self._run(self._write_report("h1", "runall-2026-09-20-1501.md"))
+            self.assertEqual(code, 1, f"output:\n{output}")
+            self.assertNotIn("OK", output)
+            self.assertTrue(any(number in output for number in FOOTPRINT_NUMBERS),
+                            f"expected an unbacked footprint count; output:\n{output}")
+
 
 # --- plan 061, M2, K4 ----------------------------------------------------------------------
 

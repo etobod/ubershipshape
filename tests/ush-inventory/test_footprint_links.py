@@ -19,6 +19,13 @@ Assumptions taken from the plan text:
   rule and an autostart target still set ``matched`` but add no key.
 - Autostart facts keep ``program``; on clean data it is null.
 
+Plan 074, milestone M1, criteria K7 and K8 (vendor-table links in
+``state/footprints.json``, helpers of ``test_footprints.py``): a vendor folder whose name
+has a line in the ``vendors`` table of ``vendor-folders.json`` is linked
+``linked_by: "vendor"`` to each installed program whose publisher is on that line; a
+folder linked to two programs goes to ``shared``. An empty table, or a line whose
+publishers no installed program has, links nothing.
+
 PowerShell never starts; every value is invented.
 """
 
@@ -46,10 +53,13 @@ from .fakes_vendor_folders import (
     PROGRAM_FILES,
     PROGRAM_FILES_X86,
     VendorFoldersTestCase,
+    data_file_text,
     folder,
+    folder_key,
     folder_path,
     listing,
 )
+from .test_footprints import FootprintsTestCase
 
 PROGRAM_FILES_DIR = "C:\\Program Files"
 CONTOSO_LOCATION = "C:\\Program Files\\Contoso\\App"
@@ -298,6 +308,82 @@ class TestDuplicateEntries(FootprintLinksTestCase):
         self.assertEqual(len(found), 1, found)
         self.assertIsNotNone(found[0]["program"], found[0])
         self.assertIsNone(found[0]["linked_by"], found[0])
+
+
+NORTHWIND_PUBLISHER = "Northwind Traders Inc."
+NORTHWIND_FOLDER = folder(PROGRAM_FILES_X86, "Northwind Traders")
+NORTHWIND_FOLDER_KEY = folder_key(folder_path(PROGRAM_FILES_X86, "Northwind Traders"))
+DESK_KEY = "win32:hklm64:NorthwindDesk"
+ROUTER_KEY = "win32:hklm64:NorthwindRouter"
+
+
+def northwind_desk(publisher=NORTHWIND_PUBLISHER):
+    """Installed elsewhere: only the publisher can tie it to the folder."""
+    return win32("NorthwindDesk", "Northwind Desk", publisher=publisher,
+                 install_location=None)
+
+
+def northwind_router():
+    return win32("NorthwindRouter", "Northwind Router", publisher=NORTHWIND_PUBLISHER,
+                 install_location=None)
+
+
+class VendorTableTestCase(FootprintsTestCase):
+    def run_with(self, programs, vendors=None):
+        """One run with ``programs`` and the Northwind Traders folder; ``vendors`` is the
+        table of ``vendor-folders.json`` (``None``: the default line for Northwind
+        Traders)."""
+        self.data_file.write_text(data_file_text(vendors=vendors), encoding="utf-8")
+        data_dir = self.data_dir()
+        self.collect(FakePowerShell({
+            "win32_programs": ok(list(programs)),
+            "vendor_folders": listing([NORTHWIND_FOLDER]),
+        }), data_dir=data_dir)
+        return data_dir
+
+    def holders(self, data_dir, trace_key):
+        return {key: self.traces(entry)[trace_key]
+                for key, entry in self.programs(data_dir).items()
+                if trace_key in self.traces(entry)}
+
+    def vendor_traces(self, data_dir):
+        return [(key, trace.get("key")) for key, entry in self.programs(data_dir).items()
+                for trace in self.traces(entry).values()
+                if trace.get("linked_by") == "vendor"]
+
+
+class TestVendorTableLinks(VendorTableTestCase):
+    def test_vendor_table_line_links_publisher_programs(self):
+        with self.subTest(case="one program with the line's publisher"):
+            data_dir = self.run_with([northwind_desk()])
+            holders = self.holders(data_dir, NORTHWIND_FOLDER_KEY)
+            self.assertEqual(set(holders), {DESK_KEY}, sorted(holders))
+            trace = holders[DESK_KEY]
+            self.assertEqual(trace.get("linked_by"), "vendor", trace)
+            self.assertIs(trace.get("present"), True, trace)
+            self.assertNotIn(NORTHWIND_FOLDER_KEY, self.shared(data_dir))
+
+        with self.subTest(case="two programs with the line's publisher"):
+            data_dir = self.run_with([northwind_desk(), northwind_router()])
+            shared = self.shared(data_dir)
+            self.assertIn(NORTHWIND_FOLDER_KEY, shared, sorted(map(str, shared)))
+            programs = shared[NORTHWIND_FOLDER_KEY].get("programs")
+            self.assertIsInstance(programs, list, shared[NORTHWIND_FOLDER_KEY])
+            self.assertEqual(sorted(programs), sorted([DESK_KEY, ROUTER_KEY]), programs)
+            self.assertEqual(self.holders(data_dir, NORTHWIND_FOLDER_KEY), {})
+
+    def test_vendor_rule_without_matching_line_links_nothing(self):
+        cases = {
+            "empty vendors table": ([northwind_desk()], {}),
+            "line whose publishers no installed program has": (
+                [northwind_desk(publisher="Northwind Traders Incorporated")], None),
+        }
+        for case, (programs, vendors) in cases.items():
+            with self.subTest(case=case):
+                data_dir = self.run_with(programs, vendors=vendors)
+                self.assertEqual(self.vendor_traces(data_dir), [])
+                self.assertEqual(self.holders(data_dir, NORTHWIND_FOLDER_KEY), {})
+                self.assertNotIn(NORTHWIND_FOLDER_KEY, self.shared(data_dir))
 
 
 if __name__ == "__main__":

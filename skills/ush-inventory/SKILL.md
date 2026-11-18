@@ -193,6 +193,17 @@ Say so if the user asks for these.
   `false` whose names match in the JSON (the package's provider
   or original name and the folder's name) go into one entry with both ids.
   None of them is a verdict: the script lists facts, the judgement is yours.
+- **A time link is never confirmed.** Each `footprint_time_links` item
+  (`t<n>`) says only that a trace appeared in the same run as a program; the
+  report names it as "appeared together with <program>, not confirmed" (in
+  a Polish report ending in "niepotwierdzone"; the wording is in
+  `references/report-format.md`). A time link
+  is never a leftover, never a recommendation and never a reason to remove
+  the trace or the program; `--block t<n>` prints no block.
+- **Footprint counts are given as they are.** Each `footprint_counts` number
+  is cited from the JSON on its own, never summed; `footprint_counts` `null`
+  is "not checked" with the reason of its `not_checked` item
+  (`state/footprints.json`), never 0.
 - **Defender exclusions.** Under the source's `method: registry` no Defender
   exclusion gets a block: Defender is not running (usually another antivirus
   is active), so `Remove-MpPreference` fails as `Get-MpPreference` did. Say
@@ -240,8 +251,9 @@ Say so if the user asks for these.
    Ids are stable between runs, not places in the list, so the id of an
    item cut from the summary (`truncated`, `truncated_vendor_folders`,
    `truncated_driver_packages`, `truncated_drivers`,
-   `truncated_components`, `truncated_additions`, `truncated_autostart`,
-   `truncated_changes`, or a change collapsed into a counted entry)
+   `truncated_components`, `truncated_additions`, `truncated_time_links`,
+   `truncated_autostart`, `truncated_changes`, or a change collapsed into a
+   counted entry)
    cannot be guessed. Find the cut items with:
 
    ```
@@ -258,7 +270,10 @@ Say so if the user asks for these.
    something they could belong to was not read; cut to the budget like
    `o..`, `truncated_vendor_folders` counts the cut ones), `l..`
    leftovers of removed programs (never cut; their parts name the `s..`
-   and `x..` ids of the same items), `c..` changes. Remember every id you
+   and `x..` ids of the same items), `t..` time links of the program
+   footprints (`footprint_time_links`, never confirmed; cut to the budget,
+   `truncated_time_links` counts the cut ones), `c..` changes. Remember
+   every id you
    fetched and used. For a leftover the report proposes a plan in words
    only (remove, or keep with the reason; see `references/report-format.md`);
    after the user decides, `--block l<n>` prints its blocks (step 5).

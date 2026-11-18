@@ -128,10 +128,12 @@ The script counts; it never judges.
 The summary goes to stdout and to ``work/inventory-<UTC stamp>.summary.json``;
 the detail file ``work/inventory-<UTC stamp>.detail.json`` holds every program,
 every autostart entry, every component, every driver, every driver package, every
-addition, every leftover, every vendor folder and every change with the same ids.
+addition, every leftover, every vendor folder, every present time link of the
+program footprints (``footprint_time_links``, ids ``t..``) and every change with the
+same ids.
 ``--detail <id>`` prints one item of the newest detail
-file. To keep the summary within ``SUMMARY_MAX_CHARS`` eight lists are cut from
-their end, first each of the six short lists down
+file. To keep the summary within ``SUMMARY_MAX_CHARS`` nine lists are cut from
+their end, first each of the seven short lists down
 to its minimum: ``programs``
 (``truncated``; programs without an install date, then the oldest installs) down to
 ``PROGRAMS_MIN``, ``vendor_folders`` (``truncated_vendor_folders``) down to
@@ -141,16 +143,17 @@ first packages of the list stay: non_present, then filter packages, then the res
 list) down to ``DRIVERS_MIN``, ``components`` (``truncated_components``) down to
 ``COMPONENTS_MIN`` and ``additions`` (``truncated_additions``; the items without a
 change block in SKILL.md first, then the ones with a block) down to
-``ADDITIONS_MIN``: every short list keeps its minimum before any list goes below
-it. Then ``autostart`` (``truncated_autostart``, with ``autostart_counts``) down
-to ``AUTOSTART_MIN``; then ``components``, ``driver_packages`` and ``drivers``
-below their minimum, each only after the one before is empty; then
-``vendor_folders``, ``additions`` and ``programs`` the same way. A ``null`` list
-stays ``null``. When ``autostart`` and ``changes`` are over the budget on
-their own, the six lists keep their minimums and ``autostart`` and ``changes``
-(``truncated_changes``, with ``change_counts``) are cut, down to ``AUTOSTART_MIN``
-and ``CHANGES_MIN``, then to nothing, and then the six lists to nothing in the
-same order. The
+``ADDITIONS_MIN`` and ``footprint_time_links`` (``truncated_time_links``; the newest
+time links stay) down to ``TIME_LINKS_MIN``: every short list keeps its minimum
+before any list goes below it. Then ``autostart`` (``truncated_autostart``, with
+``autostart_counts``) down to ``AUTOSTART_MIN``; then ``components``,
+``driver_packages`` and ``drivers`` below their minimum, each only after the one
+before is empty; then ``vendor_folders``, ``additions``, ``footprint_time_links``
+and ``programs`` the same way. A ``null`` list stays ``null``. When ``autostart``
+and ``changes`` are over the budget on their own, the seven lists keep their
+minimums and ``autostart`` and ``changes`` (``truncated_changes``, with
+``change_counts``) are cut, down to ``AUTOSTART_MIN`` and ``CHANGES_MIN``, then to
+nothing, and then the seven lists to nothing in the same order. The
 changes named by a rule of ``data/collapsed_names.json`` (the firewall rules named
 by an unresolved ``ms-resource:`` string) are collapsed in the summary into one
 counted entry per change type. A program whose name, without a suffix of
@@ -194,7 +197,8 @@ FIRST_RUN_SCHEMA = 1
 SCHEMA_VERSION = 1
 SUMMARY_MAX_CHARS = 35000
 DETAIL_SECTIONS = ("programs", "autostart", "components", "drivers", "driver_packages",
-                   "additions", "changes", "leftovers", "vendor_folders")
+                   "additions", "changes", "leftovers", "vendor_folders",
+                   "footprint_time_links")
 DEFAULT_OWN_FILE = Path(__file__).absolute().parents[1] / "data" / "windows-own.json"
 # The roots whose direct child folders are listed, the folder names that ship with
 # Windows and the exact publishers of a vendor folder name; read at run time.
@@ -298,19 +302,22 @@ PACKAGE_VERSION = re.compile(r"\s*(\d{1,2})/(\d{1,2})/(\d{4})\s+(\S+)\s*")
 ADMIN_REASON = ("requires administrator rights (not read in this run, which is not "
                 "elevated); this is not an empty list")
 # The lists cut to fit the budget, with the key that counts the cut items. Every short
-# list (programs, vendor_folders, driver_packages, drivers, components, additions) keeps
-# its minimum before any list goes below it; then autostart goes to AUTOSTART_MIN; then
+# list (programs, vendor_folders, driver_packages, drivers, components, additions,
+# footprint_time_links) keeps its minimum before any list goes below it; then autostart
+# goes to AUTOSTART_MIN; then
 # components, driver_packages (the packages no device or only a disconnected one names)
 # and drivers go to nothing, in that
 # order, so the listed drivers outlast the packages; then vendor_folders (the folders no
 # rule matches, each not judged one repeating the shared not_judged cause; every folder
-# is a lead the detail file and the not_checked cause still cover), additions and
+# is a lead the detail file and the not_checked cause still cover), additions,
+# footprint_time_links (the oldest time links; the detail file keeps all) and
 # programs. changes is cut only in the fallback (see fit_budget).
 CUT_LISTS = (("programs", "truncated"),
              ("vendor_folders", "truncated_vendor_folders"),
              ("driver_packages", "truncated_driver_packages"),
              ("drivers", "truncated_drivers"),
              ("components", "truncated_components"), ("additions", "truncated_additions"),
+             ("footprint_time_links", "truncated_time_links"),
              ("autostart", "truncated_autostart"), ("changes", "truncated_changes"))
 # A cut autostart or changes list carries the per-type counts of the whole list here.
 COUNT_KEYS = {"autostart": "autostart_counts", "changes": "change_counts"}
@@ -322,6 +329,7 @@ DRIVER_PACKAGES_MIN = 10
 DRIVERS_MIN = 10
 COMPONENTS_MIN = 10
 ADDITIONS_MIN = 10
+TIME_LINKS_MIN = 5
 AUTOSTART_MIN = 20
 CHANGES_MIN = 20
 # Driver classes (case-insensitive) put first among the listed drivers, in this
@@ -4651,7 +4659,9 @@ def find_vendor_folders(col: Collector, config, rows: list, programs: dict, auto
     ``C:\\ProgramData`` nor anything under the Windows folder) is the folder or lies
     under it; an autostart, service or task target lies under it; or the data file's
     ``vendors`` entry for its name lists a publisher an installed program has
-    (case-folded, exact). Every other folder is unmatched; ``listed`` holds every
+    (case-folded, exact; those programs' keys are the folder's ``vendor_programs``,
+    as the ``install_location`` ones are its ``programs``). Every other folder is
+    unmatched; ``listed`` holds every
     folder no rule matches with a ``v`` id (key ``vendor_folder:<case-folded path>``)
     and its ``matched`` (false, or null when not judged).
 
@@ -4692,7 +4702,7 @@ def find_vendor_folders(col: Collector, config, rows: list, programs: dict, auto
                  if isinstance(value, dict)}
     skipped = {d.rstrip("\\/").casefold() for d in dir_paths.values() if text(d)}
     system_root = text(dir_paths.get("SystemRoot"))
-    locations, publishers = [], set()
+    locations, publishers = [], {}
     for source in PROGRAM_SOURCES:
         for key, item in (programs.get(source) or {}).items():
             if not isinstance(item, dict):
@@ -4702,7 +4712,7 @@ def find_vendor_folders(col: Collector, config, rows: list, programs: dict, auto
                 locations.append((location, key))
             publisher = publisher_of(item)
             if publisher:
-                publishers.add(publisher)
+                publishers.setdefault(publisher, set()).add(key)
     targets, unknown_targets = [], 0
     for entry in autostart:
         unread = "targets" in (entry.get("unread_fields") or [])
@@ -4753,7 +4763,10 @@ def find_vendor_folders(col: Collector, config, rows: list, programs: dict, auto
             by.append("install_location")
         if any(under(target, folder["path"]) for target in targets):
             by.append("target")
-        if publishers & config["vendors"].get(folder["name"].strip().casefold(), set()):
+        line = config["vendors"].get(folder["name"].strip().casefold(), set())
+        folder["vendor_programs"] = sorted({key for publisher in line
+                                            for key in publishers.get(publisher, ())})
+        if folder["vendor_programs"]:
             by.append("vendor")
         folder["matched_by"] = by
         folder["matched"] = True if by else (None if causes else False)
@@ -5194,9 +5207,12 @@ def save_removed(state_dir: Path, kept: list, had_file: bool):
 
 
 def footprint_presence(col: Collector, current: dict, statuses: dict,
-                       vendor_section: dict, admin: bool = False) -> dict:
-    """``{kind: {present, unread, prefixes[, within]}}`` for ``footprints.update``: the
-    program and trace keys read in this run and the ones whose presence was not read.
+                       vendor_section: dict, admin: bool = False,
+                       own_kinds: set = frozenset()) -> dict:
+    """``{kind: {present, unread, prefixes, own[, within]}}`` for ``footprints.update``:
+    the program and trace keys read in this run and the ones whose presence was not read.
+    ``own``: the present keys of Windows' own items and of those whose ownership is not
+    known (``is_own`` not False), which never get a time link.
     A kind whose source was not read has the prefix ``""``; an item kept from the
     baseline is not read; an elevated run does not read the per-user keys
     (``PER_USER_KEYS``, as ``HKCU_ELEVATED``): they are neither present nor absent there,
@@ -5206,24 +5222,33 @@ def footprint_presence(col: Collector, current: dict, statuses: dict,
     presence = {}
     for kind in PROGRAM_SOURCES + AUTOSTART_SOURCES + ("firewall_rules",):
         if statuses.get(kind) not in READ_STATUSES:
-            presence[kind] = {"present": set(), "unread": set(), "prefixes": ("",)}
+            presence[kind] = {"present": set(), "unread": set(), "prefixes": ("",),
+                              "own": set()}
             continue
         items = current.get(kind) or {}
         per_user = PER_USER_KEYS.get(kind, ()) if admin else ()
+        present = {k for k, item in items.items()
+                   if not item.get("from_baseline") and not k.startswith(per_user)}
         presence[kind] = {
-            "present": {k for k, item in items.items()
-                        if not item.get("from_baseline") and not k.startswith(per_user)},
+            "present": present,
             "unread": {k for source, k in col.unread_keys if source == kind}
             | {k for k, item in items.items() if item.get("from_baseline")},
             "prefixes": per_user,
+            # Unknown (None: an autostart entry whose facts were not read) counts as
+            # own here: a missed time link is better than a false one.
+            "own": {k for k in present
+                    if is_own(kind, items[k], own_kinds) is not False},
         }
     programs = [presence.pop(kind) for kind in PROGRAM_SOURCES]
     presence["programs"] = {
         "present": set().union(*(p["present"] for p in programs)),
         "unread": set().union(*(p["unread"] for p in programs)),
+        "own": set().union(*(p["own"] for p in programs)),
         "prefixes": tuple(prefix for kind, p in zip(PROGRAM_SOURCES, programs)
                           for prefix in ((f"{kind.split('_')[0]}:",) if "" in p["prefixes"]
                                          else p["prefixes"])),
+        # A whole program source not read: no program list for ``last_run``.
+        "source_unread": any("" in p["prefixes"] for p in programs),
     }
     if vendor_section["folders"] is not None:
         dropped = vendor_section.get("dropped") or {}
@@ -5242,7 +5267,8 @@ def footprint_links(current: dict, statuses: dict, autostart: list,
                     vendor_section: dict, admin: bool = False) -> list:
     """``[(program key, kind, trace key, linked_by)]``: the explicit links of this run.
     An autostart fact links only when ``file_facts`` was read and the entry is not kept
-    from the baseline. An elevated run links no per-user program or trace
+    from the baseline. A vendor folder links its ``programs`` (``install_location``) and
+    the other programs of its ``vendor_programs`` (``vendor``). An elevated run links no per-user program or trace
     (``PER_USER_KEYS``)."""
     links = []
     if statuses.get("file_facts") in READ_STATUSES:
@@ -5259,6 +5285,9 @@ def footprint_links(current: dict, statuses: dict, autostart: list,
     for folder in vendor_section["folders"] or []:
         for program in folder.get("programs") or []:
             links.append((program, "vendor_folders", folder["key"], "install_location"))
+        for program in folder.get("vendor_programs") or []:
+            if program not in (folder.get("programs") or []):
+                links.append((program, "vendor_folders", folder["key"], "vendor"))
     if admin:
         links = [link for link in links if not link[0].startswith(PER_USER_PREFIXES)
                  and not link[2].startswith(PER_USER_PREFIXES)]
@@ -5267,7 +5296,7 @@ def footprint_links(current: dict, statuses: dict, autostart: list,
 
 def save_footprints(col: Collector, state: Path, merged_sources: dict, current: dict,
                     statuses: dict, autostart: list, vendor_section: dict, admin: bool,
-                    today: str) -> dict | None:
+                    today: str, own_kinds: set = frozenset()) -> dict | None:
     """Load, update and save ``state/footprints.json``; the saved content, or None with
     a not_checked item naming the file when it could not be read (then it is left as
     it was) or saved."""
@@ -5285,7 +5314,7 @@ def save_footprints(col: Collector, state: Path, merged_sources: dict, current: 
                              footprint_links(current, statuses, autostart, vendor_section,
                                              admin),
                              footprint_presence(col, current, statuses, vendor_section,
-                                                admin),
+                                                admin, own_kinds),
                              admin, today)
     reason = baseline.save_json(state, footprints.NAME, data, footprints.check)
     if reason is not None:
@@ -5300,6 +5329,38 @@ def save_footprints(col: Collector, state: Path, merged_sources: dict, current: 
                  f"the program footprints of this run were not saved: {reason}")
         return None
     return data
+
+
+def footprint_time_links(data: dict | None, current: dict, vendor_section: dict,
+                         numbering=None) -> list | None:
+    """The ``footprint_time_links`` items: one per present time trace of ``data`` (the
+    saved footprints), ``{id: t<n>, program, name, kind, trace_name, first_seen}``, the
+    newest ``first_seen`` first; None when ``data`` is None. ``name`` is the program's
+    name; ``trace_name`` the autostart entry's or firewall rule's ``name``, or the vendor
+    folder's ``name`` (never a path), null when this run did not read it. The id is the
+    stable number of the program and trace key pair (``numbering``)."""
+    if data is None:
+        return None
+    folder_names = {folder["key"]: folder.get("name")
+                    for folder in vendor_section["folders"] or []}
+    items = []
+    for link in footprints.time_links(data):
+        kind, key = link["kind"], link["key"]
+        if kind == "vendor_folders":
+            name = folder_names.get(key)
+        else:
+            item = (current.get(kind) or {}).get(key)
+            name = item.get("name") if isinstance(item, dict) else None
+        if isinstance(name, list):  # a firewall rule with its Name given twice
+            name = next((part for part in name if isinstance(part, str)), None)
+        items.append({"id": None, "program": link["program"], "name": link["name"],
+                      "kind": kind, "trace_name": name if isinstance(name, str) else None,
+                      "first_seen": link["first_seen"],
+                      "_key": f"{link['program']}|{key}"})
+    numbering_of(numbering).assign("t", items, key_of=lambda item: item["_key"])
+    for item in items:
+        del item["_key"]
+    return items
 
 
 # --- summary and detail ------------------------------------------------------
@@ -5377,22 +5438,25 @@ def fit_budget(summary: dict) -> str:
     ``driver_packages`` down to ``DRIVER_PACKAGES_MIN``,
     ``drivers`` down to ``DRIVERS_MIN``, ``components`` down to
     ``COMPONENTS_MIN`` and ``additions`` (the items without a change block, from the
-    end of their group, then the items with one) down to ``ADDITIONS_MIN`` (a list
+    end of their group, then the items with one) down to ``ADDITIONS_MIN`` and
+    ``footprint_time_links`` (the newest stay) down to ``TIME_LINKS_MIN`` (a list
     with fewer items keeps them all): every short list keeps its minimum before any
     list goes below it. Then ``autostart`` down to ``AUTOSTART_MIN``. Then
     ``components``, ``driver_packages`` and ``drivers`` down to nothing, in that
-    order, and then ``vendor_folders``, ``additions`` and ``programs``. A ``null``
-    list (its source not read) stays ``null`` and its count key ``0``. Only
+    order, and then ``vendor_folders``, ``additions``, ``footprint_time_links`` and
+    ``programs``. A ``null`` list (its source, or for the time links the footprints
+    file, not read) stays ``null`` and its count key ``0``. Only
     when that is not enough, so ``autostart`` and ``changes`` are over the budget on
-    their own, do the six lists go back to their minimums and ``autostart`` and
+    their own, do the seven lists go back to their minimums and ``autostart`` and
     ``changes`` get cut: down to ``AUTOSTART_MIN`` and ``CHANGES_MIN``, then to
     nothing, and then ``components``, ``driver_packages``, ``drivers``,
-    ``vendor_folders``, ``additions`` and ``programs`` to nothing, in that order. Each count
+    ``vendor_folders``, ``additions``, ``footprint_time_links`` and ``programs`` to
+    nothing, in that order. Each count
     key of ``CUT_LISTS`` counts the cut items (``truncated_changes`` the cut changes,
     a collapsed entry by its ``count``); a cut
     ``autostart`` or ``changes`` also gets the per-type counts of the whole list in
     its ``COUNT_KEYS`` key (``null`` while it is not cut). A summary that is too long
-    even with all eight lists empty is not cut at all and says so in not_checked.
+    even with all nine lists empty is not cut at all and says so in not_checked.
     """
     text_out = dump(summary)
     originals = {name: summary.get(name) for name, _ in CUT_LISTS}
@@ -5403,14 +5467,16 @@ def fit_budget(summary: dict) -> str:
                     "driver_packages": DRIVER_PACKAGES_MIN,
                     "drivers": DRIVERS_MIN,
                     "components": COMPONENTS_MIN, "additions": ADDITIONS_MIN,
+                    "footprint_time_links": TIME_LINKS_MIN,
                     "autostart": AUTOSTART_MIN, "changes": CHANGES_MIN}
         floors = {name: min(minimums[name], kept[name]) for name in minimums}
         short_lists = [name for name, _ in CUT_LISTS if name not in COUNT_KEYS]
         # The lists that go to nothing, in this order, once every list is at its floor:
-        # components, driver packages and then drivers; then vendor folders, additions
-        # and programs.
+        # components, driver packages and then drivers; then vendor folders, additions,
+        # time links and programs.
         last_stages = [("components", 0), ("driver_packages", 0), ("drivers", 0),
-                       ("vendor_folders", 0), ("additions", 0), ("programs", 0)]
+                       ("vendor_folders", 0), ("additions", 0),
+                       ("footprint_time_links", 0), ("programs", 0)]
 
         def fits(name: str, count: int) -> bool:
             items = originals[name]
@@ -5439,13 +5505,13 @@ def fit_budget(summary: dict) -> str:
                 kept[name] = floor
             return False
 
-        # Then the six short lists to their floors, then autostart to its floor (with
+        # Then the seven short lists to their floors, then autostart to its floor (with
         # its counts), and only then the short lists to nothing.
         fitted = run_stages([(name, floors[name]) for name in short_lists]
                             + [("autostart", floors["autostart"])]
                             + last_stages)
         if not fitted:
-            # autostart and changes are over the budget on their own: the six short
+            # autostart and changes are over the budget on their own: the seven short
             # lists keep their floors, and these two are cut (autostart is at its floor
             # already).
             for name in short_lists:
@@ -5776,6 +5842,8 @@ NOT_AUTOSTART = {
                 "its vendor's uninstaller or Device Manager, after the user decides"),
     "changes": "a change has no block; give the id of the item it names",
     "vendor_folders": "this skill has no block for a folder; ush-files has its own clean-up",
+    "footprint_time_links": ("a time link is only a guess from the day a trace appeared; it "
+                             "changes nothing, so it has no block"),
 }
 
 
@@ -6916,7 +6984,8 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
     # Program footprints, saved before the detail file is written.
     footprint_data = save_footprints(col, state, merged_sources, current, statuses,
                                      autostart, vendor_section, admin,
-                                     now.date().isoformat())
+                                     now.date().isoformat(), own_kinds)
+    time_links = footprint_time_links(footprint_data, current, vendor_section, numbering)
 
     detail = {
         "schema_version": SCHEMA_VERSION,
@@ -6936,6 +7005,7 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
         "vendor_folders": vendor_section["folders"],
         "vendor_folder_roots": vendor_section["roots"],
         "footprints": footprint_data,
+        "footprint_time_links": time_links,
         "hosts_file": col.hosts_file,
         "current_sid": col.current_sid,
         "changes": changes,
@@ -6944,7 +7014,8 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
             ("programs", listed_programs), ("autostart", listed_autostart),
             ("components", listed_components), ("drivers", listed_drivers),
             ("driver_packages", listed_packages), ("additions", listed_additions), ("changes", changes[:listed_changes]),
-            ("vendor_folders", listed_vendor_folders))},
+            ("vendor_folders", listed_vendor_folders),
+            ("footprint_time_links", time_links))},
         "summary_file": str(summary_file),
     }
     detail_file.write_text(dump(detail) + "\n", encoding="utf-8")
@@ -7000,6 +7071,7 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
         "truncated_drivers": 0,
         "truncated_components": 0,
         "truncated_additions": 0,
+        "truncated_time_links": 0,
         "truncated_autostart": 0,
         "truncated_changes": 0,
         "autostart_counts": None,
@@ -7018,6 +7090,7 @@ def main(argv=None, run_ps=None, is_admin=None, now=None) -> int:
         "vendor_folders": listed_vendor_folders,
         "footprint_counts": (footprints.counts(footprint_data)
                              if footprint_data is not None else None),
+        "footprint_time_links": time_links,
         "hosts_file": hosts_file,
         "own_counts": {"programs": own_count, "autostart": own_autostart,
                        "unknown": unknown,

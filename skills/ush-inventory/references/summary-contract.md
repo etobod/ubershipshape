@@ -49,7 +49,7 @@ and the list of target files to `work/inventory-<stamp>.file_facts.input.json`
 (raw captures: never read them). The script changes nothing on the machine
 and exits 0; a `.lnk` shortcut is only read, never saved.
 
-To keep the summary within its budget of 35 000 characters eight lists may
+To keep the summary within its budget of 35 000 characters nine lists may
 be cut from their end, in these stages, each only when the one before it
 did not make the summary fit:
 
@@ -61,33 +61,36 @@ did not make the summary fit:
 | 4 | `drivers`, down to the first 10 (`DRIVERS_MIN`) | `truncated_drivers` | the end of the driver order (`Display` drivers lead it) |
 | 5 | `components`, down to the first 10 (`COMPONENTS_MIN`) | `truncated_components` | capabilities (they follow the features), then features, each from the end of the name order |
 | 6 | `additions`, down to the first 10 (`ADDITIONS_MIN`) | `truncated_additions` | the items without a change block, from the end of their group, then the items with one (see "Additions") |
-| 7 | `autostart`, down to the first 20 (`AUTOSTART_MIN`) | `truncated_autostart` | the end of the autostart order |
-| 8 | `components`, below the first 10 | `truncated_components` | as in stage 5 |
-| 9 | `driver_packages`, below the first 10 | `truncated_driver_packages` | as in stage 3 |
-| 10 | `drivers`, below the first 10 | `truncated_drivers` | as in stage 4 |
-| 11 | `vendor_folders`, below the first 10 | `truncated_vendor_folders` | as in stage 2 |
-| 12 | `additions`, below the first 10 | `truncated_additions` | as in stage 6 |
-| 13 | `programs`, below the 20 newest | `truncated` | as in stage 1 |
-| 14 | `changes`, down to the first 20 (`CHANGES_MIN`) | `truncated_changes` | the end of the change order, so the collapsed entries at its front go last (a collapsed entry is cut whole) |
-| 15 | `autostart`, below the first 20 | `truncated_autostart` | as in stage 7 |
-| 16 | `changes`, below the first 20 | `truncated_changes` | as in stage 14 |
-| 17 | `components`, `driver_packages`, `drivers`, `vendor_folders`, `additions`, then `programs`, each to nothing | as in stages 8 to 13 | as in stages 8 to 13 |
+| 7 | `footprint_time_links`, down to the 5 newest (`TIME_LINKS_MIN`) | `truncated_time_links` | the oldest `first_seen` |
+| 8 | `autostart`, down to the first 20 (`AUTOSTART_MIN`) | `truncated_autostart` | the end of the autostart order |
+| 9 | `components`, below the first 10 | `truncated_components` | as in stage 5 |
+| 10 | `driver_packages`, below the first 10 | `truncated_driver_packages` | as in stage 3 |
+| 11 | `drivers`, below the first 10 | `truncated_drivers` | as in stage 4 |
+| 12 | `vendor_folders`, below the first 10 | `truncated_vendor_folders` | as in stage 2 |
+| 13 | `additions`, below the first 10 | `truncated_additions` | as in stage 6 |
+| 14 | `footprint_time_links`, below the 5 newest | `truncated_time_links` | as in stage 7 |
+| 15 | `programs`, below the 20 newest | `truncated` | as in stage 1 |
+| 16 | `changes`, down to the first 20 (`CHANGES_MIN`) | `truncated_changes` | the end of the change order, so the collapsed entries at its front go last (a collapsed entry is cut whole) |
+| 17 | `autostart`, below the first 20 | `truncated_autostart` | as in stage 8 |
+| 18 | `changes`, below the first 20 | `truncated_changes` | as in stage 16 |
+| 19 | `components`, `driver_packages`, `drivers`, `vendor_folders`, `additions`, `footprint_time_links`, then `programs`, each to nothing | as in stages 9 to 15 | as in stages 9 to 15 |
 
 Stages 1
-to 6 keep a short list of each: a list with fewer items than its
+to 7 keep a short list of each: a list with fewer items than its
 minimum keeps them all. Every short list keeps its minimum before any list
-goes below it, and `autostart` goes to its short list (stage 7) before any
+goes below it, and `autostart` goes to its short list (stage 8) before any
 short list goes below its minimum. Then components go to nothing, then driver
 packages and only then drivers, so listed drivers outlast components and the
 listed packages (every cut package stays in the detail file and is counted by
 `truncated_driver_packages`); then the vendor folders (each not judged folder
-repeats the same `not_judged` cause), the additions and last the programs. A
-`null` `driver_packages` or `vendor_folders` stays `null` (with its count key
-`0`).
-Stages 14 to 16 run only when stage 13 did not make the
+repeats the same `not_judged` cause), the additions, the time links (the
+oldest first) and last the programs. A
+`null` `driver_packages`, `vendor_folders` or `footprint_time_links` stays
+`null` (with its count key `0`).
+Stages 16 to 18 run only when stage 15 did not make the
 summary fit, so `autostart` and `changes` are over the budget on their own:
-the six lists of stages 1 to 6 then go back to their short lists (`autostart`
-stays at its short list of stage 7), and are emptied again only in stage 17,
+the seven lists of stages 1 to 7 then go back to their short lists (`autostart`
+stays at its short list of stage 8), and are emptied again only in stage 19,
 after `autostart` and `changes`. A cut
 `autostart` gets `autostart_counts` (`{kind: number}`) and a cut `changes`
 gets `change_counts`
@@ -105,12 +108,12 @@ that the summary of `summary_file` does not hold) without starting any
 machine job, and `--detail <id>` fetches one. The detail file's `listed` is
 `{list: [id, ...]}`, the ids of the listable items of `programs`,
 `autostart`, `components`, `drivers`, `driver_packages`, `additions`,
-`vendor_folders` and `changes` before the cut (so a change collapsed into an entry is listed by `--cut`
+`vendor_folders`, `footprint_time_links` and `changes` before the cut (so a change collapsed into an entry is listed by `--cut`
 too) (own
 items are never in it), and `summary_file` is the summary of the same run.
 A detail file without `listed` or `summary_file`, or a summary that cannot be
 read, makes `--cut` exit 1 with the missing field or file on stderr. When the summary does not
-fit even with all eight lists empty, nothing is cut (every count is `0`),
+fit even with all nine lists empty, nothing is cut (every count is `0`),
 the summary goes out over the limit and `not_checked` gets the item
 `summary budget`.
 
@@ -209,7 +212,7 @@ Besides the shared fields (`schema_version`, `skill` = `"ush-inventory"`,
 | `elevated` | bool | the run had administrator rights; it then reads and writes the elevated baseline |
 | `baseline` | object | shared contract, "Baseline": `status` (`none`, `compared`, `unreadable`), `created_at`, `age_days`, `saved`, `reason`, `reference` (`latest` or the `--compare-to` value, e.g. `7d`) and `reference_file` (the history copy compared with, or `null`). `created_at` and `age_days` are those of the state compared with |
 | `comparison` | object | per item source (`win32_programs`, `msix_programs`, `portable_programs`, `run_keys`, `startup_folders`, `scheduled_tasks`, `services`, `optional_features`, `capabilities`, `drivers`, `driver_packages`, `firewall_rules`, `root_certificates`, `hosts`, `administrators`, `defender_exclusions`): `compared`, `no_baseline` or `not_read` (shared contract). A source added to the skill after the baseline was made is `no_baseline` on the first run |
-| `truncated_vendor_folders`, `truncated_driver_packages`, `truncated_drivers`, `truncated_components`, `truncated_additions`, `truncated_autostart`, `truncated_changes` | int | the items cut from `vendor_folders`, `driver_packages`, `drivers`, `components`, `additions`, `autostart` and `changes` (see "Files and output"), `0` when none (also when the list is `null`) |
+| `truncated_vendor_folders`, `truncated_driver_packages`, `truncated_drivers`, `truncated_components`, `truncated_additions`, `truncated_time_links`, `truncated_autostart`, `truncated_changes` | int | the items cut from `vendor_folders`, `driver_packages`, `drivers`, `components`, `additions`, `footprint_time_links`, `autostart` and `changes` (see "Files and output"), `0` when none (also when the list is `null`) |
 | `autostart_counts` | object or `null` | `{kind: number}` of the whole `autostart` list when it was cut, else `null` |
 | `change_counts` | object or `null` | `{source: {added, removed, changed}}` of the whole `changes` list (a collapsed entry by its `count`) when it was cut, else `null` |
 | `collapsed_changes` | int | the changes inside the collapsed entries of `changes` before the budget cut, `0` when none; above 0 the report checker takes the `c..` ids from the detail file, so a report may name a collapsed change by its id |
@@ -223,15 +226,16 @@ Besides the shared fields (`schema_version`, `skill` = `"ush-inventory"`,
 | `additions` | list or `null` | the items of the five added-to-the-system sources whose `own` is not `true`: first those with a change block, then those without, each group by kind in this order: `administrator`, `defender_exclusion`, `root_certificate`, `firewall_rule`, `hosts_entry`; ids `x..` (see "Additions"). `null` when none of the five sources was read. Cut to the budget (`truncated_additions`) |
 | `leftovers` | list | what removed programs left, never cut (see "Leftovers"); ids `l..`; `[]` when nothing is left |
 | `vendor_folders` | list or `null` | the top-level folders of the vendor roots that no rule matches, cut to the budget like `driver_packages` (`truncated_vendor_folders`, see "Files and output" and "Vendor folders"): `matched` `false` (no installed program matches) or `matched` `null` with `not_judged` (not judged, because something was not read); ids `v..`; `[]` with `truncated_vendor_folders` `0` when every folder read is matched or a Windows name (with `truncated_vendor_folders` above `0` the folders were cut: give the count, never call the list clean) |
-| `footprint_counts` | object or `null` | the counts of `state/footprints.json` as saved by this run (see "Program footprints"): `programs` (entries), `programs_gone` (entries with `gone_since`), `traces` and `traces_present` (the traces in the entries' `traces` lists, and those with `present` `true`), `shared` (items of `shared`), `gone_with_present_traces` (entries with `gone_since` that have a trace with `present` `true`; a shared folder is not counted). Fixed size, never cut. `null` when the file could not be read or saved; `not_checked` then has the item `state/footprints.json`. Counts, never a verdict |
+| `footprint_counts` | object or `null` | the counts of `state/footprints.json` as saved by this run (see "Program footprints"): `programs` (entries), `programs_gone` (entries with `gone_since`), `traces` and `traces_present` (the explicit traces in the entries' `traces` lists, `linked_by` other than `time`, and those with `present` `true`), `time_links` and `time_links_present` (the time traces, `linked_by` `time`, and those with `present` `true`), `shared` (items of `shared`), `gone_with_present_traces` (entries with `gone_since` that have an explicit trace with `present` `true`; a shared folder and a time trace are not counted). Fixed size, never cut. `null` when the file could not be read or saved; `not_checked` then has the item `state/footprints.json`. Counts, never a verdict |
+| `footprint_time_links` | list or `null` | one item per time trace of `state/footprints.json` with `present` `true` (see "Program footprints"): `{id, program, name, kind, trace_name, first_seen}`; `program` the program key, `name` the program's name, `kind` the trace kind, `trace_name` the autostart entry's or firewall rule's `name` or the vendor folder's `name` (never a path; `null` when this run did not read it), `first_seen` the day the trace appeared; the newest `first_seen` first; ids `t..`. A time link says only that the trace appeared in the same run as the program: it is not confirmed and never a leftover or a reason to remove anything. `null` when `footprint_counts` is `null`. Cut to the budget (`truncated_time_links`, the oldest go first); `--block t<n>` prints `# t<n>: no block: <reason>` |
 | `hosts_file` | object | `{exists, path_is_default}` and, when any is `null`, `unread_fields` naming it (see "hosts_file") |
 | `own_counts` | object | `programs`: the number of programs with `own: true`; `autostart`: `{kind: number}` of the entries with `own: true`, per `kind`; `unknown`: the number of entries with `own: null`; `drivers`: the drivers with `own: true` (`null` when not read); `firewall_rules`: `{local, app_iso, policy}` numbers of rules with `own: true` per store (`null` when not read); `root_certificates`: the certificates with `own: true` (`null` when not read) |
 | `changes` | list | the changes since the baseline whose item is not own on at least one side; ids `c..`. The changes named by a rule of `data/collapsed_names.json` (a list of `{source, collapsed, prefix}`; today the firewall rules whose `name` starts with `ms-resource:`, an unresolved resource string, case-insensitive) are collapsed: one entry `{collapsed, source, change, count}` (e.g. `{collapsed: "ms-resource", source: "firewall_rules", change, count}`) per rule and change type, without an id, ahead of the other changes, so the budget cuts the other changes first; the detail file keeps each with its id. Cut to the budget (`truncated_changes`, `change_counts`) |
 | `own_changes` | object | `{added, removed, changed, by_source}`: the counts of the changes of items that are own on every side they have; those changes are only in the detail file. `by_source` is `{<source>: {added, removed, changed}}` for every item source of `comparison`, zeros included, so the model can say which source they came from (e.g. firewall rules after an update) |
 
 Ids: `a..` programs, `s..` autostart entries, `f..` components, `d..`
-drivers, `o..` driver packages, `x..` additions, `l..` leftovers, `v..` vendor folders, `c..` changes. The numbers of
-`a`, `s`, `f`, `d`, `o`, `x`, `l` and `v` are stable between runs (shared contract, "Ids and --detail"):
+drivers, `o..` driver packages, `x..` additions, `l..` leftovers, `v..` vendor folders, `t..` time links, `c..` changes. The numbers of
+`a`, `s`, `f`, `d`, `o`, `x`, `l`, `v` and `t` are stable between runs (shared contract, "Ids and --detail"):
 the number is not the item's position in its list, so the summary may have
 gaps (`a1`, `a5`, ...) and the id of an item that is only in the detail file
 does not follow from the list. The map from an item's `key` to its number
@@ -774,21 +778,26 @@ This skill has no block for a folder (`--block v<n>` says so).
 ### Program footprints
 
 Every run (normal or elevated) keeps the traces it can tie to a program
-explicitly in `<data dir>/state/footprints.json` (written by this script
+in `<data dir>/state/footprints.json` (written by this script
 only, saved verified through the shared `save_json`, before the detail file
 is written):
 
 ```
-{"schema_version": 1,
+{"schema_version": 2,
  "entries": [{"key", "name", "first_seen", "gone_since",
               "traces": [{"kind", "key", "linked_by", "first_seen", "present",
                           "gone_since", "seen_elevated"}]}],
  "shared": [{"kind", "key", "linked_by", "programs", "first_seen", "present",
-             "gone_since", "seen_elevated"}]}
+             "gone_since", "seen_elevated"}],
+ "last_run": {"<kind>": {"present": ["<key>"], "within": ["<key prefix>"] | null}}}
 ```
 
+A `schema_version` 1 file (no `last_run`) is read as version 2 with an empty
+`last_run`, so its first version 2 run makes no time link; the run saves it
+as version 2.
+
 - `entries`: one per program key the run lists (`win32:...`, `msix:...`,
-  also the baseline's programs of a source not read), with or without
+  `portable:...` for a portable program, also the baseline's programs of a source not read), with or without
   traces, by key. `first_seen` is the UTC date (`YYYY-MM-DD`) the program
   was first listed, carried from the file; `gone_since` is `null` while the
   program is listed, else the first day its read source no longer had it (a
@@ -812,8 +821,27 @@ is written):
   and the entry was read in this run; a firewall rule (`kind`
   `firewall_rules`) through its `program` with `linked_by` `"path"`; a vendor
   folder (`kind` `vendor_folders`) through its `programs` (`linked_by`
-  `"install_location"`). `key` is the trace's own key (`run:...`, `task:...`,
+  `"install_location"`) or through a line of the vendors table naming the
+  program's publisher (`linked_by` `"vendor"`). `key` is the trace's own key (`run:...`, `task:...`,
   `firewall:<store>:<name>`, `vendor_folder:<case-folded path>`).
+- A time link (`linked_by` `"time"`): a trace with no explicit link that
+  appeared in the same run as a program is linked to that program, only
+  when the trace's kind and the programs were both read in full in the
+  previous run (`last_run`), the trace's key was not there then and the
+  program had no entry in the previous file. Windows' own items (an own
+  `msix` program, an own firewall rule, an own autostart entry) are never
+  part of a time link, on either side, nor is an autostart entry whose
+  ownership is unknown (`own` `null`). It says only that the two
+  appeared together: it is not confirmed, never shared, counted apart
+  (`time_links`, `time_links_present`), never a leftover, and goes as soon as
+  the same trace key gets an explicit link. Present time traces are listed
+  in the summary's `footprint_time_links`.
+- `last_run` holds the kinds (and `programs`) this run read in full:
+  `present` the keys seen, `within` the key prefixes the kind covers
+  (`null`: all of them). A kind with a key or a whole source not read is left
+  out; a kind whose only gap is the per-user keys of an elevated run keeps
+  those keys from the previous `last_run` when its `within` is the same, and
+  is left out otherwise. A kind left out makes no time link in the next run.
 - A link, once recorded, is kept. `present` says whether the trace's own key
   is in its read source in this run, never whether the link was found again,
   so the traces of a removed program still on the machine stay `present`
@@ -836,10 +864,11 @@ is written):
   program ever linked to it, and is in no entry's `traces`; it stays shared.
   Its `first_seen` is the earliest of the trace dates it replaced.
 - Nothing is removed and no block is printed from this file. A file that
-  cannot be read (bad JSON, a wrong `schema_version`, a bad date, a
-  `linked_by` other than `path` or `install_location`, two entries or traces
+  cannot be read (bad JSON, a `schema_version` other than 1 or 2, a bad date, a
+  `linked_by` other than `path`, `install_location`, `vendor` or `time`, a bad
+  `last_run`, two entries or traces
   with one key) is left as it was: nothing is updated,
-  `footprint_counts` and the detail file's `footprints` are `null` and
+  `footprint_counts`, `footprint_time_links` and the detail file's `footprints` are `null` and
   `not_checked` has the item `state/footprints.json` with the reason. A
   failed save gives the same item with the save's reason; the run still
   exits 0 with its other results.

@@ -55,12 +55,12 @@ shared by all skills (see `<plugin root>/skills/ush-health/references/report-for
   fact's `path`), a service's `display_name`, a fact's `company`, and a
   fact's `expanded_path` when it equals `path`. When the report needs one,
   fetch the item with `--detail <id>` and name it in an `ush:detail` line.
-- Item ids (`a1`, `s2`, `f3`, `d4`, `o5`, `x6`, `v7`, `c8`) are not numbers when they
+- Item ids (`a1`, `s2`, `f3`, `d4`, `o5`, `x6`, `v7`, `t9`, `c8`) are not numbers when they
   name an item of the summary, an item named in `ush:detail` or an item cut
   from the summary (`truncated`, `truncated_vendor_folders`,
   `truncated_driver_packages`, `truncated_drivers`,
-  `truncated_components`, `truncated_additions`, `truncated_autostart`,
-  `truncated_changes`). A word of that shape that
+  `truncated_components`, `truncated_additions`, `truncated_time_links`,
+  `truncated_autostart`, `truncated_changes`). A word of that shape that
   is no such id is checked as a number.
 - Write every number in digits: a number word (`dwa`, `trzy`, `two`, in any
   case or form) outside code fails the check unless the same word is in a
@@ -84,7 +84,8 @@ shared by all skills (see `<plugin root>/skills/ush-health/references/report-for
 ## Items the report must name
 
 Every `id` of the summary lists `programs`, `autostart`, `components`,
-`drivers`, `driver_packages`, `additions`, `leftovers`, `vendor_folders` and `changes` appears in a visible line of the
+`drivers`, `driver_packages`, `additions`, `leftovers`, `vendor_folders`,
+`footprint_time_links` and `changes` appears in a visible line of the
 report, as a word of its own (`s12` does not name `s1`). Several ids on one
 line are fine (`a4, a5, a6: ...`). A mention inside a fenced code block or
 on a marker line does not count. The check lists each missing id as
@@ -92,7 +93,8 @@ on a marker line does not count. The check lists each missing id as
 summary (the `truncated*` counts) and items fetched with `--detail` are not
 required. A list that is `null` (its sources were not read) requires
 nothing, but the keys `components`, `component_counts`, `drivers`,
-`driver_packages`, `additions`, `hosts_file` and `vendor_folders` must be in the summary: a summary without them
+`driver_packages`, `additions`, `hosts_file`, `vendor_folders`,
+`footprint_counts` and `footprint_time_links` must be in the summary: a summary without them
 is of an older shape and fails with
 `required key missing from the summary: <key>`.
 
@@ -138,6 +140,7 @@ the count of low recommendations whose main source no line names.
    | 7 | Added to the system | x2 hosts entry | 🔍 see below |
    | 8 | Leftovers of removed programs | l1 folder and task | 🔧 see below |
    | 9 | Vendor folders: no installed program, or not judged | v1, v2 | 🔍 see below |
+   | 10 | Program footprints | t1 appeared together with a program | 🔍 see below |
 
    `#` is the section number of the area, `State` a few words with the ids
    and the numbers from the JSON, `Action` a legend symbol and a few words
@@ -470,6 +473,27 @@ the count of low recommendations whose main source no line names.
      `0` says that every folder read is matched or a Windows name. With
      `truncated_vendor_folders` above `0` the folders were cut to the budget,
      not absent: give the count, never call the list clean or empty.
+   - Program footprints (in a Polish report „Ślady programów”): each number
+     of `footprint_counts` on its own line with its name, as in the JSON and
+     never summed: programs (`programs`), programs gone (`programs_gone`),
+     traces (`traces`), traces present (`traces_present`), shared folders
+     (`shared`), programs gone with a trace still present
+     (`gone_with_present_traces`), time links (`time_links`) and time links
+     present (`time_links_present`). Then one bullet per
+     `footprint_time_links` item: `ush-inventory t<n>`, the program's `name`,
+     the trace `kind` and its `trace_name` (or "no name read" when it is
+     `null`) and `first_seen`, worded „pojawił się razem z <program>,
+     niepotwierdzone” (English "appeared together with <program>, not
+     confirmed"). A time link is only a guess from the day the trace
+     appeared: it is never named as a leftover, never gets a recommendation
+     and is never offered for removal (`--block t<n>` prints no block). With
+     `truncated_time_links` above 0 the oldest time links were cut to the
+     budget: say how many (the number from the JSON) and that the detail
+     file has them (`--cut` lists the cut items, see SKILL.md); never name a
+     cut item's id unless you fetched it with `--detail`. An empty list says that no time link is present.
+     `footprint_counts` `null` (`footprint_time_links` then `null` too): the
+     footprints were not checked; give the reason of the `not_checked` item
+     `state/footprints.json`, never 0 or "no traces".
    - Package managers are not in this report: pip, npm and the other package
      managers are read and reported by `ush-packages`.
 
@@ -679,6 +703,9 @@ Never report missing data as "no changes" or "clean":
   the reason; say the groups were not checked and that no driver package
   was judged as a leftover, give the packages without a group and keep
   their states.
+- `footprint_counts` `null` (`state/footprints.json` could not be read or
+  saved; "Not checked" names it with the reason): the program footprints and
+  their time links were not checked; say so with the reason, never 0.
 - `vendor_folders` `null` (the data file could not be used, no root could
   be listed, or a program source was not read and the baseline holds none
   of its programs; "Not checked" names which): say "not read" with the
@@ -696,7 +723,8 @@ Never report missing data as "no changes" or "clean":
   be read, so every exclusion has `origin` `null` and gets no block.
 - Truncated lists: `truncated`, `truncated_vendor_folders`,
   `truncated_driver_packages`, `truncated_drivers`,
-  `truncated_components`, `truncated_additions`, `truncated_autostart` or
+  `truncated_components`, `truncated_additions`, `truncated_autostart`,
+  `truncated_time_links` or
   `truncated_changes` > 0 means the summary
   holds only part of that list; the cut items are in the detail file.
   Ids are stable between runs, not positions, so the id of a cut item does
