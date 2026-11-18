@@ -2,7 +2,9 @@
 
 Plan 061 moved the pip and npm reading of ush-inventory here, with the same
 PowerShell bodies, keys, item fields, ``from_baseline`` carrying and not_checked
-entries. No package manager runs: pip, npm and winget are never started.
+entries. No package manager runs: pip, npm, winget and VS Code are never started.
+Plan 073 added a Python read path beside the jobs: ``DISK`` reads files directly,
+at locations expanded from ``ENVIRON`` (an unset ``%VAR%`` counts as absent).
 
 Sources (read-only PowerShell jobs, run through an injectable ``run_ps``; see
 ``skills/ush-common/scripts/psrun.py``):
@@ -14,7 +16,8 @@ Sources (read-only PowerShell jobs, run through an injectable ``run_ps``; see
 - ``npm_packages``: the ``package.json`` of each package in the global
   ``node_modules`` folder (job ``package_folders``, layout ``npm``); the prefix comes
   from ``NPM_CONFIG_PREFIX``, else the ``prefix=`` line of ``%USERPROFILE%\\.npmrc``
-  (job ``npmrc``), else ``%APPDATA%\\npm``. Key ``npm:<install name>``.
+  (job ``npmrc``), else ``%APPDATA%\\npm``; no ``node_modules`` folder there is npm
+  ``not_present``. Key ``npm:<install name>``.
 - ``pipx_packages``: the ``venvs\\<venv>\\pipx_metadata.json`` of each pipx home
   (``PIPX_HOME``, else the homes of pipx 1.5+, before 1.3 and 1.3-1.4; job
   ``pipx_homes``): the main package and each injected one. Keys ``pipx:<venv>`` and
@@ -28,6 +31,14 @@ Sources (read-only PowerShell jobs, run through an injectable ``run_ps``; see
   ``<name>-<version>-<build>`` (job ``conda_environments``; file contents are not
   read). Key ``conda:<environment label>|<name>``; the label is the prefix's last folder
   name, with ``~2``, ``~3`` for later prefixes of the same label.
+- ``winget_packages``: the tracking catalogs of winget, each subfolder of
+  ``%LOCALAPPDATA%\\Packages\\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\\LocalState``
+  holding ``installed.db`` (SQLite schema 1, opened read-only and immutable through
+  ``DISK``, no job): per id the highest version recorded. Key
+  ``winget:<catalog label>|<id>``; the label is the subfolder name.
+- ``vscode_extensions``: the ``extensions.json`` of the VS Code extensions folder
+  (``VSCODE_EXTENSIONS``, else ``%USERPROFILE%\\.vscode\\extensions``; read through
+  ``DISK``, no job). Key ``vscode:<extension id>``.
 
 Each is compared with the baseline ``ush-packages`` on ``version``; the changes
 are ``c`` items. The summary lists every manager of ``data/managers.json`` under
@@ -47,7 +58,9 @@ import json
 import ntpath
 import os
 import re
+import sqlite3
 import sys
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -57,6 +70,7 @@ sys.path.insert(0, str(Path(__file__).absolute().parents[2] / "ush-common" / "sc
 import baseline  # called as baseline.save(...), so tests can patch it
 import datadir
 import ids
+import progress
 import psrun
 from psrun import dump, ps_script, run_job
 
@@ -69,11 +83,13 @@ DETAIL_SECTIONS = ("packages", "changes")
 MANAGERS_FILE = Path(__file__).absolute().parents[1] / "data" / "managers.json"
 # The managers this script reads; every other one is "not_read".
 READ_MANAGERS = {"pip": "pip_packages", "npm": "npm_packages", "pipx": "pipx_packages",
-                 "uv": "uv_tools", "conda": "conda_packages"}
+                 "uv": "uv_tools", "conda": "conda_packages", "winget": "winget_packages",
+                 "vscode": "vscode_extensions"}
 NOT_READ_YET = "not read yet"
 
 # The sources with items, compared with the baseline, in change order.
-SOURCES = ("pip_packages", "npm_packages", "pipx_packages", "uv_tools", "conda_packages")
+SOURCES = ("pip_packages", "npm_packages", "pipx_packages", "uv_tools", "conda_packages",
+           "winget_packages", "vscode_extensions")
 READ_STATUSES = ("read", "empty")
 COMPARED_FIELDS = {source: ("version",) for source in SOURCES}
 CHANGE_ORDER = ("added", "removed", "changed")
@@ -545,6 +561,10 @@ class Collector:
         self.uv_summary = None
         # set by collect_conda: the summary part managers.conda (without state)
         self.conda_summary = None
+        # set by collect_winget: the summary part managers.winget (without state)
+        self.winget_summary = None
+        # set by collect_vscode: the summary part managers.vscode (without state)
+        self.vscode_summary = None
         # the managers none of whose disk locations exists (state not_present)
         self.not_present = set()
 
@@ -861,15 +881,51 @@ def collect_pip(col: Collector, previous: dict) -> tuple[str, dict]:
 # package.json (npm does not run).
 NPM_DEFAULT_PREFIX = "%APPDATA%\\npm"
 NPMRC_PREFIX = re.compile(r"\s*prefix\s*=\s*(.*?)\s*$")
-# Named when npm is empty (the global node_modules folder is absent or holds no
-# package): npm may keep its global packages under another prefix, not searched.
+# Named when npm is not_present (no global node_modules folder) or empty (the folder
+# holds no package): npm may keep its global packages under another prefix, not searched.
 NPM_OTHER_PREFIXES = ("npm global packages under another prefix",
                       ("the global node_modules folder of the prefix read is absent or holds "
                        "no package; the prefixes from the global or builtin npmrc and the "
                        "folder of node.exe (nvm-windows, zip builds) were not searched"))
 NPM_PREFIX_VARIABLE = "NPM_CONFIG_PREFIX"
-# The environment NPM_CONFIG_PREFIX is read from; tests replace it with an invented one.
+# The environment NPM_CONFIG_PREFIX is read from and the locations of the Python read
+# path are expanded from; tests replace it with an invented one.
 ENVIRON = os.environ
+ENVIRONMENT_REFERENCE = re.compile(r"%([^%]+)%")
+
+
+class Disk:
+    """The direct, read-only file access of the Python read path (plan 073): tests
+    replace its methods to raise ``OSError`` or ``sqlite3.Error`` for a chosen path."""
+
+    def exists(self, path) -> bool:
+        """True when ``path`` exists; False when it (or a parent) is not there. Any other
+        ``OSError`` (access denied) is raised, so "absent" never hides "unreadable"."""
+        return Path(path).exists()
+
+    def size(self, path) -> int:
+        """The size in bytes of the file ``path``; ``OSError`` when it cannot be read."""
+        return Path(path).stat().st_size
+
+    def list_dir(self, path) -> list:
+        """The entry names of the folder ``path``; ``OSError`` when it cannot be listed."""
+        return os.listdir(path)
+
+    def read_text(self, path) -> str:
+        """The text of the UTF-8 file ``path`` (a BOM is dropped); ``OSError`` or
+        ``UnicodeDecodeError`` when it cannot be read."""
+        return Path(path).read_text(encoding="utf-8-sig")
+
+    def query_catalog(self, path, sql) -> list:
+        """The rows of ``sql`` on the SQLite file ``path``, opened read-only and immutable
+        (nothing is written beside it, no -journal, -shm or -wal file); the connection is
+        always closed. ``sqlite3.Error`` when it cannot be read."""
+        uri = Path(path).as_uri() + "?mode=ro&immutable=1"
+        with closing(sqlite3.connect(uri, uri=True)) as conn:
+            return conn.execute(sql).fetchall()
+
+
+DISK = Disk()
 
 
 def environment_value(name: str) -> str | None:
@@ -879,6 +935,23 @@ def environment_value(name: str) -> str | None:
         if isinstance(key, str) and key.casefold() == name.casefold():
             return value.strip() if isinstance(value, str) and value.strip() else None
     return None
+
+
+def expand_path(raw: str) -> str | None:
+    """``raw`` with each ``%VAR%`` replaced from ``ENVIRON`` (no trailing slash), or None
+    when one of them is unset or blank: such a location is not looked at and counts as
+    absent, so a test with an empty ``ENVIRON`` never reads the machine."""
+    missing = []
+
+    def value(match):
+        found = environment_value(match.group(1))
+        if found is None:
+            missing.append(match.group(1))
+            return match.group(0)
+        return found.rstrip("\\/")
+
+    expanded = ENVIRONMENT_REFERENCE.sub(value, raw)
+    return None if missing else expanded
 
 
 def npm_prefix(col: Collector) -> tuple[str | None, str | None, str | None]:
@@ -949,12 +1022,13 @@ def collect_npm(col: Collector, previous: dict) -> tuple[str, dict]:
     """``(status, {key: item})`` of the source ``npm_packages``; the summary part
     ``{status, prefix_from, count, unreadable}`` is kept in ``col.npm_summary``.
 
-    Status ``read`` with at least one package, ``empty`` when ``node_modules`` is
-    missing ("npm not present") or holds no package, ``unreadable`` (count null, named
+    A missing ``node_modules`` makes npm ``not_present`` (``looked_in`` the folder; the
+    source is ``empty``). Status ``read`` with at least one package, ``empty`` when
+    ``node_modules`` exists and holds no package, ``unreadable`` (count null, named
     in not_checked) when ``.npmrc`` or the folder could not be read; then the items of
     the previous baseline are kept, marked ``from_baseline``. ``unreadable`` (the
-    package count) is null with status ``unreadable``. When npm is ``empty``, names the
-    prefixes not searched in not_checked.
+    package count) is null with status ``unreadable``. When npm is ``not_present`` or
+    ``empty``, names the prefixes not searched in not_checked.
     """
     prefix, prefix_from, reason = npm_prefix(col)
     answer = None
@@ -975,6 +1049,10 @@ def collect_npm(col: Collector, previous: dict) -> tuple[str, dict]:
         col.npm_summary = {"status": "unreadable", "prefix_from": prefix_from,
                            "count": None, "unreadable": None}
         return "unreadable", items
+    if answer["status"] == "absent":
+        col.skip(*NPM_OTHER_PREFIXES)
+        status, items, col.npm_summary = not_present(col, "npm", "npm_packages", [folder])
+        return status, items
     items, count, unreadable = {}, 0, 0
     packages, scopes = [], 0
     for package in answer["packages"]:
@@ -1419,6 +1497,290 @@ def collect_conda(col: Collector, previous: dict) -> tuple[str, dict]:
     return status, items
 
 
+# winget: the packages winget recorded as installed through it, read from its tracking
+# catalogs (SQLite, opened read-only and immutable; winget does not run).
+WINGET_SOURCE = "winget_packages"
+WINGET_LOCAL_STATE = ("%LOCALAPPDATA%\\Packages\\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe"
+                      "\\LocalState")
+WINGET_CATALOG_FILE = "installed.db"
+# The tracking catalog schema this reader knows (metadata majorVersion).
+WINGET_SCHEMA = "1"
+WINGET_SCHEMA_SQL = "SELECT value FROM metadata WHERE name = 'majorVersion'"
+WINGET_MANIFEST_SQL = ("SELECT manifest.rowid, ids.id, names.name, versions.version "
+                       "FROM manifest "
+                       "JOIN ids ON ids.rowid = manifest.id "
+                       "JOIN names ON names.rowid = manifest.name "
+                       "JOIN versions ON versions.rowid = manifest.version")
+WINGET_NOT_MERGED = ("the catalog is read immutable; writes still in its -wal file are "
+                     "not seen")
+WINGET_READ_NOTES = (("winget records not checked against installed programs",
+                      ("the tracking catalogs list what winget installed; a package removed "
+                       "outside winget may still be listed")),
+                     ("packages installed outside winget",
+                      ("only winget's tracking catalogs are read; programs installed "
+                       "another way are not winget packages here")))
+
+
+def winget_rows(path: str) -> tuple[list | None, str | None]:
+    """``(rows, None)`` of one tracking catalog, each ``(manifest rowid, id, name,
+    version)``, or ``(None, reason)`` when it cannot be read or its schema
+    (``metadata`` ``majorVersion``) is not ``WINGET_SCHEMA``."""
+    try:
+        schema = DISK.query_catalog(path, WINGET_SCHEMA_SQL)
+        values = sorted({str(row[0]).strip() for row in schema})
+        if values != [WINGET_SCHEMA]:
+            return None, f"tracking catalog schema {', '.join(values) or '(none)'} not known"
+        return DISK.query_catalog(path, WINGET_MANIFEST_SQL), None
+    except (sqlite3.Error, OSError, ValueError) as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+
+
+def winget_items(label: str, folder: str, rows: list) -> tuple[dict, int]:
+    """``({key: item}, rows without an id)`` of one catalog: per id (case-folded) the row
+    with the highest version by ``version_key``, a tie broken by the version string,
+    then by the highest manifest rowid, so the choice never depends on row order."""
+    by_id, no_id = {}, 0
+    for row in rows:
+        rowid, package_id, name, version = (tuple(row) + (None,) * 4)[:4]
+        package_id = text(package_id)
+        if package_id is None:
+            no_id += 1
+            continue
+        by_id.setdefault(package_id.strip().casefold(), []).append(
+            (rowid if isinstance(rowid, int) else -1, package_id.strip(), text(name),
+             text(version)))
+    items = {}
+    for folded, found in sorted(by_id.items()):
+        rowid, package_id, name, version = max(
+            found, key=lambda r: (version_key(r[3]), r[3] or "", r[0]))
+        item = {"name": name or package_id, "id": package_id, "version": version,
+                "versions_recorded": len(found), "source": label, "folder": folder,
+                "status": "read", "reason": None}
+        if version is None:
+            unreadable_item(item, "the tracking catalog gives no version for this id")
+        items[f"winget:{label}|{folded}"] = item
+    return items, no_id
+
+
+def collect_winget(col: Collector, previous: dict) -> tuple[str, dict]:
+    """Read the winget tracking catalogs, with a start and an end progress line."""
+    progress.step(f"{WINGET_SOURCE} ...")
+    status, items = read_winget(col, previous)
+    progress.step(f"{WINGET_SOURCE} {'failed' if status == 'unreadable' else 'done'}")
+    return status, items
+
+
+def read_winget(col: Collector, previous: dict) -> tuple[str, dict]:
+    """``(status, {key: item})`` of the source ``winget_packages``; the summary part
+    ``{status, catalogs, count, unreadable}`` is kept in ``col.winget_summary``.
+
+    ``LocalState`` absent (or its ``%VAR%`` unset): ``not_present``. Present but not
+    listable: ``unreadable``, the previous items kept ``from_baseline``. Each subfolder
+    holding ``installed.db`` is a catalog, labelled by its name case-folded. A catalog
+    that cannot be read keeps its previous items ``from_baseline`` and is named in
+    not_checked; the source is ``unreadable`` only when no catalog could be read. The
+    count is null while any catalog is unreadable.
+    """
+    path = expand_path(WINGET_LOCAL_STATE)
+    try:
+        present = path is not None and DISK.exists(path)
+        names = sorted(DISK.list_dir(path), key=str.casefold) if present else None
+    except OSError as exc:
+        reason = (f"{WINGET_LOCAL_STATE} could not be listed: "
+                  f"{type(exc).__name__}: {exc}")
+        items = carry_source(col, WINGET_SOURCE, previous, reason)
+        col.winget_summary = {"status": "unreadable", "catalogs": None, "count": None,
+                              "unreadable": None}
+        return "unreadable", items
+    if not present:
+        status, items, col.winget_summary = not_present(
+            col, "winget", WINGET_SOURCE, [WINGET_LOCAL_STATE])
+        return status, items
+    items, catalogs, unreadable = {}, [], 0
+    for name in names:
+        label = name.casefold()
+        folder = f"{WINGET_LOCAL_STATE}\\{name}"
+        catalog = f"{path}\\{name}\\{WINGET_CATALOG_FILE}"
+        row = {"source": label, "status": "read", "count": None, "wal_present": None,
+               "reason": None}
+        wal_reason = None
+        try:
+            if not DISK.exists(catalog):
+                continue  # a folder or file that is no catalog
+        except OSError as exc:
+            # Whether it is a catalog is not known: its items, if any, are kept.
+            row.update(status="unreadable", reason=f"{type(exc).__name__}: {exc}")
+        else:
+            try:
+                # A zero-byte -wal is left after a checkpoint and holds nothing
+                # unmerged; only a non-empty one is named. One stat call: a -wal that
+                # is not there (or is deleted meanwhile) is no -wal.
+                row["wal_present"] = DISK.size(catalog + "-wal") > 0
+            except FileNotFoundError:
+                row["wal_present"] = False
+            except OSError as exc:
+                wal_reason = f"{type(exc).__name__}: {exc}"
+            rows, reason = winget_rows(catalog)
+            if rows is None:
+                row.update(status="unreadable", reason=reason)
+        catalogs.append(row)
+        if row["status"] == "unreadable":
+            col.skip(f"winget_packages {label}",
+                     f"{folder}\\{WINGET_CATALOG_FILE} could not be read: {row['reason']}")
+            carry(col, WINGET_SOURCE, previous, items,
+                  lambda key, label=label: key.startswith(f"winget:{label}|"))
+            continue
+        if row["wal_present"]:
+            col.skip(f"winget records not yet merged into {label}\\{WINGET_CATALOG_FILE}",
+                     WINGET_NOT_MERGED)
+        elif row["wal_present"] is None:
+            col.skip(f"winget records not yet merged into {label}\\{WINGET_CATALOG_FILE}",
+                     f"whether a -wal file is beside the catalog could not be checked: "
+                     f"{wal_reason}")
+        found, no_id = winget_items(label, folder, rows)
+        items.update(found)
+        if no_id:
+            col.skip(f"winget_packages {label} rows without an id",
+                     f"{no_id} manifest rows of the tracking catalog give no id and are "
+                     f"not read")
+        row["count"] = sum(1 for item in found.values() if item["status"] == "read")
+        unreadable += no_id + sum(1 for item in found.values()
+                                  if item["status"] == "unreadable")
+    read = [row for row in catalogs if row["status"] == "read"]
+    if catalogs and not read:
+        col.record(WINGET_SOURCE, "unreadable", "no tracking catalog of winget could be read")
+        col.winget_summary = {"status": "unreadable", "catalogs": catalogs, "count": None,
+                              "unreadable": None}
+        return "unreadable", items
+    status = "read" if items else "empty"
+    col.record(WINGET_SOURCE, status, None)
+    for note in WINGET_READ_NOTES:
+        col.skip(*note)
+    col.winget_summary = {
+        "status": status, "catalogs": catalogs,
+        "count": None if len(read) < len(catalogs) else sum(r["count"] for r in read),
+        "unreadable": unreadable}
+    return status, items
+
+
+# VS Code extensions: the extensions.json of the extensions folder (VS Code does not
+# run). Other editions (Insiders, VSCodium, portable) are not read.
+VSCODE_SOURCE = "vscode_extensions"
+VSCODE_VARIABLE = "VSCODE_EXTENSIONS"
+VSCODE_DEFAULT_FOLDER = "%USERPROFILE%\\.vscode\\extensions"
+VSCODE_LIST_FILE = "extensions.json"
+VSCODE_NO_LIST = "no extensions.json in the extensions folder"
+VSCODE_EDITIONS = ("VS Code Insiders, VSCodium and portable VS Code",
+                   ("only the extensions folder of VS Code (VSCODE_EXTENSIONS, else "
+                    "%USERPROFILE%\\.vscode\\extensions) is read; the extensions of other "
+                    "editions and of editors built on VS Code are not"))
+
+
+def vscode_entry(raw: str, entry) -> tuple[str, dict] | None:
+    """``(key, item)`` of one ``extensions.json`` entry, or None when it has no string
+    ``identifier.id`` (it cannot be keyed). An entry without a string ``version`` is an
+    item with status ``unreadable``. ``folder`` is the raw extensions folder joined with
+    ``relativeLocation``, or None without one."""
+    identifier = entry.get("identifier") if isinstance(entry, dict) else None
+    ext_id = identifier.get("id") if isinstance(identifier, dict) else None
+    if not isinstance(ext_id, str) or not ext_id.strip():
+        return None
+    ext_id = ext_id.strip()
+    version, relative = entry.get("version"), entry.get("relativeLocation")
+    item = {"name": ext_id,
+            "version": version.strip() if isinstance(version, str) and version.strip()
+            else None,
+            "status": "read", "reason": None,
+            "folder": f"{raw}\\{relative.strip()}"
+            if isinstance(relative, str) and relative.strip() else None}
+    if item["version"] is None:
+        unreadable_item(item, "extensions.json gives no version for this extension")
+    return f"vscode:{ext_id.casefold()}", item
+
+
+def collect_vscode(col: Collector, previous: dict) -> tuple[str, dict]:
+    """Read the VS Code extensions, with a start and an end progress line."""
+    progress.step(f"{VSCODE_SOURCE} ...")
+    status, items = read_vscode(col, previous)
+    progress.step(f"{VSCODE_SOURCE} {'failed' if status == 'unreadable' else 'done'}")
+    return status, items
+
+
+def read_vscode(col: Collector, previous: dict) -> tuple[str, dict]:
+    """``(status, {key: item})`` of the source ``vscode_extensions``; the summary part
+    ``{status, folder_from, count, unreadable}`` is kept in ``col.vscode_summary``.
+
+    The folder is ``VSCODE_EXTENSIONS`` (non-blank), else
+    ``%USERPROFILE%\\.vscode\\extensions``. Absent (or its ``%VAR%`` unset):
+    ``not_present``. Present without a readable ``extensions.json`` holding a list:
+    ``unreadable``, the previous items kept ``from_baseline``. An entry without an id
+    counts in ``unreadable`` and is named once in not_checked; a second entry of the
+    same id gets ``|<folder case-folded>`` (as npm).
+    """
+    raw = environment_value(VSCODE_VARIABLE)
+    folder_from = VSCODE_VARIABLE
+    if raw is None:
+        raw, folder_from = VSCODE_DEFAULT_FOLDER, "default"
+    raw = raw.rstrip("\\/") or raw
+    path = expand_path(raw)
+    list_file = f"{raw}\\{VSCODE_LIST_FILE}"
+
+    def unreadable(reason: str) -> tuple[str, dict]:
+        items = carry_source(col, VSCODE_SOURCE, previous, reason)
+        col.vscode_summary = {"status": "unreadable", "folder_from": folder_from,
+                              "count": None, "unreadable": None}
+        return "unreadable", items
+
+    try:
+        present = path is not None and DISK.exists(path)
+        listed = DISK.read_text(f"{path}\\{VSCODE_LIST_FILE}") if present else None
+    except FileNotFoundError:
+        return unreadable(VSCODE_NO_LIST)
+    except (OSError, UnicodeDecodeError) as exc:
+        return unreadable(f"{list_file} could not be read: {type(exc).__name__}: {exc}")
+    if not present:
+        col.skip(*VSCODE_EDITIONS)
+        status, items, col.vscode_summary = not_present(col, "vscode", VSCODE_SOURCE, [raw])
+        return status, items
+    try:
+        entries = json.loads(listed)
+    except ValueError as exc:
+        return unreadable(f"{list_file} is not JSON: {type(exc).__name__}: {exc}")
+    if not isinstance(entries, list):
+        return unreadable(f"{list_file} does not hold a list")
+    rows, no_id = [], 0
+    for entry in entries:
+        row = vscode_entry(raw, entry)
+        if row is None:
+            no_id += 1
+        else:
+            rows.append(row)
+    if entries and not rows:
+        # Entries, none of them keyed: not "read, nothing there".
+        return unreadable(f"none of the {no_id} entries of {list_file} gives an "
+                          f"identifier.id")
+    rows.sort(key=lambda row: (row[0], (row[1]["folder"] or "").casefold()))
+    items = {}
+    for key, item in rows:
+        if key in items:  # a second entry of the same id (not written by VS Code)
+            key = f"{key}|{(item['folder'] or '?').casefold()}"
+        base, suffix = key, 2
+        while key in items:  # the same id and folder again: no entry is overwritten
+            key, suffix = f"{base}~{suffix}", suffix + 1
+        items[key] = item
+    if no_id:
+        col.skip(f"{VSCODE_SOURCE} entries without an id",
+                 f"{no_id} of the entries of {list_file} give no identifier.id; they "
+                 f"cannot be keyed and are not read")
+    count = sum(1 for item in items.values() if item["status"] == "read")
+    status = "read" if items else "empty"
+    col.record(VSCODE_SOURCE, status, None)
+    col.skip(*VSCODE_EDITIONS)
+    col.vscode_summary = {"status": status, "folder_from": folder_from, "count": count,
+                          "unreadable": no_id + len(items) - count}
+    return status, items
+
+
 # --- managers ----------------------------------------------------------------
 def load_managers(path: Path) -> tuple[list | None, str | None]:
     """``(entries, None)`` of ``data/managers.json`` (``{name, step, read}`` each, in
@@ -1456,7 +1818,8 @@ def build_managers(col: Collector) -> dict:
     managers only, and the file is named in not_checked."""
     read_parts = {"pip": col.pip_summary, "npm": col.npm_summary,
                   "pipx": col.pipx_summary, "uv": col.uv_summary,
-                  "conda": col.conda_summary}
+                  "conda": col.conda_summary, "winget": col.winget_summary,
+                  "vscode": col.vscode_summary}
     entries, reason = load_managers(MANAGERS_FILE)
     if entries is None:
         col.skip(MANAGERS_FILE.name, f"the managers not read by this skill are not "
@@ -1491,6 +1854,10 @@ def collect(run_ps, work: Path, stamp: str, previous: dict):
         col, previous.get("uv_tools") or {})
     statuses["conda_packages"], current["conda_packages"] = collect_conda(
         col, previous.get("conda_packages") or {})
+    statuses["winget_packages"], current["winget_packages"] = collect_winget(
+        col, previous.get("winget_packages") or {})
+    statuses["vscode_extensions"], current["vscode_extensions"] = collect_vscode(
+        col, previous.get("vscode_extensions") or {})
     return statuses, current, col
 
 
@@ -1544,6 +1911,9 @@ def build_changes(previous: dict, current: dict, comparison: dict, numbering) ->
                 entry["venv"] = item.get("venv")
             elif source == "conda_packages":
                 entry["environment"] = item.get("environment")
+            elif source == "winget_packages":
+                # ``source`` stays the source name; the catalog label is ``catalog``.
+                entry["catalog"] = item.get("source")
             if fields is not None:
                 entry["fields"] = fields
             else:
@@ -1555,8 +1925,8 @@ def build_changes(previous: dict, current: dict, comparison: dict, numbering) ->
 
 # --- packages ------------------------------------------------------------------
 def build_packages(current: dict, numbering) -> list:
-    """Every package of the read managers (pip, npm, pipx, uv, conda), each by key; ids ``k<n>``
-    from ``numbering``. The full item of the source, with ``manager`` and ``key``."""
+    """Every package of the read managers (pip, npm, pipx, uv, conda, winget, vscode), each
+    by key; ids ``k<n>`` from ``numbering``. The full item of the source, with ``manager`` and ``key``."""
     packages = []
     for manager, source in READ_MANAGERS.items():
         for key, item in sorted((current.get(source) or {}).items()):
@@ -1568,7 +1938,7 @@ def build_packages(current: dict, numbering) -> list:
 def summary_package(item: dict) -> dict:
     """The summary form of a package: ``id``, ``manager``, ``key``, ``name``,
     ``version``, the Python (pip), the venv and ``injected`` (pipx), the environment
-    (conda) and ``folder``; ``unreadable`` and ``reason`` when
+    (conda), the catalog label ``source`` (winget) and ``folder``; ``unreadable`` and ``reason`` when
     its metadata could not be read, ``from_baseline`` when it was kept from the
     baseline because its folder could not be listed."""
     out = {"id": item["id"], "manager": item["manager"], "key": item["key"],
@@ -1580,6 +1950,8 @@ def summary_package(item: dict) -> dict:
         out["injected"] = item.get("injected")
     elif item["manager"] == "conda":
         out["environment"] = item.get("environment")
+    elif item["manager"] == "winget":
+        out["source"] = item.get("source")
     out["folder"] = item.get("folder")
     if item.get("status") == "unreadable":
         out["unreadable"] = True

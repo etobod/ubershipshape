@@ -100,16 +100,21 @@ gives the count of low recommendations whose main source no line names.
    | Manager | State | Packages |
    |---|---|---|
    | pip | read | PythonCore/3.12: 12 |
-   | npm | npm not present | 0 |
+   | npm | read | 0 |
    | pipx | read | 3 (home %USERPROFILE%\pipx) |
    | uv | not present | — |
    | conda | read | 41 (environments miniconda3, contoso) |
-   | winget | not read yet | not read |
+   | winget | read | 15 recorded by winget (catalog contoso.source) |
+   | go | not read yet | not read |
+   | vscode | read | 24 (folder %USERPROFILE%\.vscode\extensions) |
 
    - pip: the cell names each Python of `managers.pip.pythons` with its
      `count`, or „not read” when a `count` is `null`; never add them up.
    - npm: `managers.npm.count`; `null` is „not read”, never 0. `status`
-     `empty` is „npm not present” in the State cell.
+     `empty` (the global `node_modules` folder exists and holds no package)
+     is „read” with 0. No global `node_modules` folder is `state`
+     `not_present`, written as every other `not_present` manager (below):
+     „not present” in the State cell, „—” in the Packages cell.
    - pipx: `managers.pipx.count`, with the homes of `managers.pipx.homes`
      whose `status` is `read` (raw, as `%USERPROFILE%\pipx`); `null` is „not
      read”, never 0.
@@ -121,6 +126,17 @@ gives the count of low recommendations whose main source no line names.
      `status` is `absent` is named as „folder absent”, one whose `status` is
      `unreadable` as „could not be read”. `null` is „not read”, never 0; the
      count is for the whole manager, never split per environment.
+   - winget: `managers.winget.count` as „recorded by winget”, with the
+     catalogs of `managers.winget.catalogs` named by their `source` label;
+     a catalog whose `status` is `unreadable` is named as „could not be
+     read”, one with `wal_present` `true` as „latest records not merged”.
+     `null` is „not read”, never 0; the count is for the whole manager.
+     Never write „installed” for these packages: winget's records are not
+     checked against the installed programs („Not checked”).
+   - vscode: `managers.vscode.count` (the VS Code extensions), with the
+     extensions folder: `%USERPROFILE%\.vscode\extensions` for
+     `folder_from` `default`, „folder from VSCODE_EXTENSIONS” for
+     `VSCODE_EXTENSIONS`. `null` is „not read”, never 0; an empty list is 0.
    - A manager with `state` `not_present` (none of its disk locations
      exists) is „not present” in the State cell and „—” in the Packages
      cell, never 0, „none”, „not read yet” or „could not be read”; the places
@@ -138,19 +154,24 @@ gives the count of low recommendations whose main source no line names.
    than `latest` that the run compared with the saved state of
    `baseline.reference`. Then every change of `changes`, one bullet each:
    its id, `name`, the Python for pip (`python`), the venv for pipx
-   (`venv`), the environment label for conda (`environment`), and what changed: `added`
+   (`venv`), the environment label for conda (`environment`), the catalog
+   label for winget (`catalog`), and what changed: `added`
    with `version`, `removed` with `version`, `changed` with `fields.version`
    `before` and `after`. With `truncated_changes` above 0, one line: how
    many changes were cut and that the detail file has them. A source with
    comparison `no_baseline` (a first run) or `not_read` gives no changes:
    say so for that source, never „no changes”.
 
-4. Installed packages, one `###` heading per manager with packages (pip,
-   npm, pipx, uv, conda), each package of `packages` one bullet with its id,
+4. Packages, one `###` heading per manager with packages (pip,
+   npm, pipx, uv, conda, winget, vscode); the section heading never says
+   „installed”, because the winget items are only recorded by winget;
+   each package of `packages` one bullet with its id,
    `name`, `version`, and the place: for pip the Python (`python`) and the
    folder (`install` or `user`), for npm „global folder”, for pipx the venv
    (`venv`, and „injected” when `injected` is `true`), for uv „tool
-   folder”, for conda the environment label (`environment`). Every package carries the words „not
+   folder”, for conda the environment label (`environment`), for winget
+   „recorded by winget” and the catalog label (`source`), for vscode
+   „VS Code extension”. Every package carries the words „not
    checked for updates” (in a Polish report „nie sprawdzono pod kątem
    aktualizacji”): no ush-advice lookup exists yet. Rule 7 (long lists) of
    `<plugin root>/skills/ush-common/references/report-style.md` applies: with
@@ -165,6 +186,12 @@ gives the count of low recommendations whose main source no line names.
    (kept from the baseline because its folder could not be read in this
    run). Say which fact and why it matters. Never call a package removable,
    unused or old without such a fact.
+
+   A winget item in the detail file also has `versions_recorded`: the
+   catalog's rows for that id (winget may keep a row per version it
+   installed); `version` is the highest of them. It is no finding; name it
+   only from a detail item fetched with `--detail` (and named in
+   `ush:detail`), never as a count of installed copies.
 
 5. Recommendations, where you have any: each with `weight`, `kind`, `risk`,
    `evidence` (ids and values from the JSON), `permissions` and `rollback`
@@ -202,7 +229,8 @@ A report never carries the account name, except in the `ush:summary`
 marker, which the checker needs. A `folder` of an npm package, an `entry`
 and a `not_checked` reason often start with the profile folder,
 `C:\Users\` followed by the account name: write that folder as
-`%USERPROFILE%` (`%USERPROFILE%\AppData\Roaming\npm`). A conda environment
+`%USERPROFILE%` (`%USERPROFILE%\AppData\Roaming\npm`); so is a `folder` of a
+VS Code extension set by `VSCODE_EXTENSIONS`. A conda environment
 is named by its label (`environment`, `managers.conda.environments[*].label`);
 when its folder must be written, the prefix and the `folder` of a conda
 package are expanded paths: write the profile folder as `%USERPROFILE%`
@@ -235,10 +263,12 @@ Never report missing data as „none” or „nothing there”:
   as registered but not read; only with none is it „no Python registered”.
 - A Python whose `count` is `null`: one of its folders could not be
   listed; its packages there are kept from the baseline (`from_baseline`).
-- npm `status` `empty`: „npm not present” at the prefix read (no global
-  `node_modules`, or no package in it); say with it, from „Not checked”,
-  that the other prefixes (the global or builtin npmrc and the folder of
-  node.exe) were not searched, so npm may still be installed elsewhere.
+- npm `state` `not_present` (no global `node_modules` at the prefix read)
+  follows the `not_present` rule above; npm `status` `empty` (the folder
+  exists and holds no package) is read with 0 packages. With either, say,
+  from „Not checked”, that the other prefixes (the global or builtin npmrc
+  and the folder of node.exe) were not searched, so npm may still be
+  installed elsewhere.
 - npm `status` `unreadable` or a `count` of `null`: „could not be read”,
   never 0; give the reason from „Not checked”.
 - pipx, uv or conda `state` `unreadable` (`count` `null`): a home, the tool
@@ -248,6 +278,21 @@ Never report missing data as „none” or „nothing there”:
 - A uv `count` or conda `count` of `null` with `state` `read`: a tool's
   folder or an environment's `conda-meta` could not be listed (named in „Not
   checked”); its packages are kept from the baseline (`from_baseline`).
+- winget `state` `unreadable` (`count` `null`): `LocalState` exists but
+  could not be listed, or no tracking catalog could be read; the packages
+  are kept from the baseline. Give the reason from „Not checked”, never
+  „not present” or 0.
+- A winget `count` of `null` with `state` `read`: a catalog could not be
+  read (SQLite failed, or „tracking catalog schema <value> not known”); its
+  packages are kept from the baseline (`from_baseline`), the other catalogs
+  are read and compared.
+- A winget catalog with `wal_present` `true`: winget's latest writes are
+  still in its `-wal` file, which an immutable read does not see; say that
+  the newest changes of that catalog may be missing.
+- vscode `state` `unreadable` (`count` `null`): the extensions folder exists
+  but its `extensions.json` is missing, could not be read, has no entry with an id or is not a JSON
+  list; the extensions are kept from the baseline. Give the reason from
+  „Not checked”, never „not present” or 0.
 - A conda environment with `status` `absent`: the line of
   `environments.txt` names a folder that does not exist; it has no packages
   and is not unreadable.

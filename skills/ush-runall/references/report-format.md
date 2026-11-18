@@ -342,7 +342,8 @@ A manager of `ush-packages` whose `state` is `not_read` is "not read yet"
 (its `not_checked` entry), never absent or not installed.
 
 In the `h8` item, a manager of `ush-packages` whose `state` is `not_present`
-(none of its disk locations exists) is "not present" (in a Polish report
+(none of its disk locations exists; for npm, no global `node_modules`
+folder) is "not present" (in a Polish report
 „nie ma”), never "not read yet", "could not be read" or 0 packages, and it is
 no finding; one whose `state` is `not_read` stays "not read yet". The two
 are never swapped.

@@ -1,9 +1,9 @@
 [
   {"name": "pip", "step": 1, "read": true},
   {"name": "npm", "step": 1, "read": true},
-  {"name": "winget", "step": 1, "read": false},
+  {"name": "winget", "step": 1, "read": true},
   {"name": "go", "step": 1, "read": false},
-  {"name": "vscode", "step": 1, "read": false},
+  {"name": "vscode", "step": 1, "read": true},
   {"name": "dotnet-tools", "step": 2, "read": false},
   {"name": "nuget", "step": 2, "read": false},
   {"name": "psgallery", "step": 2, "read": false},

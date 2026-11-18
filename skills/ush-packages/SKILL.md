@@ -1,6 +1,6 @@
 ---
 name: ush-packages
-description: List the packages the package managers of this Windows machine have installed, read offline from disk - pip for every Python registered in PEP 514, the global npm packages, pipx apps, uv tools and conda environments - with each version and what was added, removed or changed since the last run. A manager none of whose disk locations exists is listed as not present, every other package manager as not read yet. Use when the user asks which Python, npm, pipx, uv or conda packages are installed, which versions, or what changed in them. Read-only; no package manager runs and nothing goes online, so no package is checked for a newer version.
+description: List the packages the package managers of this Windows machine have installed, and the packages winget recorded, read offline from disk - pip for every Python registered in PEP 514, the global npm packages, pipx apps, uv tools, conda environments, and the VS Code extensions - with each version and what was added, removed or changed since the last run. A manager none of whose disk locations exists is listed as not present, every other package manager as not read yet. Use when the user asks which Python, npm, pipx, uv or conda packages or VS Code extensions are installed, which packages winget recorded, which versions, or what changed in them. Read-only; no package manager runs and nothing goes online, so no package is checked for a newer version.
 ---
 
 # ush-packages
@@ -11,8 +11,11 @@ PEP 514, in its install and per-user `site-packages` folders), npm (the
 `package.json` of every global package), pipx (the `pipx_metadata.json` of
 each venv in the pipx homes), uv (the `dist-info` of each tool in the uv
 tool folder) and conda (the `conda-meta` file names of each environment
-listed in `environments.txt`). No package manager runs (no pip, npm, pipx,
-uv, conda or winget command) and nothing goes online. It compares every package
+listed in `environments.txt`). winget's tracking catalogs (`installed.db`,
+SQLite) are read by the script itself, opened read-only and immutable, so
+nothing is written beside them; VS Code's `extensions.json` is read by the
+script too. No package manager runs (no pip, npm, pipx, uv, conda, winget or
+VS Code command) and nothing goes online. It compares every package
 with the baseline of the last run. A script counts and compares; you judge
 and write a Markdown report; the user decides what to act on.
 
@@ -41,15 +44,17 @@ another way (a shell command, another folder).
 ## When to use
 
 - The user asks which Python (pip), npm, pipx, uv tool or conda packages
-  are installed, in which version, or for which Python, venv or conda
-  environment.
+  or VS Code extensions are installed, which packages winget recorded, in
+  which version, or for which Python, venv, conda environment or winget
+  catalog.
 - The user asks what changed in the packages since the last run, or over a
   longer period ("since last week").
 
 Not for: installing, updating or removing a package (the skill gives no
 block), whether a newer version exists (that needs an ush-advice lookup,
-which does not exist yet), winget, go, VS Code extensions and the other
-package managers (listed as not read yet), installed programs, drivers and
+which does not exist yet), go and the other package managers (listed as
+not read yet), winget packages installed outside winget, the extensions of
+VS Code Insiders, VSCodium and portable VS Code, installed programs, drivers and
 autostart (`ush-inventory`). Say so if the user asks for these.
 
 ## Rules
@@ -83,8 +88,12 @@ autostart (`ush-inventory`). Say so if the user asks for these.
   the Packages cell an em dash (U+2014, as in
   `references/report-format.md`), never "not read yet", "could not be read" or 0;
   `not_present` and `not_read` are never swapped, and `not_present` is no
-  finding. npm `status` `empty` is "npm not present" at the prefix read,
-  with the other prefixes not searched.
+  finding. npm follows the same rule: no global `node_modules` at the
+  prefix read is `state` `not_present`, and npm `status` `empty` (the folder
+  exists, with no package) is read with 0; with either, the other prefixes
+  were not searched. winget's packages are "recorded by
+  winget", never "installed": its records are not checked against the
+  installed programs.
 - **A package worth a look only from facts.** Name a package as worth a look
   only for a fact the JSON holds (`unreadable`, a second entry of the same
   name, a version kept from the baseline because its folder could not be

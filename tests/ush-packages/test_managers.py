@@ -5,12 +5,15 @@ Interface these tests assume (fixed before the code exists):
 
 - ``skills/ush-packages/data/managers.json`` is a list of entries with ``name`` (a dict
   with the list under ``managers`` is accepted too); pip and npm are among them, and so
-  is winget (not read in this plan).
+  is winget.
 - ``summary["managers"]`` holds one entry per manager in the file's order: a dict keyed
   by name (key order) or a list of entries with ``name``.
 - pip is ``{state, status, pythons}``; npm is ``{state, status, prefix_from, count,
   unreadable}``; pipx, uv and conda (plan 066) are ``not_present`` here, since none of
-  their locations exists in these fixtures; every other manager is ``{state:
+  their locations exists in these fixtures; so is winget (plan 073, M1: read from disk,
+  and the empty ``ENVIRON`` of the tests names no location), and so is vscode (plan 073,
+  M2); npm is ``{state: "not_present", looked_in}`` when its global ``node_modules``
+  folder is missing (plan 073, M2); every other manager is ``{state:
   "not_read"}`` with one ``not_checked`` entry reading ``<name>: not read yet``
   (``what`` and ``reason`` joined by ": ").
 - ``state`` is ``read`` for pip/npm ``status`` ``read`` or ``empty``, ``unreadable`` for
@@ -70,8 +73,10 @@ class TestManagers(PackagesTestCase):
         for wanted in ("pip", "npm", "winget"):
             self.assertIn(wanted, folded, names)
         self.assertEqual(len(set(folded)), len(folded), names)
-        # Read by plan 066 (M1: pipx, uv; M2: conda) and absent in these fixtures.
-        absent_here = ("pipx", "uv", "conda")
+        # Read by plan 066 (M1: pipx, uv; M2: conda) and plan 073 (M1: winget), and
+        # absent in these fixtures (ENVIRON is empty, so no winget location is looked at).
+        # Plan 073 M2: vscode too.
+        absent_here = ("pipx", "uv", "conda", "winget", "vscode")
         others = [name for name in names
                   if name.casefold() not in ("pip", "npm") + absent_here]
 
@@ -85,7 +90,8 @@ class TestManagers(PackagesTestCase):
                 ("read", "read"), ("read", "read")),
             "no Python, no npm": (
                 packages_fake(),
-                ("read", "empty"), ("read", "empty")),
+                # Plan 073 M2: a missing node_modules is npm not_present (was read/empty).
+                ("read", "empty"), ("not_present", None)),
             "pip and npm unreadable": (
                 packages_fake(
                     folders={DEFAULT_NPM_FOLDER: unreadable_folder(
@@ -106,9 +112,13 @@ class TestManagers(PackagesTestCase):
                 self.assertEqual(pip["status"], pip_status, pip)
 
                 npm = self.manager(summary, "npm")
-                self.assertEqual(set(npm), NPM_KEYS, npm)
-                self.assertEqual(npm["state"], npm_state, npm)
-                self.assertEqual(npm["status"], npm_status, npm)
+                if npm_state == "not_present":
+                    self.assertEqual(npm, {"state": "not_present",
+                                           "looked_in": [DEFAULT_NPM_FOLDER]}, npm)
+                else:
+                    self.assertEqual(set(npm), NPM_KEYS, npm)
+                    self.assertEqual(npm["state"], npm_state, npm)
+                    self.assertEqual(npm["status"], npm_status, npm)
 
                 notes = self.not_checked(summary)
                 for name in absent_here:
@@ -127,11 +137,9 @@ class TestManagers(PackagesTestCase):
                             for word in ABSENT_WORDS:
                                 self.assertNotIn(word, note_text(item), item)
 
-                if npm_status == "empty":
-                    # npm ``empty`` keeps its moved meaning and wording: npm is not
-                    # present at the prefix read, and the other prefixes are named.
-                    self.assertEqual(npm["count"], 0, npm)
-                    self.assertEqual(npm["unreadable"], 0, npm)
+                if npm_state == "not_present":
+                    # Plan 073 M2: npm not_present (was ``empty`` with count 0 and
+                    # unreadable 0); the other prefixes are still named.
                     npm_notes = [item for item in notes if "node.exe" in note_text(item)]
                     self.assertEqual(len(npm_notes), 1, notes)
                     self.assertNotIn("not read yet", note_text(npm_notes[0]), npm_notes)

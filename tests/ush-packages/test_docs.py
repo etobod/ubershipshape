@@ -97,6 +97,43 @@ class TestNotPresentDocs(unittest.TestCase):
                     self.assertTrue(found, f"{rel}: no item names h8 with not_present as "
                                            f"'not present'")
 
+    # Plan 073, M2, K7: npm follows the shared not_present rule; a missing node_modules
+    # is no longer npm `empty` worded as "npm not present".
+    def test_npm_follows_not_present(self):
+        for path in PACKAGES_DOCS + RUNALL_DOCS:
+            rel = path.relative_to(REPO_ROOT).as_posix()
+            items = _items(_read(path))
+
+            with self.subTest(doc=rel, check="no 'npm not present' wording"):
+                found = [item for item in items if NPM_NOT_PRESENT_WORDS.search(item)]
+                self.assertEqual(found, [], f"{rel}: npm still named 'npm not present'")
+
+            with self.subTest(doc=rel, check="no npm empty named 'not present'"):
+                found = [item for item in items
+                         if NPM.search(item) and EMPTY_AS_NOT_PRESENT.search(item)]
+                self.assertEqual(found, [], f"{rel}: npm `empty` named 'not present'")
+
+            with self.subTest(doc=rel, check="not_present is 'not present'"):
+                found = [item for item in items
+                         if NOT_PRESENT_STATE.search(item) and NOT_PRESENT_WORDS.search(item)]
+                self.assertTrue(found, f"{rel}: no item names not_present as 'not present'")
+
+            with self.subTest(doc=rel, check="not_read is 'not read yet'"):
+                found = [item for item in items
+                         if NOT_READ_STATE.search(item) and NOT_READ_WORDS.search(item)]
+                self.assertTrue(found, f"{rel}: no item names not_read as 'not read yet'")
+
+
+NPM = re.compile(r"(?<![\w-])npm(?![\w-])", re.IGNORECASE)
+NPM_NOT_PRESENT_WORDS = re.compile(r"\bnpm\W{0,3}not present\b", re.IGNORECASE)
+# `empty` given the words "not present" (or the reverse) in one clause, e.g.
+# "`empty` is 'not present'", "`empty` (not present)", "not present (`empty`)".
+EMPTY_AS_NOT_PRESENT = re.compile(
+    r"`empty`\W{0,4}(?:is|means|=|:|->|→|shown as|reads)?\W{0,4}not present\b"
+    r"|\bnot present\W{0,4}\(`?empty`?\)",
+    re.IGNORECASE,
+)
+
 
 if __name__ == "__main__":
     unittest.main()

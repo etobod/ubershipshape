@@ -11,9 +11,9 @@ Interface these tests assume:
   ``NPM_CONFIG_PREFIX`` (any case) comes first. An unreadable ``.npmrc`` makes npm
   ``unreadable`` (count null, a not_checked entry naming npm).
 - Job ``package_folders`` gets ``{"path": "<raw prefix>\\node_modules", "layout":
-  "npm"}``; package ``entry`` is ``left-pad`` or ``@contoso/tool``. ``absent`` means npm
-  is not present (status ``empty``, count 0); ``unreadable`` gives npm ``unreadable``
-  with count null.
+  "npm"}``; package ``entry`` is ``left-pad`` or ``@contoso/tool``. ``absent`` makes npm
+  ``{state: "not_present", looked_in}`` (plan 073, M2; it was status ``empty``, count 0);
+  ``unreadable`` gives npm ``unreadable`` with count null.
 - Source ``npm_packages``: key ``npm:<name case-folded>``, compared field ``version``,
   items carry ``name``, ``version``, ``status``, ``reason``, ``folder`` (and ``key`` in
   the detail file's ``npm_packages`` list).
@@ -127,9 +127,9 @@ class TestNpm(PackagesTestCase):
         with self.subTest(case="node_modules missing: npm not present"):
             summary = self.collect(npm_fake())
             npm = self.npm(summary)
-            self.assertEqual(npm.get("status"), "empty", npm)
-            self.assertEqual(npm.get("count"), 0, npm)
-            self.assertEqual(npm.get("unreadable"), 0, npm)
+            # Plan 073 M2: not_present (was status empty, count 0, unreadable 0).
+            self.assertEqual(npm, {"state": "not_present",
+                                   "looked_in": [DEFAULT_NPM_FOLDER]}, npm)
             self.assertEqual(self.source(summary, "npm_packages").get("status"), "empty")
             self.assertEqual(self.npm_items(summary), [])
             # Plan 029 M2 code-review (judge: fix): an absent default folder names the prefixes not searched.
@@ -179,7 +179,7 @@ class TestNpm(PackagesTestCase):
                 summary = self.collect(fake)
                 notes = self.not_checked(summary)
 
-                for name in ("winget", "go", "choco", "scoop", "cargo"):
+                for name in ("go", "choco", "scoop", "cargo"):  # winget is read from plan 073
                     own = [item for item in notes if item.get("what") == name]
                     self.assertEqual(len(own), 1, (name, notes))
                     self.assertIn(NOT_READ_YET, note_text(own[0]), own)
@@ -241,8 +241,9 @@ class TestNpm(PackagesTestCase):
     def test_absent_default_names_other_prefixes(self):
         summary = self.collect(npm_fake())
         npm = self.npm(summary)
-        self.assertEqual(npm.get("status"), "empty", npm)
-        self.assertEqual(npm.get("prefix_from"), "default", npm)
+        # Plan 073 M2: not_present (was status empty with prefix_from default).
+        self.assertEqual(npm, {"state": "not_present",
+                               "looked_in": [DEFAULT_NPM_FOLDER]}, npm)
         notes = self.notes_with(summary, "node.exe")
         self.assertEqual(len(notes), 1, summary.get("not_checked"))
         self.assertIn("node.exe", note_text(notes[0]), notes)
@@ -250,7 +251,10 @@ class TestNpm(PackagesTestCase):
 
         with self.subTest(case="prefix from .npmrc, folder absent"):
             summary = self.collect(npm_fake(npmrc=npmrc_read("prefix=D:\\Invented\\npm")))
-            self.assertEqual(self.npm(summary).get("status"), "empty")
+            # Plan 073 M2: not_present at the .npmrc prefix (was status empty).
+            self.assertEqual(self.npm(summary),
+                             {"state": "not_present",
+                              "looked_in": ["D:\\Invented\\npm\\node_modules"]})
             self.assertEqual(len(self.notes_with(summary, "node.exe")), 1,
                              summary.get("not_checked"))
 
@@ -373,6 +377,40 @@ class TestNpm(PackagesTestCase):
         changes = self.by_key(self.changes_from(run2, "npm_packages"))
         self.assertEqual({key: change.get("change") for key, change in changes.items()},
                          {"npm:rimraf": "added"})
+
+
+class TestNpmNotPresent(PackagesTestCase):
+    """npm with no global node_modules is not_present (plan 073, M2, K6)."""
+
+    def test_missing_node_modules_is_not_present(self):
+        with self.subTest(case="node_modules missing"):
+            summary = self.collect(npm_fake())
+            self.assertEqual(self.manager(summary, "npm"),
+                             {"state": "not_present", "looked_in": [DEFAULT_NPM_FOLDER]})
+            notes = self.notes_with(summary, "npm", "another prefix")
+            self.assertEqual(len(notes), 1, summary.get("not_checked"))
+
+        with self.subTest(case="node_modules exists and is empty"):
+            summary = self.collect(npm_fake({DEFAULT_NPM_FOLDER: read_folder()}))
+            npm = self.manager(summary, "npm")
+            self.assertEqual(npm.get("state"), "read", npm)
+            self.assertNotEqual(npm.get("state"), "not_present", npm)
+            self.assertEqual(npm.get("count"), 0, npm)
+            notes = self.notes_with(summary, "npm", "another prefix")
+            self.assertEqual(len(notes), 1, summary.get("not_checked"))
+
+        with self.subTest(case="baseline with npm items, then node_modules missing"):
+            data_dir = self.data_dir()
+            self.collect(npm_fake({DEFAULT_NPM_FOLDER: read_folder(
+                npm_package("left-pad", "1.3.0"), npm_package("@contoso/tool", "2.1.0"))}),
+                data_dir=data_dir, now=NOW)
+            run2 = self.collect(npm_fake(), data_dir=data_dir, now=NOW + timedelta(days=1))
+            self.assertEqual(self.manager(run2, "npm").get("state"), "not_present",
+                             self.manager(run2, "npm"))
+            changes = self.changes_from(run2, "npm_packages")
+            self.assertEqual(sorted((c.get("key"), c.get("change")) for c in changes),
+                             [("npm:@contoso/tool", "removed"), ("npm:left-pad", "removed")],
+                             changes)
 
 
 if __name__ == "__main__":
