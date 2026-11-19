@@ -36,7 +36,8 @@ directory: `--data-dir`, else `USH_DATA_DIR`, else the plugin data folder
   `pipx_packages`, `uv_tools`, `conda_packages`, `winget_packages`,
   `vscode_extensions`, `dotnet_tools`, `nuget_packages`, `psgallery_modules`,
   `choco_packages`, `scoop_apps`, `vcpkg_packages`, `pnpm_packages`,
-  `yarn_packages` and `bun_packages` (every item with its
+  `yarn_packages`, `bun_packages`, `cargo_packages`, `gem_packages` and `composer_packages`
+  (every item with its
   `key`), and
   `summary_file`, the summary of the same run.
 - `state/ush-packages.json` (`ush-packages.elevated.json` for an elevated
@@ -44,7 +45,8 @@ directory: `--data-dir`, else `USH_DATA_DIR`, else the plugin data folder
   `pipx_packages`, `uv_tools`, `conda_packages`, `winget_packages`,
   `vscode_extensions`, `dotnet_tools`, `nuget_packages`, `psgallery_modules`,
   `choco_packages`, `scoop_apps`, `vcpkg_packages`, `pnpm_packages`,
-  `yarn_packages` and `bun_packages`; `state/history/` keeps a day copy of it (shared contract, "Baseline").
+  `yarn_packages`, `bun_packages`, `cargo_packages`, `gem_packages` and `composer_packages`;
+  `state/history/` keeps a day copy of it (shared contract, "Baseline").
 - `state/ush-packages.ids.json` - the id map of `k..` and `c..`.
 
 The PowerShell jobs write their results to `work/packages-<stamp>.<job>.json`
@@ -56,8 +58,9 @@ in `work/`): each is opened through SQLite with `mode=ro&immutable=1`, so
 nothing is written beside it (no `-journal`, `-shm` or `-wal` file). VS
 Code's `extensions.json`, the dotnet tool store, the NuGet global packages
 folder, the PowerShell module folders, the Chocolatey `lib` folder, the
-Scoop `apps` folders, the vcpkg status database and the pnpm, yarn and bun global
-folders are read by Python too (no
+Scoop `apps` folders, the vcpkg status database, the pnpm, yarn and bun global
+folders, the cargo `.crates.toml` and the Composer `composer.json` and
+`installed.json` are read by Python too (no
 job). The
 script changes nothing on the machine and
 exits 0 when the collection ran, also when jobs failed.
@@ -95,6 +98,9 @@ order:
 | `pnpm_packages` | the pnpm global folder `<home>\global`, the home a non-blank environment variable `PNPM_HOME` (its name in any case), else `%LOCALAPPDATA%\pnpm`, read directly by Python, no job (the pnpm rc file is not read). Each folder of the global folder whose name is all digits is a layout folder (a part, labelled by the digits), read as `yarn_packages` reads its global folder; every other entry is named once in `not_checked`. The store `node_modules\.pnpm` and any `node_modules` entry that is not a `dependencies` key is no item; a global package's folder (pnpm's junction into `.pnpm`) is read through, never resolved. pnpm never runs. `empty` with the global folder absent (or `%LOCALAPPDATA%` unset: pnpm not present, `managers.pnpm.state` `not_present`) or no layout folder with a global package; `read` with at least one item, or while one layout folder could not be read and another was (its previous items kept, `from_baseline`); `unreadable` when the global folder exists but could not be listed, or no layout folder could be read and at least one could not be (the previous baseline's items are kept, never `removed`) | `managers.pnpm`, the `pnpm` items of `packages`, the detail list `pnpm_packages` |
 | `yarn_packages` | the Yarn classic (v1) global folder: a non-blank environment variable `YARN_GLOBAL_FOLDER` (its name in any case), else `%LOCALAPPDATA%\Yarn\Data\global`, read directly by Python, no job (`.yarnrc` is not read; Yarn Berry has no global packages). Each key of `dependencies` in `<global folder>\package.json` is a global package; its version is the non-blank string `version` of `<global folder>\node_modules\<name>\package.json` (`/` of a scoped name as `\`). Any other `node_modules` entry (a hoisted dependency, `.bin`, a dot entry) is no item. A package whose `package.json` is missing, cannot be read, is not JSON or gives no version is an item with status `unreadable`, counted in `managers.yarn.unreadable`. yarn never runs. `empty` with the global folder absent (or `%LOCALAPPDATA%` unset: yarn not present, `managers.yarn.state` `not_present`), no `package.json` or one without `dependencies`; `read` with at least one item; `unreadable` when the global folder or its `package.json` exists but could not be read, is not a JSON object, or its `dependencies` is not an object (the previous baseline's items are kept, `from_baseline`, never `removed`) | `managers.yarn`, the `yarn` items of `packages`, the detail list `yarn_packages` |
 | `bun_packages` | the bun global folder: a non-blank environment variable `BUN_INSTALL_GLOBAL_DIR` (its name in any case), else `<B>\install\global` with `<B>` a non-blank `BUN_INSTALL`, else `%USERPROFILE%\.bun`; read as `yarn_packages` (`bunfig.toml` is not read; bun never runs), each `unreadable` package counted in `managers.bun.unreadable`, `not_present` when the global folder is absent (or `%USERPROFILE%` unset when no variable names it) | `managers.bun`, the `bun` items of `packages`, the detail list `bun_packages` |
+| `cargo_packages` | the crates installed with `cargo install`: the install root is a non-blank environment variable `CARGO_INSTALL_ROOT` (its name in any case), else a non-blank `CARGO_HOME`, else `%USERPROFILE%\.cargo`, read directly by Python, no job (the cargo `config.toml` is not read; `.crates2.json` is not read, cargo treats `.crates.toml` as the source of truth). Each key of the `v1` table of `<root>\.crates.toml` (parsed as TOML) is one crate, `<name> <version> (<source>)`: the name the text before the first space (see the key table for a key that could not be split), the version the next token as written (build metadata kept), `source_kind` the text before the first `+` inside the parentheses (`registry`, `sparse`, `git`, `path`; `null` without a `+`). The source URL is never stored. A key without a version or without a `(...)` part is an item with status `unreadable`, counted in `managers.cargo.unreadable`. cargo never runs. `empty` with the root absent (or `%USERPROFILE%` unset when no variable names it: cargo not present, `managers.cargo.state` `not_present`), no `.crates.toml`, or one that is empty or only whitespace; `read` with at least one item; `unreadable` when the root or `.crates.toml` exists but could not be read, is not TOML, or its `v1` is missing or not a table (the previous baseline's items are kept, `from_baseline`, never `removed`) | `managers.cargo`, the `cargo` items of `packages`, the detail list `cargo_packages` |
+| `gem_packages` | the installed Ruby gems, read directly by Python, no job (no `gem` or `ruby` command runs). The gem folders (parts), in this order, each with a label: a non-blank environment variable `GEM_HOME` (its name in any case), label `GEM_HOME`; each non-blank `;`-separated entry of `GEM_PATH`, label `GEM_PATH-<n>` (1-based); each subfolder `<abi>` of `%USERPROFILE%\.gem\ruby`, label `user-<abi>`, and of `<XDG_DATA_HOME, else %USERPROFILE%\.local\share>\gem\ruby`, label `xdg-<abi>`; each subfolder `<abi>` of `<InstallLocation>\lib\ruby\gems` of each uninstall key (`HKCU` and `HKLM` in the 64-bit and the 32-bit view, read-only) whose `DisplayName` starts with `Ruby `, label `ruby-<abi>`. A label already used gets `~2`, `~3`; a folder already a part is skipped. A parent folder (`user`, `xdg`, `ruby`, `ruby~2`...) that exists but cannot be listed is itself a part with status `unreadable`. Each `*.gemspec` file of `<part>\specifications` (not of `specifications\default`, Ruby's default gems) is one installed version: name and version from its `# stub: <name> <version> ...` line, else from its `s.name = "..."` and `s.version = "..."` lines; per name one item with the highest version (compared as `Gem::Version` does: a segment with a letter is a prerelease, below the release with the same numbers; a tie broken by the version string) and `versions_found` (distinct versions). A gemspec that cannot be read or gives neither is an item with status `unreadable` keyed by its file name (or makes the gem it belongs to `unreadable`, see the item keys); each such file is counted in `managers.gem.unreadable`. No `specifications` folder: the part is read with no item. `empty` with parts read and no item; `read` with at least one item, or while a part (or the uninstall keys) could not be read and another part was (its previous items kept, `from_baseline`, never over an item of this run or of a label read in this run); `unreadable` when no part was read and at least one (or the uninstall keys) could not be; `empty` with no part found and the uninstall keys read (gem not present, `managers.gem.state` `not_present`) | `managers.gem`, the `gem` items of `packages`, the detail list `gem_packages` |
+| `composer_packages` | the global Composer packages: the home is a non-blank environment variable `COMPOSER_HOME` (its name in any case), else `%APPDATA%\Composer`, read directly by Python, no job (`config.json`, `COMPOSER_VENDOR_DIR` and `COMPOSER` are not read). Each key holding `/` of `require` in `<home>\composer.json` is a global package; a key without `/` (`php`, `ext-*`, `lib-*`, `composer-plugin-api`) is a platform requirement, no item. Its version is the non-blank string `version` of the entry of `<home>\vendor\composer\installed.json` (an object with a `packages` list, Composer 2, or a bare list, Composer 1) whose `name` equals it, case-folded; the other entries (dependencies) are no item. A global package with no such entry or no version (or with `installed.json` absent) is an item with status `unreadable`, counted in `managers.composer.unreadable`. composer and php never run. `empty` with the home absent (or `%APPDATA%` unset when `COMPOSER_HOME` does not name it: composer not present, `managers.composer.state` `not_present`), no `composer.json`, or no `require`; `read` with at least one item; `unreadable` when the home, `composer.json` or `installed.json` exists but could not be read, `composer.json` is not a JSON object or its `require` is not an object, or `installed.json` has neither shape (the previous baseline's items are kept, `from_baseline`, never `removed`) | `managers.composer`, the `composer` items of `packages`, the detail list `composer_packages` |
 
 ## Summary fields
 
@@ -103,7 +109,7 @@ order:
 | `schema_version`, `skill`, `generated_at`, `elevated` | | shared contract |
 | `sources` | list | see "Sources" |
 | `baseline` | object | shared contract, "Baseline": `status` (`none`, `compared`, `unreadable`), `created_at`, `age_days`, `saved`, `reason`, `reference` (`latest` or the `--compare-to` value, e.g. `7d`) and `reference_file` (the history copy compared with, or `null`). `created_at` and `age_days` are those of the state compared with |
-| `comparison` | object | per source (`pip_packages`, `npm_packages`, `pipx_packages`, `uv_tools`, `conda_packages`, `winget_packages`, `vscode_extensions`, `dotnet_tools`, `nuget_packages`, `psgallery_modules`, `choco_packages`, `scoop_apps`, `vcpkg_packages`, `pnpm_packages`, `yarn_packages`, `bun_packages`): `compared`, `no_baseline` or `not_read` (shared contract). A first run is `no_baseline` and gives no changes. A `not_present` manager's source is `empty`, so it is `compared` (or `no_baseline`), never `not_read`: a manager read before and not present now gives one `removed` change per old item |
+| `comparison` | object | per source (`pip_packages`, `npm_packages`, `pipx_packages`, `uv_tools`, `conda_packages`, `winget_packages`, `vscode_extensions`, `dotnet_tools`, `nuget_packages`, `psgallery_modules`, `choco_packages`, `scoop_apps`, `vcpkg_packages`, `pnpm_packages`, `yarn_packages`, `bun_packages`, `cargo_packages`, `gem_packages`, `composer_packages`): `compared`, `no_baseline` or `not_read` (shared contract). A first run is `no_baseline` and gives no changes. A `not_present` manager's source is `empty`, so it is `compared` (or `no_baseline`), never `not_read`: a manager read before and not present now gives one `removed` change per old item |
 | `managers` | object | one entry per manager of `data/managers.json`, in its order; see "Managers" |
 | `counts` | object | `packages` (all packages, before the cut), `changes` (all changes, before the cut), and `added`, `removed`, `changed` (the changes of each kind) |
 | `truncated` | int | the `packages` items cut from the summary |
@@ -127,14 +133,18 @@ reads them). Every entry has `state`:
 | `state` | Meaning |
 |---|---|
 | `read` | a read manager with `status` `read` or `empty` (`count` `0` when nothing is there) |
-| `not_present` | npm, pipx, uv, conda, winget, vscode, dotnet-tools, nuget, psgallery, choco, scoop, vcpkg, pnpm, yarn or bun: none of the manager's disk locations exists (for npm: the global `node_modules` folder of the prefix read; for winget: `LocalState`, or `%LOCALAPPDATA%` is unset; for vscode: the extensions folder, or `%USERPROFILE%` is unset; for dotnet-tools: the tools folder `.dotnet\tools`; for nuget: the global packages folder; for both, or `%USERPROFILE%` is unset when no variable names the folder; for psgallery: none of the four module folders, each of them looked at, so never when the Documents folder could not be read; for choco: the root
+| `not_present` | npm, pipx, uv, conda, winget, vscode, dotnet-tools, nuget, psgallery, choco, scoop, vcpkg, pnpm, yarn, bun, cargo, gem or composer: none of the manager's disk locations exists (for npm: the global `node_modules` folder of the prefix read; for winget: `LocalState`, or `%LOCALAPPDATA%` is unset; for vscode: the extensions folder, or `%USERPROFILE%` is unset; for dotnet-tools: the tools folder `.dotnet\tools`; for nuget: the global packages folder; for both, or `%USERPROFILE%` is unset when no variable names the folder; for psgallery: none of the four module folders, each of them looked at, so never when the Documents folder could not be read; for choco: the root
 (`ChocolateyInstall`, else `%ProgramData%\chocolatey`), or `%ProgramData%` is unset; for scoop:
 neither the user root nor the global root, both looked at, `looked_in` the two raw roots; for vcpkg: no
 root is named (no `VCPKG_ROOT`, and no `vcpkg.path.txt` or a blank one), or the root named does not
 exist, `looked_in` the path file and the root it names; never when `vcpkg.path.txt` could not be
 read; for pnpm: the global folder `<home>\global`, or `%LOCALAPPDATA%` is unset when `PNPM_HOME` does
 not name the home, `looked_in` the raw global folder; for yarn and bun: the global folder, or `%LOCALAPPDATA%` (yarn) / `%USERPROFILE%` (bun) is
-unset when no variable names it, `looked_in` the raw global folder). The entry is `{"state": "not_present", "looked_in": [<raw paths>]}`; its source has status `empty`. Not `unreadable` (a location exists but could not be read) and not `read` with `count` `0` (a location exists and is empty) |
+unset when no variable names it, `looked_in` the raw global folder; for cargo: the install root, or
+`%USERPROFILE%` is unset when no variable names it, `looked_in` the raw root; for composer: the home,
+or `%APPDATA%` is unset when `COMPOSER_HOME` does not name it, `looked_in` the raw home; for gem: no gem
+folder exists, `looked_in` the raw `GEM_HOME`, the `GEM_PATH` entries, the two user bases and each
+`<InstallLocation>\lib\ruby\gems`; never when the uninstall keys could not be read). The entry is `{"state": "not_present", "looked_in": [<raw paths>]}`; its source has status `empty`. Not `unreadable` (a location exists but could not be read) and not `read` with `count` `0` (a location exists and is empty) |
 | `unreadable` | a read manager with `status` `unreadable` |
 | `not_read` | a manager this skill does not read yet; the entry is `{"state": "not_read"}` and `not_checked` has the item `<name>`: "not read yet". It is never "not present" |
 
@@ -286,16 +296,37 @@ for `unreadable`; `unreadable` the global packages whose `package.json` could
 not be read or gives no version, `null` for `unreadable`. Not present, each is
 `{"state": "not_present", "looked_in": [<the raw global folder>]}`.
 
+`managers.cargo` and `managers.composer` (not `not_present`) are each `{state,
+status, folder_from, count, unreadable}`: `status` as the source
+`cargo_packages` / `composer_packages`; `folder_from` the variable the root or
+home came from (`CARGO_INSTALL_ROOT` or `CARGO_HOME`; `COMPOSER_HOME`) or
+`default`; `count` the crates or global packages read (`0` when nothing is
+there), `null` for `unreadable`; `unreadable` the crates whose key could not be
+split, or the global packages without a version in `installed.json`, `null` for
+`unreadable`. Not present, each is `{"state": "not_present", "looked_in": [<the
+raw root or home>]}`.
+
+`managers.gem` (not `not_present`) is `{state, status, parts, count,
+unreadable}`: `status` as the source `gem_packages`; `parts` one row per gem
+folder `{source, status, count, reason}` with `source` its label (`GEM_HOME`,
+`GEM_PATH-<n>`, `user-<abi>`, `xdg-<abi>`, `ruby-<abi>`, or `user`, `xdg`,
+`ruby` for a parent folder that could not be listed), `status` `read` or
+`unreadable`, `count` its gems read (`null` when unreadable); `count` the gems
+of every part, `null` while a part or the uninstall keys could not be read;
+`unreadable` the gemspec files that could not be read or give no name and
+version, `null` for `unreadable`. Not present, it is `{"state":
+"not_present", "looked_in": [<raw folders>]}`.
+
 ## Packages (`k..`)
 
 `packages` is one flat list over the read managers: pip, npm, pipx, uv, conda,
-winget, vscode, dotnet-tools, nuget, psgallery, choco, scoop, vcpkg, pnpm, yarn, bun, each by key. Ids `k<n>` are stable between runs (the id map), not places in
+winget, vscode, dotnet-tools, nuget, psgallery, choco, scoop, vcpkg, pnpm, yarn, bun, cargo, gem, composer, each by key. Ids `k<n>` are stable between runs (the id map), not places in
 the list. A summary item:
 
 | Field | Meaning |
 |---|---|
 | `id` | `k<n>` |
-| `manager` | `pip`, `npm`, `pipx`, `uv`, `conda`, `winget`, `vscode`, `dotnet-tools`, `nuget`, `psgallery`, `choco`, `scoop`, `vcpkg`, `pnpm`, `yarn` or `bun` |
+| `manager` | `pip`, `npm`, `pipx`, `uv`, `conda`, `winget`, `vscode`, `dotnet-tools`, `nuget`, `psgallery`, `choco`, `scoop`, `vcpkg`, `pnpm`, `yarn`, `bun`, `cargo`, `gem` or `composer` |
 | `key` | see "Keys" |
 | `name`, `version` | as the metadata says (`Name`/`Version`, `name`/`version`); for a file that could not be read `version` is `null`, and `name` is `null` (pip) or the folder entry (npm) |
 | `python` | pip only: `<company>/<tag>` of the Python |
@@ -307,7 +338,9 @@ the list. A summary item:
 | `root`, `bucket` | scoop only: the label of the root (`user`, `global`) and the bucket of `install.json` (`main`, or `null` when the file is missing, names none, could not be read or is not JSON) |
 | `triplet` | vcpkg only: the `Architecture` of the package (`x64-windows`) |
 | `layout` | pnpm only: the label of the layout folder the global package was read from (`5`) |
-| `folder` | pip: `install` or `user`; npm: the package folder (`<prefix>\node_modules\<name>`, the prefix raw); pipx: `<home>\venvs\<venv>` (the home raw); uv: `<tool folder>\<tool>` (raw); conda: `<prefix>\conda-meta` (the prefix as `environments.txt` writes it, an expanded path); winget: `%LOCALAPPDATA%\Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\<catalog folder>` (raw); vscode: `<extensions folder>\<relativeLocation>` (the folder raw: `VSCODE_EXTENSIONS` as set, or `%USERPROFILE%\.vscode\extensions`), `null` when the entry has no `relativeLocation`; the `name` of a vscode item is its id; dotnet-tools: `<tools>\.store\<id>` (raw: `DOTNET_CLI_HOME` as set + `\.dotnet\tools`, or `%USERPROFILE%\.dotnet\tools`); nuget: `<packages folder>\<id>` (raw: `NUGET_PACKAGES` as set, or `%USERPROFILE%\.nuget\packages`); the `name` of a dotnet-tools or nuget item is its id folder name; psgallery: `<module folder>\<module>` (raw: the Documents folder as the registry or the default writes it, or `%ProgramFiles%`), its `name` the `Name` of the file (the folder name when unreadable); choco: `<root>\lib\<folder>` (raw: `ChocolateyInstall` as set, or `%ProgramData%\chocolatey`), its `name` the nuspec `id` (the folder name when unreadable); scoop: `<root>\apps\<app>` (raw: `SCOOP` / `SCOOP_GLOBAL` as set, or `%USERPROFILE%\scoop` / `%ProgramData%\scoop`), its `name` the app folder name; vcpkg: `<root>\installed\<triplet>` (the root as `VCPKG_ROOT` or `vcpkg.path.txt` gives it), its `name` the `Package`; pnpm: `<home>\global\<layout>\node_modules\<name>` (the home raw: `PNPM_HOME` as set, or `%LOCALAPPDATA%\pnpm`), its `name` the `dependencies` key; yarn and bun: `<global folder>\node_modules\<name>` (the global folder raw: the variable as set, or the default), its `name` the `dependencies` key |
+| `source_kind` | cargo only: the kind of source the crate was installed from, the text before the first `+` inside the parentheses of its `.crates.toml` key (`registry`, `sparse`, `git`, `path`), `null` when there is no `+`; the source URL is never stored |
+| `gem_dir` | gem only: the label of the gem folder the gem was read from (`ruby-3.3.0`, `GEM_HOME`); `versions_found` the distinct versions of its gemspec files, `version` the highest |
+| `folder` | pip: `install` or `user`; npm: the package folder (`<prefix>\node_modules\<name>`, the prefix raw); pipx: `<home>\venvs\<venv>` (the home raw); uv: `<tool folder>\<tool>` (raw); conda: `<prefix>\conda-meta` (the prefix as `environments.txt` writes it, an expanded path); winget: `%LOCALAPPDATA%\Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\<catalog folder>` (raw); vscode: `<extensions folder>\<relativeLocation>` (the folder raw: `VSCODE_EXTENSIONS` as set, or `%USERPROFILE%\.vscode\extensions`), `null` when the entry has no `relativeLocation`; the `name` of a vscode item is its id; dotnet-tools: `<tools>\.store\<id>` (raw: `DOTNET_CLI_HOME` as set + `\.dotnet\tools`, or `%USERPROFILE%\.dotnet\tools`); nuget: `<packages folder>\<id>` (raw: `NUGET_PACKAGES` as set, or `%USERPROFILE%\.nuget\packages`); the `name` of a dotnet-tools or nuget item is its id folder name; psgallery: `<module folder>\<module>` (raw: the Documents folder as the registry or the default writes it, or `%ProgramFiles%`), its `name` the `Name` of the file (the folder name when unreadable); choco: `<root>\lib\<folder>` (raw: `ChocolateyInstall` as set, or `%ProgramData%\chocolatey`), its `name` the nuspec `id` (the folder name when unreadable); scoop: `<root>\apps\<app>` (raw: `SCOOP` / `SCOOP_GLOBAL` as set, or `%USERPROFILE%\scoop` / `%ProgramData%\scoop`), its `name` the app folder name; vcpkg: `<root>\installed\<triplet>` (the root as `VCPKG_ROOT` or `vcpkg.path.txt` gives it), its `name` the `Package`; pnpm: `<home>\global\<layout>\node_modules\<name>` (the home raw: `PNPM_HOME` as set, or `%LOCALAPPDATA%\pnpm`), its `name` the `dependencies` key; yarn and bun: `<global folder>\node_modules\<name>` (the global folder raw: the variable as set, or the default), its `name` the `dependencies` key; cargo: the install root (raw: the variable as set, or `%USERPROFILE%\.cargo`), its `name` the text of the `.crates.toml` key before the first space, or `unparsed key <n>` for a key that could not be split and whose first word is not a crate name (the key table); composer: `<home>\vendor\<name>` (the home raw: `COMPOSER_HOME` as set, or `%APPDATA%\Composer`), its `name` the `require` key; gem: the gem folder (raw: the variable or uninstall-key value as set, or the default base, + `\<abi>`), its `name` the gemspec's name (the file name without `.gemspec` when unreadable) |
 | `unreadable`, `reason` | only when the metadata file could not be read: `true` and why |
 | `entry` | pip, unreadable only: the `dist-info` / `egg-info` entry |
 | `from_baseline` | `true` when the folder could not be read in this run (winget: the catalog could not be read, or had manifest rows without an id) and the item is the previous baseline's |
@@ -315,7 +348,7 @@ the list. A summary item:
 The items of `packages` in the detail file, and of the detail lists
 `pip_packages`, `npm_packages`, `pipx_packages`, `uv_tools`, `conda_packages`,
 `winget_packages`, `vscode_extensions`, `dotnet_tools`, `nuget_packages`, `psgallery_modules`,
-`choco_packages`, `scoop_apps`, `vcpkg_packages`, `pnpm_packages`, `yarn_packages` and `bun_packages`, are the
+`choco_packages`, `scoop_apps`, `vcpkg_packages`, `pnpm_packages`, `yarn_packages`, `bun_packages`, `cargo_packages`, `gem_packages` and `composer_packages`, are the
 full items: also `status`
 (`read` or `unreadable`), `reason`, and `unread_fields` (`["version"]` for an
 unreadable file); a conda item also has `build`; a winget item also has `id`
@@ -343,6 +376,9 @@ version it installed; the item's `version` is the highest of them).
 | `pnpm_packages` | `pnpm:<layout>\|<name>`, case-folded: the layout folder's label and the `dependencies` key (`pnpm:5\|contoso-cli`); the same key when its `package.json` could not be read. A second name differing only in case gets `~2`, `~3`... |
 | `yarn_packages` | `yarn:<name>`, case-folded: the `dependencies` key (`yarn:contoso-cli`, `yarn:@contoso/tool`); the same key when its `package.json` could not be read. A second name differing only in case gets `~2`, `~3`... |
 | `bun_packages` | `bun:<name>`, case-folded, as for yarn (`bun:contoso-cli`) |
+| `cargo_packages` | `cargo:<name>`, case-folded: the crate name of the `.crates.toml` key (`cargo:contoso-cli`); for a key that could not be split, its text before the first space when that is a crate name (letters, digits, `-`, `_`), else `unparsed key <n>` (`<n>` its place in `v1`), so a source URL never becomes a name. A second name differing only in case gets `~2`, `~3`... |
+| `gem_packages` | `gem:<label>\|<name>`, case-folded name: the gem folder's label and the gem name (`gem:ruby-3.3.0\|contoso`); for a gemspec that could not be read or gives no name and version, its file name without `.gemspec` (`gem:ruby-3.3.0\|litware-0.1`), unless that file name is `<name>-<digit>...` of a gem read in the same folder: then that gem's item is `unreadable` (its highest version is unknown, never an older one) and the file has no item of its own. A second name differing only in case gets `~2`, `~3`... |
+| `composer_packages` | `composer:<name>`, case-folded: the `require` key (`composer:contoso/cli`). A second name differing only in case gets `~2`, `~3`... |
 
 ## Changes (`c..`)
 
@@ -360,11 +396,13 @@ version it installed; the item's `version` is the highest of them).
 | `root`, `bucket` | `scoop_apps` only: the root's label (`user`, `global`) and the item's bucket; the change's `source` stays the source name `scoop_apps` |
 | `triplet` | `vcpkg_packages` only: the item's triplet |
 | `layout` | `pnpm_packages` only: the item's layout label; the change's `source` stays the source name `pnpm_packages` |
+| `source_kind` | `cargo_packages` only: the item's `source_kind` |
+| `gem_dir` | `gem_packages` only: the item's gem folder label; the change's `source` stays the source name `gem_packages` |
 | `version` | `added` and `removed` only: the version added or removed |
 | `fields` | `changed` only: `{version: {before, after}}` |
 
 Changes come by source (pip, npm, pipx, uv, conda, winget, vscode, dotnet-tools,
-nuget, psgallery, choco, scoop, vcpkg, pnpm, yarn, bun); within a source the order is
+nuget, psgallery, choco, scoop, vcpkg, pnpm, yarn, bun, cargo, gem, composer); within a source the order is
 added, removed, changed, then by key. Only a source whose `comparison` is
 `compared` gives changes. The compared field of every source is `version`;
 a field that either side names in `unread_fields` is not compared.
@@ -446,8 +484,20 @@ as without the flag.
 | `yarn_packages <name>`, `bun_packages <name>` | that global package's `node_modules\<name>\package.json` is missing, could not be read, is not JSON or gives no version: its item is `unreadable` (no `changed` change), counted in `managers.<yarn/bun>.unreadable` |
 | `yarn global-folder setting in .yarnrc` | `managers.yarn.state` is `read` or `not_present`: "the config file is not read; only YARN_GLOBAL_FOLDER and the default are looked at" |
 | `bun globalDir setting in bunfig.toml` | `managers.bun.state` is `read` or `not_present`: "the config file is not read; only BUN_INSTALL_GLOBAL_DIR, BUN_INSTALL and the default are looked at" |
+| `cargo_packages` | the source is `unreadable`: the install root or its `.crates.toml` exists but could not be read, is not TOML, or its `v1` is missing or not a table (the reason says which); `managers.cargo.count` is `null` and the previous items are kept |
+| `cargo_packages <name>` | a `.crates.toml` key without a version or without a `(...)` part: "the .crates.toml key could not be split"; its item is `unreadable`, counted in `managers.cargo.unreadable` |
+| `cargo install.root setting in config.toml` | `managers.cargo.state` is `read` or `not_present`: "the config file is not read; only CARGO_INSTALL_ROOT, CARGO_HOME and the default are looked at" |
+| `gem_packages` | the source is `unreadable`: no gem folder could be read and at least one could not be: "no gem folder could be read" (when only the uninstall keys could not be read and no gem folder exists, the source is `unreadable` with their reason, named once, as `Ruby installs in the uninstall keys`); `managers.gem.count` is `null` and the previous items are kept |
+| `gem_packages <label>` | that gem folder, its `specifications` folder, or the parent folder `user`, `xdg`, `ruby` exists but could not be listed: its previous items are kept `from_baseline` (no `removed` change), `managers.gem.count` is `null` |
+| `gem_packages <label> <file>` | that gemspec (`<file>` its name without `.gemspec`) could not be read or gives no gem name and version: its item, or the item of the gem it belongs to, is `unreadable`, counted in `managers.gem.unreadable` |
+| `Ruby installs in the uninstall keys` | the uninstall keys, or some of them, could not be read (the reason says why and names the keys): the Rubies of the keys read are still looked at, those of the others are not, the previous `ruby-` items are kept `from_baseline`, `managers.gem.count` is `null`, and gem is never `not_present` |
+| `Ruby default gems (specifications\default)` | a gem folder was read: "they ship with Ruby" |
+| `Ruby installs outside the uninstall keys (portable, MSYS2, Scoop) and uninstall keys without InstallLocation` | every run that reads gem, also when gem is `not_present` or `unreadable`: "not searched; only GEM_HOME, GEM_PATH, the user gem folders and the Rubies of the uninstall keys are looked at" |
+| `composer_packages` | the source is `unreadable`: the home, `composer.json` or `vendor\composer\installed.json` exists but could not be read, `composer.json` is not a JSON object or its `require` is not an object, or `installed.json` holds neither a `packages` list nor a list (the reason says which); `managers.composer.count` is `null` and the previous items are kept |
+| `composer_packages <name>` | that global package is not in `vendor\composer\installed.json` (or the file is absent), or its entry gives no version: its item is `unreadable` (no `changed` change), counted in `managers.composer.unreadable` |
+| `composer vendor-dir setting (config.json, COMPOSER_VENDOR_DIR) and COMPOSER` | `managers.composer.state` is `read` or `not_present`: "only <home>\vendor and composer.json are read" |
 | `<manager name>` | every manager with `state` `not_read`: "not read yet". A `not_present` manager has no such item and no unreadable item |
-| `managers.json` | the data file could not be read: only the read managers (pip, npm, pipx, uv, conda, winget, vscode, dotnet-tools, nuget, psgallery, choco, scoop, vcpkg, pnpm, yarn, bun) are listed under `managers`, the reason says why |
+| `managers.json` | the data file could not be read: only the read managers (pip, npm, pipx, uv, conda, winget, vscode, dotnet-tools, nuget, psgallery, choco, scoop, vcpkg, pnpm, yarn, bun, cargo, gem, composer) are listed under `managers`, the reason says why |
 | `baseline`, `reference baseline`, `baseline history`, `baseline save` | shared contract, "Baseline" |
 | `stable ids`, `stable ids save` | shared contract, "Ids" |
 | `summary budget` | the summary exceeds the budget after every package and change was cut |

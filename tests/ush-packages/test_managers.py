@@ -85,8 +85,13 @@ class TestManagers(PackagesTestCase):
         # Plan 083 M1: yarn (no YARN_GLOBAL_FOLDER, no LOCALAPPDATA) and bun (no
         # BUN_INSTALL_GLOBAL_DIR, BUN_INSTALL or USERPROFILE).
         # Plan 083 M2: pnpm (no PNPM_HOME, no LOCALAPPDATA).
+        # Plan 086 M1: cargo (no CARGO_INSTALL_ROOT, CARGO_HOME or USERPROFILE) and
+        # composer (no COMPOSER_HOME, no APPDATA).
+        # Plan 086 M2: gem (no GEM_HOME, GEM_PATH or USERPROFILE; no Ruby in the
+        # registry, whose read is patched to return none).
         absent_here = ("pipx", "uv", "conda", "winget", "vscode", "dotnet-tools", "nuget",
-                       "psgallery", "choco", "vcpkg", "scoop", "yarn", "bun", "pnpm")
+                       "psgallery", "choco", "vcpkg", "scoop", "yarn", "bun", "pnpm",
+                       "cargo", "composer", "gem")
         others = [name for name in names
                   if name.casefold() not in ("pip", "npm") + absent_here]
 

@@ -452,6 +452,8 @@ class PackagesTestCase(unittest.TestCase):
         cls.packages.ENVIRON = {}
         # Nor the registry: the user's Documents folder is unset (%USERPROFILE%\Documents).
         cls.packages.DISK.documents_folder = lambda: None
+        # Nor the Ruby installs of the uninstall keys (plan 086 M2): none.
+        cls.packages.DISK.ruby_install_locations = list
 
     def data_dir(self):
         tmp = tempfile.TemporaryDirectory()

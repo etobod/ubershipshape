@@ -414,9 +414,11 @@ class TestScripts(unittest.TestCase):
             fakes = other_test_module(f"ush-{script}.fakes")
             patches = ()
             if script == "packages":
-                # The Documents folder is a registry read: never the real one in a test.
-                patches = (mock.patch.object(self.modules["packages"].DISK,
-                                             "documents_folder", lambda: None),)
+                # The Documents folder and the Ruby installs of the uninstall keys (plan
+                # 086 M2) are registry reads: never the real ones in a test.
+                disk = self.modules["packages"].DISK
+                patches = (mock.patch.object(disk, "documents_folder", lambda: None),
+                           mock.patch.object(disk, "ruby_install_locations", list))
             return ([], {"run_ps": fakes.FakePowerShell(), "is_admin": lambda: False,
                          "now": fakes.NOW}, patches, collection)
 
@@ -466,6 +468,38 @@ class TestScripts(unittest.TestCase):
             return ["--latest"], {}, (), check
 
         self.fail(f"no flag case for {script}")
+
+    # Plan 086, M2, K7
+    def test_packages_reads_no_registry(self):
+        """The packages run of this file reads no registry: every registry read of the
+        module copy loaded here is patched in ``flag_case``."""
+        if "packages" not in self.modules:
+            self.modules["packages"] = load_script("ush-packages", "packages")
+        winreg = importlib.import_module("winreg")
+        chdir(self, temp_dir(self))
+        scratch = temp_dir(self)
+        data_dir = scratch / "invented-data-dir"
+        data_dir.mkdir()
+        profile = scratch / "Users" / "contoso"
+        profile.mkdir(parents=True)
+        environ = {"USERPROFILE": str(profile), "SystemRoot": "C:\\Windows"}
+
+        registry_calls = []
+
+        def refuse_registry(*args, **kwargs):
+            registry_calls.append(args)
+            raise OSError("invented: a test must not read the registry")
+
+        argv, kwargs, patches, check = self.flag_case("packages", data_dir, scratch)
+        patches = (*patches,
+                   mock.patch.object(winreg, "OpenKey", refuse_registry),
+                   mock.patch.object(winreg, "OpenKeyEx", refuse_registry))
+        code, out, err = self.call_main(
+            "packages", [*argv, "--data-dir", str(data_dir)], kwargs, environ, patches)
+
+        self.assertEqual(code, 0, out[-300:] + err[-600:])
+        check(code, out, err)
+        self.assertEqual(registry_calls, [], "winreg was called during the packages run")
 
     def test_default_data_dir_flag(self):
         for _, skill, script, _, _, _ in DEFAULT_FLAG_SCRIPTS:

@@ -115,6 +115,9 @@ gives the count of low recommendations whose main source no line names.
    | pnpm | read | 3 (layout 5: 3; folder %LOCALAPPDATA%\pnpm\global) |
    | yarn | read | 2 (folder %LOCALAPPDATA%\Yarn\Data\global) |
    | bun | not present | — |
+   | cargo | read | 2 (folder %USERPROFILE%\.cargo) |
+   | gem | read | 3 (ruby-3.3.0: 3) |
+   | composer | not present | — |
    | vcpkg | not present | — |
 
    - pip: the cell names each Python of `managers.pip.pythons` with its
@@ -215,6 +218,30 @@ gives the count of low recommendations whose main source no line names.
      in „Not checked”), not counted in `count`. `null` is „not read”, never
      0; a global folder without a `package.json` or without `dependencies`
      is 0.
+   - cargo: `managers.cargo.count` (the crates of `.crates.toml`), with the
+     folder: `%USERPROFILE%\.cargo` for `folder_from` `default`, else
+     „folder from CARGO_INSTALL_ROOT” or „folder from CARGO_HOME”, never the
+     expanded path. With `unreadable` above 0, that many `.crates.toml` keys
+     that could not be split (each named in „Not checked”), not counted in
+     `count`. `null` is „not read”, never 0; a root without `.crates.toml`,
+     or with an empty one, is 0.
+   - composer: `managers.composer.count` (the global packages: the `require`
+     keys with `/` of the global `composer.json`), with the folder:
+     `%APPDATA%\Composer` for `folder_from` `default`, else „folder from
+     COMPOSER_HOME”, never the expanded path. With `unreadable` above 0,
+     that many global packages without a version in
+     `vendor\composer\installed.json` (each named in „Not checked”), not
+     counted in `count`. `null` is „not read”, never 0; a home without
+     `composer.json` or without `require` is 0.
+   - gem: `managers.gem.count` (the gems of every gem folder read), with
+     each part of `managers.gem.parts` by its label (`source`: `GEM_HOME`,
+     `GEM_PATH-<n>`, `user-<abi>`, `xdg-<abi>`, `ruby-<abi>`) and its count,
+     never the expanded path. A part with `status` `unreadable` is „could not
+     be read” in the cell (its reason in „Not checked”); `count` is then
+     `null`, „not read”, never 0. With `unreadable` above 0, that many
+     gemspec files that could not be read or give no name and version (each
+     named in „Not checked”), not counted in `count`. A gem folder without
+     `specifications` is 0.
    - A manager with `state` `not_present` (none of its disk locations
      exists) is „not present” in the State cell and „—” in the Packages
      cell, never 0, „none”, „not read yet” or „could not be read”; the places
@@ -236,7 +263,8 @@ gives the count of low recommendations whose main source no line names.
    label for winget (`catalog`), the module folder label for psgallery
    (`module_folder`), the root label and bucket for scoop (`root`, `bucket`),
    the triplet for vcpkg (`triplet`), the layout label for pnpm
-   (`layout`), and what changed: `added`
+   (`layout`), the source kind for cargo (`source_kind`, left out when
+   `null`), the gem folder label for gem (`gem_dir`), and what changed: `added`
    with `version`, `removed` with `version`, `changed` with `fields.version`
    `before` and `after`. With `truncated_changes` above 0, one line: how
    many changes were cut and that the detail file has them. A source with
@@ -245,7 +273,7 @@ gives the count of low recommendations whose main source no line names.
 
 4. Packages, one `###` heading per manager with packages (pip,
    npm, pipx, uv, conda, winget, vscode, dotnet-tools, nuget, psgallery, choco,
-   scoop, vcpkg, pnpm, yarn, bun); the section heading never says
+   scoop, vcpkg, pnpm, yarn, bun, cargo, gem, composer); the section heading never says
    „installed”, because the winget items are only recorded by winget;
    each package of `packages` one bullet with its id,
    `name`, `version`, and the place: for pip the Python (`python`) and the
@@ -261,8 +289,10 @@ gives the count of low recommendations whose main source no line names.
    „vcpkg package” and the triplet
    (`triplet`), for pnpm „pnpm global package” and the layout label
    (`layout`), for yarn „yarn global package”, for bun „bun global
-   package”;
-   with `versions_found` above 1 (dotnet-tools, nuget, psgallery), that many
+   package”, for cargo „cargo crate” and the source kind (`source_kind`,
+   left out when `null`), for gem „Ruby gem” and the gem folder label
+   (`gem_dir`), for composer „global Composer package”;
+   with `versions_found` above 1 (dotnet-tools, nuget, psgallery, gem), that many
    versions were found and `version` is the highest.
    Every package carries the words „not
    checked for updates” (in a Polish report „nie sprawdzono pod kątem
@@ -446,6 +476,28 @@ Never report missing data as „none” or „nothing there”:
   from „Not checked”, that a global folder set in `.yarnrc` (yarn) or
   `bunfig.toml` (bun) was not looked at, so the manager may still keep
   global packages elsewhere.
+- cargo or composer `state` `unreadable` (`count` `null`): cargo's
+  `.crates.toml` could not be read, is not TOML or its `v1` is not a table;
+  composer's `composer.json` or `vendor\composer\installed.json` could not
+  be read, is not JSON or has another shape. The packages are kept from the
+  baseline. Give the reason from „Not checked”, never „not present” or 0.
+- cargo `state` `not_present`: the install root does not exist; say, from
+  „Not checked”, that an install root set in cargo's `config.toml` was not
+  looked at, so cargo may still keep crates elsewhere.
+- composer `state` `not_present`: the Composer home does not exist; say,
+  from „Not checked”, that a vendor folder set in `config.json`,
+  `COMPOSER_VENDOR_DIR` or `COMPOSER` was not looked at.
+- gem `state` `read` with `count` `null`: a gem folder (or a parent folder
+  `user`, `xdg`, `ruby`, or the uninstall keys) could not be read; its gems
+  are kept from the baseline. Name the part and the reason from „Not
+  checked”, never 0 or „none”.
+- gem `state` `unreadable`: no gem folder could be read and at least one
+  (or the uninstall keys) could not be; the gems are kept from the
+  baseline. Give the reason from „Not checked”, never „not present” or 0.
+- gem `state` `not_present`: no gem folder exists (`GEM_HOME`, `GEM_PATH`,
+  the two user gem folders and every Ruby of the uninstall keys looked at).
+  Ruby's default gems (`specifications\default`) are never listed: say so
+  from „Not checked” when gems are listed.
 - A conda environment with `status` `absent`: the line of
   `environments.txt` names a folder that does not exist; it has no packages
   and is not unreadable.

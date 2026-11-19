@@ -82,6 +82,7 @@ cut first, then ``c`` items; the detail file keeps them all (``--detail <id>``).
 
 import argparse
 import copy
+import functools
 import json
 import ntpath
 import os
@@ -92,6 +93,8 @@ from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from xml.etree import ElementTree
+
+import tomllib
 
 # The shared modules live in skills/ush-common/scripts.
 sys.path.insert(0, str(Path(__file__).absolute().parents[2] / "ush-common" / "scripts"))
@@ -118,14 +121,16 @@ READ_MANAGERS = {"pip": "pip_packages", "npm": "npm_packages", "pipx": "pipx_pac
                  "choco": "choco_packages", "scoop": "scoop_apps",
                  "vcpkg": "vcpkg_packages", "pnpm": "pnpm_packages",
                  "yarn": "yarn_packages",
-                 "bun": "bun_packages"}
+                 "bun": "bun_packages", "cargo": "cargo_packages",
+                 "gem": "gem_packages", "composer": "composer_packages"}
 NOT_READ_YET = "not read yet"
 
 # The sources with items, compared with the baseline, in change order.
 SOURCES = ("pip_packages", "npm_packages", "pipx_packages", "uv_tools", "conda_packages",
            "winget_packages", "vscode_extensions", "dotnet_tools", "nuget_packages",
            "psgallery_modules", "choco_packages", "scoop_apps", "vcpkg_packages",
-           "pnpm_packages", "yarn_packages", "bun_packages")
+           "pnpm_packages", "yarn_packages", "bun_packages", "cargo_packages",
+           "gem_packages", "composer_packages")
 READ_STATUSES = ("read", "empty")
 COMPARED_FIELDS = {source: ("version",) for source in SOURCES}
 CHANGE_ORDER = ("added", "removed", "changed")
@@ -618,6 +623,12 @@ class Collector:
         # managers.bun (without state)
         self.yarn_summary = None
         self.bun_summary = None
+        # set by collect_cargo / collect_composer: the summary parts managers.cargo /
+        # managers.composer (without state)
+        self.cargo_summary = None
+        self.composer_summary = None
+        # set by read_gem: the summary part managers.gem (without state)
+        self.gem_summary = None
         # the managers none of whose disk locations exists (state not_present)
         self.not_present = set()
 
@@ -948,6 +959,17 @@ ENVIRONMENT_REFERENCE = re.compile(r"%([^%]+)%")
 # The user's Documents folder: a value of the user's shell folders (read-only).
 USER_SHELL_FOLDERS = r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
 DOCUMENTS_VALUE = "Personal"
+# The uninstall keys, read for the Ruby installs (read-only, plan 086).
+UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall"
+ERROR_NO_MORE_ITEMS = 259
+
+
+class PartlyReadError(OSError):
+    """Some keys could not be read; ``found`` holds what the others gave."""
+
+    def __init__(self, message: str, found: list):
+        super().__init__(message)
+        self.found = found
 
 
 class Disk:
@@ -999,6 +1021,58 @@ class Disk:
         if not isinstance(data, str):
             raise OSError(f"the value {DOCUMENTS_VALUE} is not text")
         return data
+
+    def ruby_install_locations(self) -> list:
+        """The ``InstallLocation`` of every uninstall key whose ``DisplayName`` starts with
+        ``Ruby `` (as RubyInstaller writes them), from ``HKCU`` and from ``HKLM`` in the
+        64-bit and the 32-bit view, each key opened read-only. A missing key, or a key
+        without a text ``DisplayName`` or ``InstallLocation``, is no entry. A key that
+        cannot be read does not stop the scan: after it, ``PartlyReadError`` carries the
+        locations found (``found``) and names the keys not read; any other read error
+        is an ``OSError``."""
+        try:
+            import winreg  # Windows-only, and only for a real run
+        except ImportError as exc:
+            raise OSError(f"winreg is not available: {exc}") from exc
+        views = ((winreg.HKEY_CURRENT_USER, 0),
+                 (winreg.HKEY_LOCAL_MACHINE, winreg.KEY_WOW64_64KEY),
+                 (winreg.HKEY_LOCAL_MACHINE, winreg.KEY_WOW64_32KEY))
+        found, errors = [], []
+        for hive, view in views:
+            access = winreg.KEY_READ | view
+            try:
+                root = winreg.OpenKey(hive, UNINSTALL_KEY, 0, access)
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                errors.append(f"{UNINSTALL_KEY}: {type(exc).__name__}: {exc}")
+                continue
+            with root:
+                index = 0
+                while True:
+                    try:
+                        name = winreg.EnumKey(root, index)
+                    except OSError as exc:
+                        if getattr(exc, "winerror", None) == ERROR_NO_MORE_ITEMS:
+                            break
+                        raise
+                    index += 1
+                    try:
+                        with winreg.OpenKey(root, name, 0, access) as key:
+                            display, _ = winreg.QueryValueEx(key, "DisplayName")
+                            location, _ = winreg.QueryValueEx(key, "InstallLocation")
+                    except FileNotFoundError:
+                        continue  # the key went away, or it lacks one of the values
+                    except OSError as exc:
+                        errors.append(f"{name}: {type(exc).__name__}: {exc}")
+                        continue
+                    if (isinstance(display, str) and display.startswith("Ruby ")
+                            and isinstance(location, str) and location.strip()):
+                        found.append(location.strip())
+        if errors:
+            raise PartlyReadError(f"{len(errors)} uninstall keys could not be read "
+                                  f"({'; '.join(errors)})", found)
+        return found
 
     def query_catalog(self, path, sql) -> list:
         """The rows of ``sql`` on the SQLite file ``path``, opened read-only and immutable
@@ -2758,15 +2832,21 @@ def global_items(col: Collector, source: str, prefix: str, path: str, raw: str,
 
 
 def read_global_folder(col: Collector, previous: dict, *, manager: str, source: str,
-                       prefix: str, raw: str, folder_from: str,
-                       config: tuple) -> tuple[str, dict, dict]:
-    """``(status, {key: item}, summary part)`` of the Node.js global folder ``raw``.
+                       prefix: str, raw: str, folder_from: str, config: tuple,
+                       read_names=None, make_items=None) -> tuple[str, dict, dict]:
+    """``(status, {key: item}, summary part)`` of the single folder ``raw`` (by default
+    a Node.js global folder).
 
-    The folder absent (or its ``%VAR%`` unset): ``not_present``. No ``package.json``,
-    or one without ``dependencies``: ``empty``. A folder or ``package.json`` that cannot
-    be read: ``unreadable``, the previous items kept ``from_baseline``. The part is
-    ``{status, folder_from, count, unreadable}``; ``config`` is named when read or not
-    present."""
+    The folder absent (or its ``%VAR%`` unset): ``not_present``. ``read_names(path,
+    raw)`` gives ``(names, None)``, or ``(None, reason)`` when the folder's record cannot
+    be read (default ``global_dependencies``); ``make_items(path, raw, names)`` gives
+    ``{key: item}`` (default ``global_items``). No item: ``empty``. A folder or record
+    that cannot be read: ``unreadable``, the previous items kept ``from_baseline``. The
+    part is ``{status, folder_from, count, unreadable}``; ``config`` is named when read
+    or not present."""
+    read_names = read_names or global_dependencies
+    make_items = make_items or (lambda path, raw, names: global_items(
+        col, source, prefix, path, raw, names))
     raw = raw.rstrip("\\/") or raw
     path = expand_path(raw)
     try:
@@ -2775,7 +2855,7 @@ def read_global_folder(col: Collector, previous: dict, *, manager: str, source: 
         present, names = True, None
         reason = f"{raw} could not be read: {type(exc).__name__}: {exc}"
     else:
-        names, reason = global_dependencies(path, raw) if present else ([], None)
+        names, reason = read_names(path, raw) if present else ([], None)
     if names is None:
         items = carry_source(col, source, previous, reason)
         return "unreadable", items, {"status": "unreadable", "folder_from": folder_from,
@@ -2783,7 +2863,7 @@ def read_global_folder(col: Collector, previous: dict, *, manager: str, source: 
     col.skip(*config)
     if not present:
         return not_present(col, manager, source, [raw])
-    items = global_items(col, source, prefix, path, raw, names)
+    items = make_items(path, raw, names)
     status = "read" if items else "empty"
     col.record(source, status, None)
     count = sum(1 for item in items.values() if item["status"] == "read")
@@ -2821,6 +2901,485 @@ def collect_bun(col: Collector, previous: dict) -> tuple[str, dict]:
         col, previous, manager="bun", source=BUN_SOURCE, prefix="bun:", raw=raw,
         folder_from=folder_from, config=BUN_CONFIG)
     progress.step(f"{BUN_SOURCE} {'failed' if status == 'unreadable' else 'done'}")
+    return status, items
+
+
+# cargo: the crates installed with cargo install, from the install root's .crates.toml
+# (read with tomllib; no cargo command runs). The source URL is never kept: a path
+# install's URL holds a local path.
+CARGO_SOURCE = "cargo_packages"
+CARGO_ROOT_VARIABLES = ("CARGO_INSTALL_ROOT", "CARGO_HOME")
+CARGO_DEFAULT_ROOT = "%USERPROFILE%\\.cargo"
+CARGO_RECORD = "\\.crates.toml"
+CARGO_CONFIG = ("cargo install.root setting in config.toml",
+                ("the config file is not read; only CARGO_INSTALL_ROOT, CARGO_HOME and the "
+                 "default are looked at"))
+# A .crates.toml key: <name> <version> (<source>).
+CRATE_KEY = re.compile(r"(\S+) (\S+) \((.*)\)")
+CRATE_NAME = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def cargo_crate_keys(path: str, raw: str) -> tuple[list | None, str | None]:
+    """``(keys, None)``: the keys of ``v1`` in ``<path>\\.crates.toml`` (none when the
+    file is absent, empty or only whitespace), or ``(None, reason)`` when it cannot be
+    read, is not TOML or its ``v1`` is missing or not a table."""
+    record = path + CARGO_RECORD
+    try:
+        if not DISK.exists(record):
+            return [], None
+        content = DISK.read_text(record)
+        if not content.strip():
+            return [], None  # cargo creates it empty and reads it as no installs
+        data = tomllib.loads(content)
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        return None, f"{raw}{CARGO_RECORD} could not be read: {type(exc).__name__}: {exc}"
+    crates = data.get("v1")
+    if not isinstance(crates, dict):
+        return None, f"{raw}{CARGO_RECORD}: v1 is missing or not a table"
+    return list(crates), None
+
+
+def cargo_items(col: Collector, raw: str, keys: list) -> dict:
+    """``{key: item}`` of the ``.crates.toml`` keys: ``name``, ``version`` (as written)
+    and ``source_kind`` (the text before the first ``+`` in the parentheses, or None). A
+    key that cannot be split is ``unreadable``, named in not_checked by its first word
+    when that is a crate name, else as ``unparsed key <n>`` (the key may hold a source
+    URL). Key ``cargo:<name case-folded>``."""
+    items = {}
+    for number, entry in enumerate(keys, 1):
+        progress.count(CARGO_SOURCE, number, len(keys))
+        match = CRATE_KEY.fullmatch(entry)
+        if match:
+            name = match.group(1)
+        else:
+            first = entry.split(" ")[0]
+            name = first if CRATE_NAME.fullmatch(first) else f"unparsed key {number}"
+        item = {"name": name, "version": None, "source_kind": None, "status": "read",
+                "reason": None, "folder": raw}
+        if match:
+            item["version"] = match.group(2)
+            kind, plus, _ = match.group(3).partition("+")
+            item["source_kind"] = kind if plus else None
+        else:
+            reason = "the .crates.toml key could not be split"
+            unreadable_item(item, reason)
+            col.skip(f"{CARGO_SOURCE} {name}", reason)
+        key, suffix = f"cargo:{name.casefold()}", 2
+        while key in items:
+            key, suffix = f"cargo:{name.casefold()}~{suffix}", suffix + 1
+        items[key] = item
+    return items
+
+
+def collect_cargo(col: Collector, previous: dict) -> tuple[str, dict]:
+    """The crates of ``<root>\\.crates.toml``, the root ``CARGO_INSTALL_ROOT``, else
+    ``CARGO_HOME`` (non-blank), else ``%USERPROFILE%\\.cargo``. Key ``cargo:<name
+    case-folded>``; the part goes to ``col.cargo_summary``."""
+    progress.step(f"{CARGO_SOURCE} ...")
+    raw, folder_from = CARGO_DEFAULT_ROOT, "default"
+    for variable in CARGO_ROOT_VARIABLES:
+        if environment_value(variable) is not None:
+            raw, folder_from = environment_value(variable), variable
+            break
+    status, items, col.cargo_summary = read_global_folder(
+        col, previous, manager="cargo", source=CARGO_SOURCE, prefix="cargo:", raw=raw,
+        folder_from=folder_from, config=CARGO_CONFIG, read_names=cargo_crate_keys,
+        make_items=lambda path, raw, keys: cargo_items(col, raw, keys))
+    progress.step(f"{CARGO_SOURCE} {'failed' if status == 'unreadable' else 'done'}")
+    return status, items
+
+
+# gem: the specifications\*.gemspec files of every gem folder (part) found: GEM_HOME,
+# GEM_PATH, the user gem folders and each Ruby of the uninstall keys (no gem or ruby
+# command runs).
+GEM_SOURCE = "gem_packages"
+GEM_HOME_VARIABLE = "GEM_HOME"
+GEM_PATH_VARIABLE = "GEM_PATH"
+GEM_USER_BASE = "%USERPROFILE%\\.gem\\ruby"
+GEM_XDG_VARIABLE = "XDG_DATA_HOME"
+GEM_XDG_DEFAULT = "%USERPROFILE%\\.local\\share"
+GEM_XDG_TAIL = "\\gem\\ruby"
+GEM_RUBY_TAIL = "\\lib\\ruby\\gems"
+GEM_SPECIFICATIONS = "\\specifications"
+GEM_SPEC_SUFFIX = ".gemspec"
+GEM_DEFAULTS = ("Ruby default gems (specifications\\default)", "they ship with Ruby")
+GEM_OTHER_RUBIES = (("Ruby installs outside the uninstall keys (portable, MSYS2, Scoop) and "
+                     "uninstall keys without InstallLocation"),
+                    ("not searched; only GEM_HOME, GEM_PATH, the user gem folders and the "
+                     "Rubies of the uninstall keys are looked at"))
+GEM_REGISTRY = "Ruby installs in the uninstall keys"
+GEM_STUB = re.compile(r"^# stub: (\S+) (\S+)", re.MULTILINE)
+GEM_NAME = re.compile(r"""^\s*s\.name\s*=\s*["']([^"']+)["'](?:\.freeze)?\s*$""",
+                      re.MULTILINE)
+GEM_VERSION = re.compile(r"""^\s*s\.version\s*=\s*["']([^"']+)["'](?:\.freeze)?\s*$""",
+                         re.MULTILINE)
+GEM_SEGMENT = re.compile(r"[0-9]+|[a-z]+", re.IGNORECASE)
+
+
+def gem_segments(version: str) -> list:
+    """The canonical segments of a gem version, as ``Gem::Version`` makes them: numbers
+    and letter runs, the trailing zeros dropped from the numeric part and from the part
+    after the first letter run."""
+    segments = [int(s) if s.isdigit() else s for s in GEM_SEGMENT.findall(version)]
+    first = next((i for i, s in enumerate(segments) if isinstance(s, str)), len(segments))
+    canonical = []
+    for chunk in (segments[:first], segments[first:]):
+        while chunk and chunk[-1] == 0:
+            chunk = chunk[:-1]
+        canonical += chunk
+    return canonical
+
+
+def gem_compare(left: str, right: str) -> int:
+    """``Gem::Version#<=>``: segment by segment, a missing one is 0 and a letter run
+    sorts below a number, so ``1.0.0.pre`` < ``1.0.0``."""
+    lhs, rhs = gem_segments(left), gem_segments(right)
+    for index in range(max(len(lhs), len(rhs))):
+        a = lhs[index] if index < len(lhs) else 0
+        b = rhs[index] if index < len(rhs) else 0
+        if a == b:
+            continue
+        if isinstance(a, str) != isinstance(b, str):
+            return -1 if isinstance(a, str) else 1
+        return -1 if a < b else 1
+    return 0
+
+
+GEM_VERSION_KEY = functools.cmp_to_key(gem_compare)
+
+
+def gemspec_name_version(content: str) -> tuple[str, str] | None:
+    """``(name, version)`` of a gemspec: from its ``# stub:`` line, else from its
+    ``s.name`` and ``s.version`` lines; None when neither gives both."""
+    stub = GEM_STUB.search(content)
+    if stub:
+        return stub.group(1), stub.group(2)
+    name, version = GEM_NAME.search(content), GEM_VERSION.search(content)
+    if name and version:
+        return name.group(1).strip(), version.group(1).strip()
+    return None
+
+
+def gem_part_items(col: Collector, label: str, raw: str, path: str) -> tuple[dict, int]:
+    """``{key: item}`` of the gem folder ``path`` (``raw`` unexpanded): per gem name the
+    highest version of its ``specifications\\*.gemspec`` files and ``versions_found``
+    (distinct versions); a gemspec that cannot be read or gives no name and version is
+    an ``unreadable`` item keyed by its file name, named in not_checked. No
+    ``specifications`` folder: no item. With the items, the number of gemspec files
+    not read. ``OSError`` when it cannot be listed."""
+    specifications = path + GEM_SPECIFICATIONS
+    try:
+        names = sorted(DISK.list_dir(specifications), key=str.casefold)
+    except (FileNotFoundError, NotADirectoryError):
+        return {}, 0
+    found, unread, items = {}, [], {}
+    files = [name for name in names if name.casefold().endswith(GEM_SPEC_SUFFIX)]
+    for number, file_name in enumerate(files, 1):
+        progress.count(f"{GEM_SOURCE} {label}", number, len(files))
+        stem = file_name[:-len(GEM_SPEC_SUFFIX)]
+        shown = f"{raw}{GEM_SPECIFICATIONS}\\{file_name}"
+        file_path = f"{specifications}\\{file_name}"
+        try:
+            parsed = gemspec_name_version(DISK.read_text(file_path))
+        except (OSError, UnicodeDecodeError) as exc:
+            try:
+                folder = DISK.exists(file_path) and not DISK.is_file(file_path)
+            except OSError:
+                folder = False
+            if folder:
+                continue  # a folder named *.gemspec is no gemspec
+            reason = f"{shown} could not be read: {type(exc).__name__}: {exc}"
+        else:
+            reason = None if parsed else f"{shown} gives no gem name and version"
+        if reason is not None:
+            unread.append((stem, reason))
+            col.skip(f"{GEM_SOURCE} {label} {stem}", reason)
+            continue
+        name, version = parsed
+        found.setdefault(name.casefold(), []).append((name, version))
+    # A gemspec not read whose file name is <name>-<version...> of a gem read may hold
+    # its highest version: that gem's version is unknown, never an older one.
+    unknown, entries = {}, []
+    for stem, reason in unread:
+        owner = next((folded for folded in found
+                      if stem.casefold().startswith(folded + "-")
+                      and stem[len(folded) + 1:][:1].isdigit()), None)
+        if owner is None:
+            entries.append(unreadable_item(
+                {"name": stem, "versions_found": None, "gem_dir": label, "status": "read",
+                 "reason": None, "folder": raw}, reason))
+        else:
+            unknown.setdefault(owner, reason)
+    for folded, value in found.items():
+        name, version = max(value, key=lambda nv: (GEM_VERSION_KEY(nv[1]), nv[1]))
+        item = {"name": name, "version": version,
+                "versions_found": len({v for _, v in value}), "gem_dir": label,
+                "status": "read", "reason": None, "folder": raw}
+        if folded in unknown:
+            unreadable_item(item, unknown[folded])
+        entries.append(item)
+    for item in entries:
+        name = item["name"]
+        key, suffix = f"gem:{label}|{name.casefold()}", 2
+        while key in items:
+            key, suffix = f"gem:{label}|{name.casefold()}~{suffix}", suffix + 1
+        items[key] = item
+    return items, len(unread)
+
+
+def next_label(name: str, used: set) -> str:
+    """``name``, else ``name~2``, ``name~3``... the first one not in ``used`` (added)."""
+    label, number = name, 1
+    while label in used:
+        number += 1
+        label = f"{name}~{number}"
+    used.add(label)
+    return label
+
+
+def gem_candidates() -> tuple[list, list, str | None]:
+    """``(candidates, looked_in, registry reason)``. Each candidate is ``(kind, label,
+    raw)`` in part order: kind ``part`` (a gem folder) or ``parent`` (a folder whose
+    subfolders ``<abi>`` are gem folders, ``label`` its label prefix)."""
+    candidates, looked_in = [], []
+    home = environment_value(GEM_HOME_VARIABLE)
+    if home is not None:
+        candidates.append(("part", "GEM_HOME", home))
+        looked_in.append(home)
+    entries = [entry.strip() for entry in (environment_value(GEM_PATH_VARIABLE) or "")
+               .split(";") if entry.strip()]
+    for number, entry in enumerate(entries, 1):
+        candidates.append(("part", f"GEM_PATH-{number}", entry))
+        looked_in.append(entry)
+    xdg = environment_value(GEM_XDG_VARIABLE) or GEM_XDG_DEFAULT
+    for prefix, raw in (("user", GEM_USER_BASE),
+                        ("xdg", (xdg.rstrip("\\/") or xdg) + GEM_XDG_TAIL)):
+        candidates.append(("parent", prefix, raw))
+        looked_in.append(raw)
+    try:
+        rubies = DISK.ruby_install_locations()
+    except OSError as exc:
+        # PartlyReadError: the Rubys of the keys that were read are still parts.
+        rubies = list(getattr(exc, "found", None) or [])
+        reason = f"the uninstall keys could not be read: {type(exc).__name__}: {exc}"
+    else:
+        reason = None
+    for location in rubies:
+        location = text(location)
+        if location is None:
+            continue
+        raw = (location.strip().rstrip("\\/") or location.strip()) + GEM_RUBY_TAIL
+        candidates.append(("parent", "ruby", raw))
+        looked_in.append(raw)
+    return candidates, looked_in, reason
+
+
+def collect_gem(col: Collector, previous: dict) -> tuple[str, dict]:
+    """Read the Ruby gems, with a start and an end progress line."""
+    progress.step(f"{GEM_SOURCE} ...")
+    status, items = read_gem(col, previous)
+    progress.step(f"{GEM_SOURCE} {'failed' if status == 'unreadable' else 'done'}")
+    return status, items
+
+
+def read_gem(col: Collector, previous: dict) -> tuple[str, dict]:
+    """``(status, {key: item})`` of the source ``gem_packages``; the summary part
+    ``{status, parts, count, unreadable}`` is kept in ``col.gem_summary``.
+
+    The parts, in order: ``GEM_HOME``, each ``GEM_PATH`` entry (``GEM_PATH-<n>``), each
+    subfolder ``<abi>`` of ``%USERPROFILE%\\.gem\\ruby`` (``user-<abi>``), of
+    ``<XDG_DATA_HOME, else %USERPROFILE%\\.local\\share>\\gem\\ruby`` (``xdg-<abi>``) and
+    of ``<InstallLocation>\\lib\\ruby\\gems`` of each Ruby of the uninstall keys
+    (``ruby-<abi>``); a label already used gets ``~2``, ``~3``, a folder already a part
+    is skipped. A part, or a parent folder (labelled ``user``, ``xdg``, ``ruby``), that
+    exists but cannot be listed is an ``unreadable`` part: its previous items are kept
+    ``from_baseline`` (never over an item of this run, never of a label read in this
+    run) and the count is null. Uninstall keys that cannot be read are named in
+    not_checked and keep the previous ``ruby-`` items the same way. ``not_present``
+    only when no part exists and the keys were read; ``unreadable`` only when no part
+    was read and one (or the keys) could not be.
+    """
+    candidates, looked_in, registry_reason = gem_candidates()
+    col.skip(*GEM_OTHER_RUBIES)
+    items, rows, used, seen, kept, unread_files = {}, [], set(), set(), [], 0
+    queue = list(candidates)
+    while queue:
+        kind, name, raw = queue.pop(0)
+        path = expand_path(raw)
+        try:
+            present = folder_present(path)
+        except OSError as exc:
+            if kind == "listed" and isinstance(exc, NotADirectoryError):
+                continue  # a file beside the <abi> folders
+            present, error = True, f"{raw} could not be listed: {type(exc).__name__}: {exc}"
+        else:
+            error = None
+        if not present:
+            continue
+        if error is None and kind == "parent":
+            try:
+                subfolders = sorted(DISK.list_dir(path), key=str.casefold)
+            except OSError as exc:
+                error = f"{raw} could not be listed: {type(exc).__name__}: {exc}"
+            else:
+                queue[0:0] = [("listed", f"{name}-{abi}", f"{raw}\\{abi}")
+                              for abi in subfolders]
+                continue
+        place = (kind == "parent", same_folder(path))
+        if place in seen:
+            continue  # a folder already looked at (GEM_HOME equal to a Ruby's gem folder)
+        seen.add(place)
+        label = next_label(name, used)
+        row = {"source": label, "status": "read", "count": None, "reason": None}
+        rows.append(row)
+        if error is None:
+            try:
+                found, unread = gem_part_items(col, label, raw, path)
+            except OSError as exc:
+                error = (f"{raw}{GEM_SPECIFICATIONS} could not be listed: "
+                         f"{type(exc).__name__}: {exc}")
+            else:
+                row["count"] = sum(1 for item in found.values() if item["status"] == "read")
+                items.update(found)
+                unread_files += unread
+                continue
+        row.update(status="unreadable", reason=error)
+        col.skip(f"{GEM_SOURCE} {label}", error)
+        kept.append(f"gem:{label}|" if kind != "parent" else f"gem:{name}-")
+    if registry_reason is not None:
+        col.skip(GEM_REGISTRY, registry_reason)
+        kept.append("gem:ruby-")
+    read_labels = {row["source"] for row in rows if row["status"] == "read"}
+    carry(col, GEM_SOURCE, previous, items, lambda key: (
+        key not in items and any(key.startswith(prefix) for prefix in kept)
+        and key[len("gem:"):].split("|", 1)[0] not in read_labels))
+    read = [row for row in rows if row["status"] == "read"]
+    if not read and (rows or registry_reason is not None):
+        if rows:
+            col.record(GEM_SOURCE, "unreadable", "no gem folder could be read")
+        else:  # the keys are the only thing not read, already named in not_checked
+            col.sources.append({"name": GEM_SOURCE, "status": "unreadable",
+                                "reason": registry_reason})
+        col.gem_summary = {"status": "unreadable", "parts": rows, "count": None,
+                           "unreadable": None}
+        return "unreadable", items
+    if not rows:
+        status, items, col.gem_summary = not_present(col, "gem", GEM_SOURCE, looked_in)
+        return status, items
+    # A part that could not be read is never "nothing there": partly read is read.
+    status = ("read" if items or len(read) < len(rows) or registry_reason is not None
+              else "empty")
+    col.record(GEM_SOURCE, status, None)
+    col.skip(*GEM_DEFAULTS)
+    col.gem_summary = {
+        "status": status, "parts": rows,
+        "count": (None if len(read) < len(rows) or registry_reason is not None
+                  else sum(row["count"] for row in read)),
+        "unreadable": unread_files}
+    return status, items
+
+
+# composer: the global packages are the require keys (with a "/") of the global
+# composer.json, each version from vendor\composer\installed.json (no composer or php
+# command runs).
+COMPOSER_SOURCE = "composer_packages"
+COMPOSER_VARIABLE = "COMPOSER_HOME"
+COMPOSER_DEFAULT_HOME = "%APPDATA%\\Composer"
+COMPOSER_MANIFEST = "\\composer.json"
+COMPOSER_INSTALLED = "\\vendor\\composer\\installed.json"
+COMPOSER_CONFIG = (("composer vendor-dir setting (config.json, COMPOSER_VENDOR_DIR) and "
+                    "COMPOSER"),
+                   "only <home>\\vendor and composer.json are read")
+
+
+NOT_INSTALLED = object()  # a require key with no installed.json entry
+
+
+def composer_installed(path: str, raw: str) -> tuple[dict | None, str | None]:
+    """``({name case-folded: version}, None)`` of ``installed.json`` (an object with a
+    ``packages`` list, Composer 2, or a bare list, Composer 1; ``{}`` when it is
+    absent), or ``(None, reason)`` when it cannot be read or has neither shape."""
+    installed = path + COMPOSER_INSTALLED
+    try:
+        if not DISK.exists(installed):
+            return {}, None
+        data = json.loads(DISK.read_text(installed))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        return None, (f"{raw}{COMPOSER_INSTALLED} could not be read: "
+                      f"{type(exc).__name__}: {exc}")
+    entries = data.get("packages") if isinstance(data, dict) else data
+    if not isinstance(entries, list):
+        return None, f"{raw}{COMPOSER_INSTALLED} holds neither a packages list nor a list"
+    return {entry["name"].casefold(): entry.get("version") for entry in entries
+            if isinstance(entry, dict) and isinstance(entry.get("name"), str)}, None
+
+
+def composer_globals(path: str, raw: str) -> tuple[list | None, str | None]:
+    """``([(name, version or None), ...], None)``: the ``require`` keys holding ``/`` of
+    ``<path>\\composer.json`` (none when the file or the key is absent), each with its
+    ``installed.json`` entry's version, or ``(None, reason)`` when either file cannot be
+    read or has another shape."""
+    manifest = path + COMPOSER_MANIFEST
+    try:
+        if not DISK.exists(manifest):
+            return [], None
+        data = json.loads(DISK.read_text(manifest))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        return None, f"{raw}{COMPOSER_MANIFEST} could not be read: {type(exc).__name__}: {exc}"
+    if not isinstance(data, dict):
+        return None, f"{raw}{COMPOSER_MANIFEST} does not hold a JSON object"
+    require = data.get("require")
+    if require is None:
+        return [], None
+    if not isinstance(require, dict):
+        return None, f"{raw}{COMPOSER_MANIFEST}: require is not an object"
+    names = [name for name in require if "/" in name]  # others are platform requirements
+    if not names:
+        return [], None
+    versions, reason = composer_installed(path, raw)
+    if versions is None:
+        return None, reason
+    return [(name, versions.get(name.casefold(), NOT_INSTALLED)) for name in names], None
+
+
+def composer_items(col: Collector, raw: str, globals_: list) -> dict:
+    """``{key: item}`` of the global packages: ``name`` and ``version`` (the non-blank
+    string version of its ``installed.json`` entry); a package with none is
+    ``unreadable``, named in not_checked. Key ``composer:<name case-folded>``."""
+    items = {}
+    for number, (name, version) in enumerate(globals_, 1):
+        progress.count(COMPOSER_SOURCE, number, len(globals_))
+        item = {"name": name, "version": None, "status": "read", "reason": None,
+                "folder": f"{raw}\\vendor\\{name.replace('/', '\\')}"}
+        if isinstance(version, str) and version.strip():
+            item["version"] = version.strip()
+        else:
+            reason = (f"{name} is not in {raw}{COMPOSER_INSTALLED}"
+                      if version is NOT_INSTALLED
+                      else f"{name} gives no version in {raw}{COMPOSER_INSTALLED}")
+            unreadable_item(item, reason)
+            col.skip(f"{COMPOSER_SOURCE} {name}", reason)
+        key, suffix = f"composer:{name.casefold()}", 2
+        while key in items:
+            key, suffix = f"composer:{name.casefold()}~{suffix}", suffix + 1
+        items[key] = item
+    return items
+
+
+def collect_composer(col: Collector, previous: dict) -> tuple[str, dict]:
+    """The global Composer packages of ``COMPOSER_HOME`` (non-blank), else
+    ``%APPDATA%\\Composer``. Key ``composer:<name case-folded>``; the part goes to
+    ``col.composer_summary``."""
+    progress.step(f"{COMPOSER_SOURCE} ...")
+    raw, folder_from = environment_value(COMPOSER_VARIABLE), COMPOSER_VARIABLE
+    if raw is None:
+        raw, folder_from = COMPOSER_DEFAULT_HOME, "default"
+    status, items, col.composer_summary = read_global_folder(
+        col, previous, manager="composer", source=COMPOSER_SOURCE, prefix="composer:",
+        raw=raw, folder_from=folder_from, config=COMPOSER_CONFIG,
+        read_names=composer_globals,
+        make_items=lambda path, raw, globals_: composer_items(col, raw, globals_))
+    progress.step(f"{COMPOSER_SOURCE} {'failed' if status == 'unreadable' else 'done'}")
     return status, items
 
 
@@ -2974,7 +3533,8 @@ def build_managers(col: Collector) -> dict:
                   "choco": col.choco_summary, "scoop": col.scoop_summary,
                   "vcpkg": col.vcpkg_summary, "pnpm": col.pnpm_summary,
                   "yarn": col.yarn_summary,
-                  "bun": col.bun_summary}
+                  "bun": col.bun_summary, "cargo": col.cargo_summary,
+                  "gem": col.gem_summary, "composer": col.composer_summary}
     entries, reason = load_managers(MANAGERS_FILE)
     if entries is None:
         col.skip(MANAGERS_FILE.name, f"the managers not read by this skill are not "
@@ -3031,6 +3591,12 @@ def collect(run_ps, work: Path, stamp: str, previous: dict):
         col, previous.get("yarn_packages") or {})
     statuses["bun_packages"], current["bun_packages"] = collect_bun(
         col, previous.get("bun_packages") or {})
+    statuses["cargo_packages"], current["cargo_packages"] = collect_cargo(
+        col, previous.get("cargo_packages") or {})
+    statuses["gem_packages"], current["gem_packages"] = collect_gem(
+        col, previous.get("gem_packages") or {})
+    statuses["composer_packages"], current["composer_packages"] = collect_composer(
+        col, previous.get("composer_packages") or {})
     return statuses, current, col
 
 
@@ -3099,6 +3665,11 @@ def build_changes(previous: dict, current: dict, comparison: dict, numbering) ->
                 entry["triplet"] = item.get("triplet")
             elif source == "pnpm_packages":
                 entry["layout"] = item.get("layout")
+            elif source == "cargo_packages":
+                entry["source_kind"] = item.get("source_kind")
+            elif source == "gem_packages":
+                # ``source`` stays the source name; the gem folder label is ``gem_dir``.
+                entry["gem_dir"] = item.get("gem_dir")
             if fields is not None:
                 entry["fields"] = fields
             else:
@@ -3111,7 +3682,8 @@ def build_changes(previous: dict, current: dict, comparison: dict, numbering) ->
 # --- packages ------------------------------------------------------------------
 def build_packages(current: dict, numbering) -> list:
     """Every package of the read managers (pip, npm, pipx, uv, conda, winget, vscode,
-    dotnet-tools, nuget, psgallery, choco, scoop, vcpkg, pnpm, yarn, bun), each
+    dotnet-tools, nuget, psgallery, choco, scoop, vcpkg, pnpm, yarn, bun, cargo,
+    gem, composer), each
     by key; ids ``k<n>`` from ``numbering``. The full item of the source, with ``manager`` and ``key``."""
     packages = []
     for manager, source in READ_MANAGERS.items():
@@ -3126,8 +3698,8 @@ def summary_package(item: dict) -> dict:
     ``version``, the Python (pip), the venv and ``injected`` (pipx), the environment
     (conda), the catalog label ``source`` (winget), ``versions_found`` (dotnet-tools,
     nuget, psgallery), ``module_folder`` and ``repository`` (psgallery), ``root`` and
-    ``bucket`` (scoop), ``triplet`` (vcpkg), ``layout`` (pnpm) and ``folder``; ``unreadable`` and ``reason`` when
-    its metadata could not be read, ``from_baseline`` when it was kept from the
+    ``bucket`` (scoop), ``triplet`` (vcpkg), ``layout`` (pnpm), ``source_kind`` (cargo),
+    ``versions_found`` and ``gem_dir`` (gem) and ``folder``; ``unreadable`` and ``reason`` when its metadata could not be read, ``from_baseline`` when it was kept from the
     baseline because its folder could not be listed (winget: its catalog could not be
     read, or had rows without an id)."""
     out = {"id": item["id"], "manager": item["manager"], "key": item["key"],
@@ -3154,6 +3726,11 @@ def summary_package(item: dict) -> dict:
         out["triplet"] = item.get("triplet")
     elif item["manager"] == "pnpm":
         out["layout"] = item.get("layout")
+    elif item["manager"] == "cargo":
+        out["source_kind"] = item.get("source_kind")
+    elif item["manager"] == "gem":
+        out["versions_found"] = item.get("versions_found")
+        out["gem_dir"] = item.get("gem_dir")
     out["folder"] = item.get("folder")
     if item.get("status") == "unreadable":
         out["unreadable"] = True

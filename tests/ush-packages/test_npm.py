@@ -182,8 +182,8 @@ class TestNpm(PackagesTestCase):
                 notes = self.not_checked(summary)
 
                 # winget from plan 073, choco and scoop from plan 080, yarn and pnpm
-                # from plan 083
-                for name in ("go", "composer", "gem", "cargo"):
+                # from plan 083, cargo, composer and gem from plan 086
+                for name in ("go",):
                     own = [item for item in notes if item.get("what") == name]
                     self.assertEqual(len(own), 1, (name, notes))
                     self.assertIn(NOT_READ_YET, note_text(own[0]), own)

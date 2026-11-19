@@ -608,6 +608,39 @@ class TestOtherSources(AdviceTestCase):
         self.assertEqual(sorted(named),
                          ["bun_packages", "pnpm_packages", "yarn_packages"], notes)
 
+    # Plan 086, M2, K6
+    def test_cargo_gem_composer_named(self):
+        doc = packages_detail({"pip_packages": [pip_item("contoso-lib", "1.2.0")]})
+        doc["sources"] += [
+            {"name": "cargo_packages", "status": "read", "reason": None},
+            {"name": "gem_packages", "status": "read", "reason": None},
+            {"name": "composer_packages", "status": "read", "reason": None},
+        ]
+        doc["comparison"].update({"cargo_packages": "no_baseline",
+                                  "gem_packages": "no_baseline",
+                                  "composer_packages": "no_baseline"})
+        doc["cargo_packages"] = [{
+            "key": "cargo:contoso-cli", "name": "contoso-cli", "version": "1.2.3",
+            "source_kind": "registry", "status": "read", "reason": None}]
+        doc["gem_packages"] = [{
+            "key": "gem:ruby-3.3.0|fabrikam", "name": "fabrikam", "version": "2.0.0",
+            "versions_found": 1, "gem_dir": "ruby-3.3.0", "status": "read",
+            "reason": None}]
+        doc["composer_packages"] = [{
+            "key": "composer:litware/cli", "name": "litware/cli", "version": "v3.0.1",
+            "status": "read", "reason": None}]
+        summary = self.run_with(doc)
+
+        notes = [item for item in self.not_checked(summary)
+                 if item.get("what") == OTHER_SOURCES_WHAT]
+        self.assertEqual(len(notes), 1, self.not_checked(summary))
+        reason = str(notes[0].get("reason"))
+        self.assertTrue(reason.startswith(
+            "ush-advice does not look up the ush-packages sources "), notes)
+        named = reason.split("sources ", 1)[-1].split(", ")
+        self.assertEqual(sorted(named),
+                         ["cargo_packages", "composer_packages", "gem_packages"], notes)
+
 
 if __name__ == "__main__":
     unittest.main()

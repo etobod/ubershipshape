@@ -15,8 +15,8 @@
   {"name": "pnpm", "step": 3, "read": true},
   {"name": "yarn", "step": 3, "read": true},
   {"name": "bun", "step": 3, "read": true},
-  {"name": "cargo", "step": 3, "read": false},
-  {"name": "gem", "step": 3, "read": false},
-  {"name": "composer", "step": 3, "read": false},
+  {"name": "cargo", "step": 3, "read": true},
+  {"name": "gem", "step": 3, "read": true},
+  {"name": "composer", "step": 3, "read": true},
   {"name": "vcpkg", "step": 3, "read": true}
 ]
