@@ -158,5 +158,21 @@ class TestUpdateCheckDocs(unittest.TestCase):
                 self.assertRegex(text, POINTER)
 
 
+class TestWingetContract(unittest.TestCase):
+    """Plan 082 M1 K5: the winget_packages row says when the source is empty and read."""
+
+    def test_empty_only_when_every_catalog_read(self):
+        path = SKILLS / "ush-packages" / "references" / "summary-contract.md"
+        rows = [line for line in path.read_text(encoding="utf-8").splitlines()
+                if line.startswith("| `winget_packages` |")]
+        row = rows[0]  # the sources table comes first
+        self.assertIn("tracking catalogs of winget", row)
+        self.assertNotIn("no catalog / no package", row)
+        self.assertNotIn("`read` with at least one item", row)
+        self.assertIn("only when every catalog was read and gave no row", row)
+        self.assertIn("`read` when an item was found, a catalog could not be read, "
+                      "or manifest rows gave no id", row)
+
+
 if __name__ == "__main__":
     unittest.main()

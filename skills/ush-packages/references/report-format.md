@@ -251,7 +251,7 @@ gives the count of low recommendations whose main source no line names.
    (its metadata could not be read, with `reason`), a second entry of the
    same name in one folder (a key ending in `|<entry>`), or `from_baseline`
    (kept from the baseline because its folder could not be read in this
-   run). Say which fact and why it matters. Never call a package removable,
+   run, or, for winget, its catalog had rows without an id). Say which fact and why it matters. Never call a package removable,
    unused or old without such a fact.
 
    A winget item in the detail file also has `versions_recorded`: the
@@ -314,7 +314,8 @@ package are expanded paths: write the profile folder as `%USERPROFILE%`
   0 packages, and it is no finding; the places outside `looked_in` were not
   searched („Not checked”). `not_present` and `not_read` are never swapped.
 - `from_baseline` `true`: the item is the previous baseline's, kept because
-  its folder could not be read in this run; it is not a new reading.
+  its folder could not be read in this run (for winget: its catalog could
+  not be read, or had rows without an id); it is not a new reading.
 
 ## Degradation cases
 
@@ -353,6 +354,13 @@ Never report missing data as „none” or „nothing there”:
   read (SQLite failed, or „tracking catalog schema <value> not known”); its
   packages are kept from the baseline (`from_baseline`), the other catalogs
   are read and compared.
+- A winget `unreadable` above 0 with `state` `read`: manifest rows of a
+  catalog gave no id (or an id gave no version) and were not read; give the
+  number beside the count, never the count alone as all winget holds (a
+  `count` of 0 is then „0 read”, never „no packages”). Only when „Not
+  checked” names `winget_packages <label> rows without an id`: a package of
+  the previous run not found in that catalog is kept from the baseline
+  (`from_baseline`), never „removed”. Ids without a version carry nothing.
 - A winget catalog with `wal_present` `true`: winget's latest writes are
   still in its `-wal` file, which an immutable read does not see; say that
   the newest changes of that catalog may be missing.

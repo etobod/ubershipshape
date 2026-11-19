@@ -1576,11 +1576,15 @@ WINGET_CATALOG_FILE = "installed.db"
 # The tracking catalog schema this reader knows (metadata majorVersion).
 WINGET_SCHEMA = "1"
 WINGET_SCHEMA_SQL = "SELECT value FROM metadata WHERE name = 'majorVersion'"
+# LEFT JOIN: a manifest row whose id, name or version points at no row is still
+# returned, with NULL there, instead of being dropped. winget_items counts a NULL id
+# as a row without an id, shows the id for a NULL name, and marks an id unreadable
+# when none of its rows gives a version.
 WINGET_MANIFEST_SQL = ("SELECT manifest.rowid, ids.id, names.name, versions.version "
                        "FROM manifest "
-                       "JOIN ids ON ids.rowid = manifest.id "
-                       "JOIN names ON names.rowid = manifest.name "
-                       "JOIN versions ON versions.rowid = manifest.version")
+                       "LEFT JOIN ids ON ids.rowid = manifest.id "
+                       "LEFT JOIN names ON names.rowid = manifest.name "
+                       "LEFT JOIN versions ON versions.rowid = manifest.version")
 WINGET_NOT_MERGED = ("the catalog is read immutable; writes still in its -wal file are "
                      "not seen")
 WINGET_READ_NOTES = (("winget records not checked against installed programs",
@@ -1649,7 +1653,10 @@ def read_winget(col: Collector, previous: dict) -> tuple[str, dict]:
     holding ``installed.db`` is a catalog, labelled by its name case-folded. A catalog
     that cannot be read keeps its previous items ``from_baseline`` and is named in
     not_checked; the source is ``unreadable`` only when no catalog could be read. The
-    count is null while any catalog is unreadable.
+    count is null while any catalog is unreadable. A catalog with manifest rows that
+    give no id keeps its previous items not found now ``from_baseline``. The source
+    is ``read`` when an item was found, a catalog was unreadable or a row gave no id;
+    ``empty`` only when every catalog was read and gave neither.
     """
     path = expand_path(WINGET_LOCAL_STATE)
     try:
@@ -1713,6 +1720,11 @@ def read_winget(col: Collector, previous: dict) -> tuple[str, dict]:
             col.skip(f"winget_packages {label} rows without an id",
                      f"{no_id} manifest rows of the tracking catalog give no id and are "
                      f"not read")
+            # A previous package of this catalog not found now may be behind a row
+            # without an id: carried from the baseline, never reported removed.
+            carry(col, WINGET_SOURCE, previous, items,
+                  lambda key, label=label, found=found:
+                  key.startswith(f"winget:{label}|") and key not in found)
         row["count"] = sum(1 for item in found.values() if item["status"] == "read")
         unreadable += no_id + sum(1 for item in found.values()
                                   if item["status"] == "unreadable")
@@ -1722,7 +1734,9 @@ def read_winget(col: Collector, previous: dict) -> tuple[str, dict]:
         col.winget_summary = {"status": "unreadable", "catalogs": catalogs, "count": None,
                               "unreadable": None}
         return "unreadable", items
-    status = "read" if items else "empty"
+    # Partly read is read: an unread catalog or rows without an id were there and
+    # not read, so the source is never "empty" (read, nothing there).
+    status = "read" if items or len(read) < len(catalogs) or unreadable else "empty"
     col.record(WINGET_SOURCE, status, None)
     for note in WINGET_READ_NOTES:
         col.skip(*note)
@@ -2814,7 +2828,8 @@ def summary_package(item: dict) -> dict:
     nuget, psgallery), ``module_folder`` and ``repository`` (psgallery), ``root`` and
     ``bucket`` (scoop), ``triplet`` (vcpkg) and ``folder``; ``unreadable`` and ``reason`` when
     its metadata could not be read, ``from_baseline`` when it was kept from the
-    baseline because its folder could not be listed."""
+    baseline because its folder could not be listed (winget: its catalog could not be
+    read, or had rows without an id)."""
     out = {"id": item["id"], "manager": item["manager"], "key": item["key"],
            "name": item.get("name"), "version": item.get("version")}
     if item["manager"] == "pip":

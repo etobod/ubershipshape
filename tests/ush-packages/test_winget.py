@@ -431,5 +431,138 @@ class TestWinget(WingetTestCase):
         self.assertEqual(self.changes(third), [])
 
 
+def add_rows_without_id(catalog_path, rows):
+    """Add one manifest row per ``(name, version)`` in ``rows`` to the catalog at
+    ``catalog_path`` whose ``id`` refers to an ``ids`` row with a blank identifier (a
+    row without an id, as ``winget_items`` counts it). Name and version are valid
+    references."""
+    with closing(sqlite3.connect(str(catalog_path))) as conn:
+        channel = conn.execute("SELECT rowid FROM channels LIMIT 1").fetchone()[0]
+        for name, version in rows:
+            id_ref = conn.execute("INSERT INTO ids (id) VALUES ('')").lastrowid
+            name_ref = conn.execute("INSERT INTO names (name) VALUES (?)", (name,)).lastrowid
+            version_ref = conn.execute("INSERT INTO versions (version) VALUES (?)",
+                                       (version,)).lastrowid
+            moniker_ref = conn.execute("INSERT INTO monikers (moniker) VALUES (?)",
+                                       (name.casefold(),)).lastrowid
+            pathpart = conn.execute(
+                "INSERT INTO pathparts (parent, pathpart) VALUES (NULL, ?)",
+                (f"{name}.{version}.yaml",)).lastrowid
+            conn.execute(
+                "INSERT INTO manifest (id, name, moniker, version, channel, pathpart, hash)"
+                " VALUES (?, ?, ?, ?, ?, ?, NULL)",
+                (id_ref, name_ref, moniker_ref, version_ref, channel, pathpart))
+        conn.commit()
+
+
+def add_rows_with_dangling_id(catalog_path, rows):
+    """Add one manifest row per ``(name, version)`` in ``rows`` whose ``id`` refers to
+    no row of ``ids`` (a damaged catalog). Name and version are valid references."""
+    with closing(sqlite3.connect(str(catalog_path))) as conn:
+        channel = conn.execute("SELECT rowid FROM channels LIMIT 1").fetchone()[0]
+        missing = conn.execute("SELECT COALESCE(MAX(rowid), 0) FROM ids").fetchone()[0] + 1000
+        for offset, (name, version) in enumerate(rows):
+            name_ref = conn.execute("INSERT INTO names (name) VALUES (?)", (name,)).lastrowid
+            version_ref = conn.execute("INSERT INTO versions (version) VALUES (?)",
+                                       (version,)).lastrowid
+            moniker_ref = conn.execute("INSERT INTO monikers (moniker) VALUES (?)",
+                                       (name.casefold(),)).lastrowid
+            pathpart = conn.execute(
+                "INSERT INTO pathparts (parent, pathpart) VALUES (NULL, ?)",
+                (f"{name}.{version}.yaml",)).lastrowid
+            conn.execute(
+                "INSERT INTO manifest (id, name, moniker, version, channel, pathpart, hash)"
+                " VALUES (?, ?, ?, ?, ?, ?, NULL)",
+                (missing + offset, name_ref, moniker_ref, version_ref, channel, pathpart))
+        conn.commit()
+
+
+class TestPartlyReadIsRead(WingetTestCase):
+    """A partly read winget is ``read``, not ``empty`` (plan 082, M1)."""
+
+    def test_unreadable_beside_empty_catalog_is_read(self):
+        local = self.local_app_data()
+        local_state = self.local_state(local)
+        empty, broken = "empty.source", "broken.source"
+        write_catalog(local_state, empty, [])
+        write_catalog(local_state, broken, [("Fabrikam.App", "Fabrikam App", "3.0")])
+
+        # No previous baseline: a fresh data directory.
+        with self.failing_query(broken, sqlite3.Error("unable to open database (invented)")):
+            summary = self.run_winget(local, data_dir=self.data_dir())
+
+        self.assertEqual(self.catalog(summary, broken).get("status"), "unreadable",
+                         self.manager(summary, "winget"))
+        winget = self.manager(summary, "winget")
+        self.assertEqual(winget.get("status"), "read", winget)
+        self.assertNotEqual(winget.get("status"), "empty", winget)
+        self.assertIn("count", winget, winget)
+        self.assertIsNone(winget["count"], winget)
+
+    def test_all_catalogs_empty_is_empty(self):
+        local = self.local_app_data()
+        local_state = self.local_state(local)
+        write_catalog(local_state, CONTOSO_LABEL, [])
+        write_catalog(local_state, "fabrikam.source", [])
+
+        summary = self.run_winget(local, data_dir=self.data_dir())
+
+        for label in (CONTOSO_LABEL, "fabrikam.source"):
+            with self.subTest(catalog=label):
+                row = self.catalog(summary, label)
+                self.assertNotEqual(row.get("status"), "unreadable", row)
+        winget = self.manager(summary, "winget")
+        self.assertEqual(winget.get("status"), "empty", winget)
+        self.assertEqual(winget.get("count"), 0, winget)
+        self.assertEqual(self.winget_items(summary), {})
+
+    def test_rows_without_id_are_read(self):
+        local = self.local_app_data()
+        path = write_catalog(self.local_state(local), CONTOSO_LABEL, [])
+        add_rows_without_id(path, [("Contoso Tool", "1.2.0"), ("Fabrikam App", "3.0")])
+
+        summary = self.run_winget(local, data_dir=self.data_dir())
+
+        winget = self.manager(summary, "winget")
+        self.assertEqual(winget.get("status"), "read", winget)
+        self.assertEqual(winget.get("unreadable"), 2, winget)
+        self.assertEqual(self.winget_items(summary), {})
+
+    def test_rows_with_dangling_id_are_read(self):
+        local = self.local_app_data()
+        path = write_catalog(self.local_state(local), CONTOSO_LABEL, [])
+        add_rows_with_dangling_id(path, [("Contoso Tool", "1.2.0"), ("Fabrikam App", "3.0")])
+
+        summary = self.run_winget(local, data_dir=self.data_dir())
+
+        winget = self.manager(summary, "winget")
+        self.assertEqual(winget.get("status"), "read", winget)
+        self.assertEqual(winget.get("unreadable"), 2, winget)
+        self.assertEqual(self.winget_items(summary), {})
+
+    def test_rows_without_id_keep_baseline_items(self):
+        # Final review (plan 082): a package whose row now gives no id was not read,
+        # so it is carried from the baseline, never reported removed.
+        local = self.local_app_data()
+        local_state = self.local_state(local)
+        data_dir = self.data_dir()
+        fabrikam_key = f"winget:{CONTOSO_LABEL}|fabrikam.app"
+        write_catalog(local_state, CONTOSO_LABEL, [("Contoso.Tool", "Contoso Tool", "1.2.0"),
+                                                   ("Fabrikam.App", "Fabrikam App", "3.0")])
+        self.run_winget(local, data_dir=data_dir, now=NOW)
+
+        write_catalog(local_state, CONTOSO_LABEL, [("", "Contoso Tool", "1.2.0"),
+                                                   ("Fabrikam.App", "Fabrikam App", "3.0")])
+        second = self.run_winget(local, data_dir=data_dir, now=NOW + timedelta(days=1))
+
+        self.assertEqual(self.winget_changes(second), [])
+        items = self.winget_items(second)
+        self.assertIn(CONTOSO_TOOL, items, sorted(map(str, items)))
+        self.assertTrue(items[CONTOSO_TOOL].get("from_baseline"), items[CONTOSO_TOOL])
+        self.assertIn(fabrikam_key, items, sorted(map(str, items)))
+        self.assertFalse(items[fabrikam_key].get("from_baseline"), items[fabrikam_key])
+        self.assertEqual(self.manager(second, "winget").get("unreadable"), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
