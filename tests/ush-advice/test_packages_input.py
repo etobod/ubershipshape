@@ -536,6 +536,40 @@ class TestOtherSources(AdviceTestCase):
                      if item.get("what") == OTHER_SOURCES_WHAT]
             self.assertEqual(notes, [], self.not_checked(summary))
 
+    # Plan 080, M2, K5
+    def test_step3_sources_named(self):
+        doc = packages_detail({"pip_packages": [pip_item("contoso-lib", "1.2.0")]})
+        doc["sources"] += [
+            {"name": "choco_packages", "status": "read", "reason": None},
+            {"name": "scoop_apps", "status": "read", "reason": None},
+            {"name": "vcpkg_packages", "status": "read", "reason": None},
+        ]
+        doc["comparison"].update({"choco_packages": "no_baseline",
+                                  "scoop_apps": "no_baseline",
+                                  "vcpkg_packages": "no_baseline"})
+        doc["choco_packages"] = [{
+            "key": "choco:contoso.cli", "name": "Contoso.Cli", "version": "1.10.0",
+            "folder": "%ProgramData%\\chocolatey\\lib\\contoso.cli",
+            "status": "read", "reason": None}]
+        doc["scoop_apps"] = [{
+            "key": "scoop:user|fabrikam", "name": "fabrikam", "version": "2.47.1",
+            "bucket": "main", "root": "user",
+            "folder": INVENTED_HOME + "\\scoop\\apps\\fabrikam",
+            "status": "read", "reason": None}]
+        doc["vcpkg_packages"] = [{
+            "key": "vcpkg:litware:x64-windows", "name": "litware", "version": "1.3.1",
+            "triplet": "x64-windows",
+            "folder": "C:\\Invented\\vcpkg\\installed\\x64-windows",
+            "status": "read", "reason": None}]
+        summary = self.run_with(doc)
+
+        notes = [item for item in self.not_checked(summary)
+                 if item.get("what") == OTHER_SOURCES_WHAT]
+        self.assertEqual(len(notes), 1, self.not_checked(summary))
+        self.assertEqual(notes[0].get("reason"),
+                         "ush-advice does not look up the ush-packages sources "
+                         "choco_packages, scoop_apps, vcpkg_packages", notes)
+
 
 if __name__ == "__main__":
     unittest.main()

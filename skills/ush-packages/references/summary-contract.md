@@ -34,13 +34,15 @@ directory: `--data-dir`, else `USH_DATA_DIR`, else the plugin data folder
   `packages` items here are the full items of the detail lists, with
   `manager` and `key`), the detail lists `pip_packages`, `npm_packages`,
   `pipx_packages`, `uv_tools`, `conda_packages`, `winget_packages`,
-  `vscode_extensions`, `dotnet_tools`, `nuget_packages` and `psgallery_modules`
-  (every item with its `key`), and
+  `vscode_extensions`, `dotnet_tools`, `nuget_packages`, `psgallery_modules`,
+  `choco_packages`, `scoop_apps` and `vcpkg_packages` (every item with its
+  `key`), and
   `summary_file`, the summary of the same run.
 - `state/ush-packages.json` (`ush-packages.elevated.json` for an elevated
   run) - the baseline, with the sources `pip_packages`, `npm_packages`,
   `pipx_packages`, `uv_tools`, `conda_packages`, `winget_packages`,
-  `vscode_extensions`, `dotnet_tools`, `nuget_packages` and `psgallery_modules`; `state/history/` keeps a day copy of it (shared contract, "Baseline").
+  `vscode_extensions`, `dotnet_tools`, `nuget_packages`, `psgallery_modules`,
+  `choco_packages`, `scoop_apps` and `vcpkg_packages`; `state/history/` keeps a day copy of it (shared contract, "Baseline").
 - `state/ush-packages.ids.json` - the id map of `k..` and `c..`.
 
 The PowerShell jobs write their results to `work/packages-<stamp>.<job>.json`
@@ -51,7 +53,9 @@ them). winget's tracking catalogs are read by Python itself (no job, no file
 in `work/`): each is opened through SQLite with `mode=ro&immutable=1`, so
 nothing is written beside it (no `-journal`, `-shm` or `-wal` file). VS
 Code's `extensions.json`, the dotnet tool store, the NuGet global packages
-folder and the PowerShell module folders are read by Python too (no job). The
+folder, the PowerShell module folders, the Chocolatey `lib` folder, the
+Scoop `apps` folders and the vcpkg status database are read by Python too (no
+job). The
 script changes nothing on the machine and
 exits 0 when the collection ran, also when jobs failed.
 
@@ -81,7 +85,10 @@ order:
 | `vscode_extensions` | the VS Code extensions folder: a non-blank environment variable `VSCODE_EXTENSIONS` (its name in any case), else `%USERPROFILE%\.vscode\extensions`; its `extensions.json` (VS Code's list of the installed extensions), read whole. Read directly by Python, no job: `%USERPROFILE%` is expanded from the environment (unset: VS Code not present). Each entry with a string `identifier.id` is an item with the entry's `version`; an entry without a string `version` is an item with status `unreadable`; an entry without a string id cannot be keyed: it is no item and counts in `managers.vscode.unreadable`. The extension folders and `.obsolete` are not read; VS Code never runs. `empty` with no extensions folder (VS Code not present, `managers.vscode.state` `not_present`) or an empty list; `read` with at least one item; `unreadable` when the folder exists but `extensions.json` is missing ("no extensions.json in the extensions folder"), cannot be read, is not JSON, is not a list, or has entries of which none gives a string id (the previous baseline's items are kept, `from_baseline`) | `managers.vscode`, the `vscode` items of `packages`, the detail list `vscode_extensions` |
 | `dotnet_tools` | the .NET global tools folder: a non-blank environment variable `DOTNET_CLI_HOME` (its name in any case) + `\.dotnet\tools`, else `%USERPROFILE%\.dotnet\tools`; its tool store `<tools>\.store\<id>\<version>`, listed directly by Python, no job (`%USERPROFILE%` expanded from the environment; unset: dotnet tools not present). Every version folder is complete; entries starting with `.` (`.stage`) are skipped at the id and the version level; an entry that is no folder is no id. Per id one item with the highest version by dotted number (a tie broken by the version string) and `versions_found`; an id folder without a version folder is no item and counts in `managers.dotnet-tools.incomplete`. dotnet never runs. `empty` with no tools folder (dotnet tools not present, `managers.dotnet-tools.state` `not_present`), no `.store` folder or no tool; `read` with at least one item; `unreadable` when the tools or store folder exists but could not be listed (the previous baseline's items are kept, `from_baseline`, never `removed`). An id folder that could not be listed is an item with status `unreadable`, counted in `managers.dotnet-tools.unreadable`, never `incomplete` | `managers.dotnet-tools`, the `dotnet-tools` items of `packages`, the detail list `dotnet_tools` |
 | `nuget_packages` | the NuGet global packages folder: a non-blank environment variable `NUGET_PACKAGES`, else `%USERPROFILE%\.nuget\packages`, laid out `<id>\<version>` and listed directly by Python, no job (`NuGet.Config` is not read). A version is complete when its folder holds a file named exactly `.nupkg.metadata` (NuGet writes it after the package is fully extracted; a file `<id>.<version>.nupkg.metadata` does not count). Entries starting with `.` are skipped at the id and the version level. Per id one item with the highest complete version (a tie broken by the version string) and `versions_found` (the complete version folders); an id folder without a complete version is no item and counts in `managers.nuget.incomplete`. nuget and dotnet never run. `empty` with no folder (NuGet not present, `managers.nuget.state` `not_present`) or no package; `read` with at least one item; `unreadable` when the folder exists but could not be listed (the previous baseline's items are kept, `from_baseline`, never `removed`). An id folder that could not be listed, or a version folder whose `.nupkg.metadata` could not be checked, is an item with status `unreadable`, counted in `managers.nuget.unreadable`, never `incomplete` | `managers.nuget`, the `nuget` items of `packages`, the detail list `nuget_packages` |
-| `psgallery_modules` | the PowerShell modules installed through PowerShellGet or PSResourceGet, in four module folders, each with a label: `user-windowspowershell` `<Documents>\WindowsPowerShell\Modules`, `user-powershell` `<Documents>\PowerShell\Modules`, `allusers-windowspowershell` `%ProgramFiles%\WindowsPowerShell\Modules`, `allusers-powershell` `%ProgramFiles%\PowerShell\Modules`. `<Documents>` is the raw `Personal` value of `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders` (read-only; expanded from the environment), else `%USERPROFILE%\Documents`. Listed directly by Python, no job; no PowerShell module command runs. A module is `<folder>\<Name>\<Version>\PSGetModuleInfo.xml` (CLIXML, UTF-16 or UTF-8): the elements with attribute `N` `Name`, `Version` and `Repository` under the top-level object's `MS`, whatever their tag. Per module folder one item with the highest parsed version by dotted number (a tie broken by the version string), `versions_found` (the version folders whose file parsed) and the `repository` of that version. A version folder whose file is not XML or lacks `Name` or `Version` is skipped while another version parses, else the item is `unreadable` with the reason. A module folder whose version folders hold no `PSGetModuleInfo.xml` is no item and counts in `managers.psgallery.other_modules`. `empty` with no module folder (PowerShellGet modules not present, `managers.psgallery.state` `not_present`) or no module; `read` with at least one item; `unreadable` when no folder was read and at least one could not be (the previous baseline's items are kept, `from_baseline`). A folder that exists but could not be listed, and the two `user-` folders when the Documents folder could not be read, keep their previous items (`from_baseline`, never `removed`); while another folder is read the source stays read and compared, and `managers.psgallery.count` is `null`. A module folder or a `PSGetModuleInfo.xml` that could not be read is an item with status `unreadable`, counted in `managers.psgallery.unreadable`, never in `other_modules` | `managers.psgallery`, the `psgallery` items of `packages`, the detail list `psgallery_modules` |
+| `psgallery_modules` | the PowerShell modules installed through PowerShellGet or PSResourceGet, in four module folders, each with a label: `user-windowspowershell` `<Documents>\WindowsPowerShell\Modules`, `user-powershell` `<Documents>\PowerShell\Modules`, `allusers-windowspowershell` `%ProgramFiles%\WindowsPowerShell\Modules`, `allusers-powershell` `%ProgramFiles%\PowerShell\Modules`. `<Documents>` is the raw `Personal` value of `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders` (read-only; expanded from the environment), else `%USERPROFILE%\Documents`. Listed directly by Python, no job; no PowerShell module command runs. A module is `<folder>\<Name>\<Version>\PSGetModuleInfo.xml` (CLIXML, UTF-16 or UTF-8): the elements with attribute `N` `Name`, `Version` and `Repository` under the top-level object's `MS`, whatever their tag. Per module folder one item with the highest parsed version by dotted number (a tie broken by the version string), `versions_found` (the version folders whose file parsed) and the `repository` of that version. A version folder whose file is not XML or lacks `Name` or `Version` is skipped while another version parses, else the item is `unreadable` with the reason. A module folder whose version folders hold no `PSGetModuleInfo.xml` is no item and counts in `managers.psgallery.other_modules`. `empty` with no module folder (PowerShellGet modules not present, `managers.psgallery.state` `not_present`) or no module; `read` with at least one item, or while one folder could not be listed and another was read; `unreadable` when no folder was read and at least one could not be (the previous baseline's items are kept, `from_baseline`). A folder that exists but could not be listed, and the two `user-` folders when the Documents folder could not be read, keep their previous items (`from_baseline`, never `removed`); while another folder is read the source stays read and compared, and `managers.psgallery.count` is `null`. A module folder or a `PSGetModuleInfo.xml` that could not be read is an item with status `unreadable`, counted in `managers.psgallery.unreadable`, never in `other_modules` | `managers.psgallery`, the `psgallery` items of `packages`, the detail list `psgallery_modules` |
+| `choco_packages` | the Chocolatey root: a non-blank environment variable `ChocolateyInstall` (its name in any case), else `%ProgramData%\chocolatey`; each folder of `<root>\lib` holding `<folder>\<folder>.nuspec` is a package, listed directly by Python, no job (`%ProgramData%` expanded from the environment; unset: Chocolatey not present). The nuspec is parsed as XML, any namespace on each element: the text of `metadata/id` and `metadata/version`. Entries starting with `.` (`.chocolatey`) are skipped; an entry that is no folder is no package. A folder without its nuspec is no item and counts in `managers.choco.incomplete`. `lib-bad` and `lib-bkp` are not read. choco never runs. `empty` with no root (Chocolatey not present, `managers.choco.state` `not_present`), no `lib` folder or no package; `read` with at least one item; `unreadable` when the root or `lib` exists but could not be listed (the previous baseline's items are kept, `from_baseline`, never `removed`). A package folder that could not be listed, a folder holding `.chocolateyPending` (an install or upgrade choco has not finished), a nuspec that could not be checked or read, and a nuspec that is not XML or lacks `id` or `version` are an item with status `unreadable`, counted in `managers.choco.unreadable`, never `incomplete` | `managers.choco`, the `choco` items of `packages`, the detail list `choco_packages` |
+| `scoop_apps` | the two Scoop roots, each with a label: `user` a non-blank environment variable `SCOOP` (its name in any case), else `%USERPROFILE%\scoop`; `global` a non-blank `SCOOP_GLOBAL`, else `%ProgramData%\scoop`. Each folder of `<root>\apps` is an app, listed directly by Python, no job (`%USERPROFILE%` and `%ProgramData%` expanded from the environment; unset: that root absent). The version is the string `version` of `<app>\current\manifest.json` (read through the `current` junction, never resolved), the bucket the `bucket` of `<app>\current\install.json` (`null` when that file is missing or names none, no error; `null` with a not_checked entry when it could not be read or is not JSON, the item still `read`). Entries starting with `.` are skipped; an entry that is no folder is no app; the folder `scoop` (Scoop's own core) is no app. An app folder without `current`, without `manifest.json`, or whose manifest has no non-blank string `version` is no item and counts in `managers.scoop.incomplete`. `persist`, `cache`, `buckets` and the older version folders beside `current` are not read. scoop never runs. `empty` with neither root (Scoop not present, `managers.scoop.state` `not_present`), no `apps` folder or no app; `read` with at least one item, or while one root could not be listed and the other was read; `unreadable` when no root was read and at least one exists but could not be listed (the previous baseline's items are kept, `from_baseline`). A root (or its `apps`) that exists but could not be listed keeps its previous items (`from_baseline`, never `removed`); while the other root is read the source stays read and compared, and `managers.scoop.count` is `null`. An app folder that could not be listed and a `manifest.json` that could not be read or is not JSON are an item with status `unreadable`, counted in `managers.scoop.unreadable`, never `incomplete` | `managers.scoop`, the `scoop` items of `packages`, the detail list `scoop_apps` |
+| `vcpkg_packages` | the classic vcpkg root: a non-blank environment variable `VCPKG_ROOT`, else the first non-blank line of `%LOCALAPPDATA%\vcpkg\vcpkg.path.txt` (written by `vcpkg integrate install`); its status database `<root>\installed\vcpkg\status`, then each file of `<root>\installed\vcpkg\updates` whose name is all digits, in numeric order (any other entry there is not applied). Read directly by Python, no job. Each file is paragraphs separated by blank lines, each of `Field: value` lines (a line starting with a space continues the value); a later paragraph with the same `Package`, `Architecture` and `Feature` replaces an earlier one. The items are the paragraphs without `Feature` whose `Status` ends in ` installed`; the version is `Version`, with `#<Port-Version>` added when `Port-Version` is there and not `0`; an installed paragraph without a `Version` is an item with status `unreadable`, counted in `managers.vcpkg.unreadable`. vcpkg never runs; manifest-mode `vcpkg_installed` folders are not read. `empty` with no root (no variable, no path file or a blank one, or the root absent: vcpkg not present, `managers.vcpkg.state` `not_present`), no status file or no installed package; `read` with at least one item; `unreadable` when `vcpkg.path.txt` exists but could not be read, or the status file, an update file or the `updates` folder exists but could not be read (the previous baseline's items are kept, `from_baseline`, never `removed`; never a partial list) | `managers.vcpkg`, the `vcpkg` items of `packages`, the detail list `vcpkg_packages` |
 
 ## Summary fields
 
@@ -90,7 +97,7 @@ order:
 | `schema_version`, `skill`, `generated_at`, `elevated` | | shared contract |
 | `sources` | list | see "Sources" |
 | `baseline` | object | shared contract, "Baseline": `status` (`none`, `compared`, `unreadable`), `created_at`, `age_days`, `saved`, `reason`, `reference` (`latest` or the `--compare-to` value, e.g. `7d`) and `reference_file` (the history copy compared with, or `null`). `created_at` and `age_days` are those of the state compared with |
-| `comparison` | object | per source (`pip_packages`, `npm_packages`, `pipx_packages`, `uv_tools`, `conda_packages`, `winget_packages`, `vscode_extensions`, `dotnet_tools`, `nuget_packages`, `psgallery_modules`): `compared`, `no_baseline` or `not_read` (shared contract). A first run is `no_baseline` and gives no changes. A `not_present` manager's source is `empty`, so it is `compared` (or `no_baseline`), never `not_read`: a manager read before and not present now gives one `removed` change per old item |
+| `comparison` | object | per source (`pip_packages`, `npm_packages`, `pipx_packages`, `uv_tools`, `conda_packages`, `winget_packages`, `vscode_extensions`, `dotnet_tools`, `nuget_packages`, `psgallery_modules`, `choco_packages`, `scoop_apps`, `vcpkg_packages`): `compared`, `no_baseline` or `not_read` (shared contract). A first run is `no_baseline` and gives no changes. A `not_present` manager's source is `empty`, so it is `compared` (or `no_baseline`), never `not_read`: a manager read before and not present now gives one `removed` change per old item |
 | `managers` | object | one entry per manager of `data/managers.json`, in its order; see "Managers" |
 | `counts` | object | `packages` (all packages, before the cut), `changes` (all changes, before the cut), and `added`, `removed`, `changed` (the changes of each kind) |
 | `truncated` | int | the `packages` items cut from the summary |
@@ -114,7 +121,12 @@ reads them). Every entry has `state`:
 | `state` | Meaning |
 |---|---|
 | `read` | a read manager with `status` `read` or `empty` (`count` `0` when nothing is there) |
-| `not_present` | npm, pipx, uv, conda, winget, vscode, dotnet-tools, nuget or psgallery: none of the manager's disk locations exists (for npm: the global `node_modules` folder of the prefix read; for winget: `LocalState`, or `%LOCALAPPDATA%` is unset; for vscode: the extensions folder, or `%USERPROFILE%` is unset; for dotnet-tools: the tools folder `.dotnet\tools`; for nuget: the global packages folder; for both, or `%USERPROFILE%` is unset when no variable names the folder; for psgallery: none of the four module folders, each of them looked at, so never when the Documents folder could not be read). The entry is `{"state": "not_present", "looked_in": [<raw paths>]}`; its source has status `empty`. Not `unreadable` (a location exists but could not be read) and not `read` with `count` `0` (a location exists and is empty) |
+| `not_present` | npm, pipx, uv, conda, winget, vscode, dotnet-tools, nuget, psgallery, choco, scoop or vcpkg: none of the manager's disk locations exists (for npm: the global `node_modules` folder of the prefix read; for winget: `LocalState`, or `%LOCALAPPDATA%` is unset; for vscode: the extensions folder, or `%USERPROFILE%` is unset; for dotnet-tools: the tools folder `.dotnet\tools`; for nuget: the global packages folder; for both, or `%USERPROFILE%` is unset when no variable names the folder; for psgallery: none of the four module folders, each of them looked at, so never when the Documents folder could not be read; for choco: the root
+(`ChocolateyInstall`, else `%ProgramData%\chocolatey`), or `%ProgramData%` is unset; for scoop:
+neither the user root nor the global root, both looked at, `looked_in` the two raw roots; for vcpkg: no
+root is named (no `VCPKG_ROOT`, and no `vcpkg.path.txt` or a blank one), or the root named does not
+exist, `looked_in` the path file and the root it names; never when `vcpkg.path.txt` could not be
+read). The entry is `{"state": "not_present", "looked_in": [<raw paths>]}`; its source has status `empty`. Not `unreadable` (a location exists but could not be read) and not `read` with `count` `0` (a location exists and is empty) |
 | `unreadable` | a read manager with `status` `unreadable` |
 | `not_read` | a manager this skill does not read yet; the entry is `{"state": "not_read"}` and `not_checked` has the item `<name>`: "not read yet". It is never "not present" |
 
@@ -213,16 +225,47 @@ read or parsed; `other_modules` the module folders without a
 `null` for `unreadable`. Not present, it is `{"state": "not_present",
 "looked_in": [<raw folders>]}`.
 
+`managers.choco` (not `not_present`) is `{state, status, folder_from, count,
+unreadable, incomplete}`: `status` as the source `choco_packages`;
+`folder_from` `ChocolateyInstall` (the environment variable) or `default`
+(`%ProgramData%\chocolatey`); `count` the packages read (`0` when nothing is
+there), `null` for `unreadable`; `unreadable` the package folders whose folder
+or nuspec could not be read or parsed, or that hold `.chocolateyPending`, `null`
+for `unreadable`; `incomplete`
+the package folders without a nuspec (no item), `null` for `unreadable`. Not
+present, it is `{"state": "not_present", "looked_in": [<raw root>]}`.
+
+`managers.scoop` (not `not_present`) is `{state, status, roots, count,
+unreadable, incomplete}`: `status` as the source `scoop_apps`; `roots` one entry
+per root that exists, `{source, status, folder_from, count, reason}`: `source`
+the label (`user`, `global`), `status` `read` or `unreadable`, `folder_from` the
+variable (`SCOOP`, `SCOOP_GLOBAL`) or `default`, `count` the apps read in that
+root (`null` when it could not be listed), `reason` why it could not be listed;
+`count` the apps read (`0` when nothing is there), `null` while any root is
+unreadable; `unreadable` the apps whose folder or `manifest.json` could not be
+read or parsed, `null` for `unreadable`; `incomplete` the app folders without a
+current version (no item), `null` for `unreadable`. Not present, it is
+`{"state": "not_present", "looked_in": [<the two raw roots>]}`.
+
+`managers.vcpkg` (not `not_present`) is `{state, status, folder_from, count,
+unreadable, update_files}`: `status` as the source `vcpkg_packages`; `folder_from`
+`VCPKG_ROOT` (the environment variable) or `vcpkg.path.txt`; `count` the
+installed packages read (`0` when nothing is there), `null` for `unreadable`;
+`unreadable` the installed packages without a `Version`, `null` for `unreadable`;
+`update_files` the update files applied after the status file, `null` for
+`unreadable`. Not present, it is `{"state": "not_present", "looked_in":
+[<the variable's value or the path file, and the root it names>]}`.
+
 ## Packages (`k..`)
 
 `packages` is one flat list over the read managers: pip, npm, pipx, uv, conda,
-winget, vscode, dotnet-tools, nuget, psgallery, each by key. Ids `k<n>` are stable between runs (the id map), not places in
+winget, vscode, dotnet-tools, nuget, psgallery, choco, scoop, vcpkg, each by key. Ids `k<n>` are stable between runs (the id map), not places in
 the list. A summary item:
 
 | Field | Meaning |
 |---|---|
 | `id` | `k<n>` |
-| `manager` | `pip`, `npm`, `pipx`, `uv`, `conda`, `winget`, `vscode`, `dotnet-tools`, `nuget` or `psgallery` |
+| `manager` | `pip`, `npm`, `pipx`, `uv`, `conda`, `winget`, `vscode`, `dotnet-tools`, `nuget`, `psgallery`, `choco`, `scoop` or `vcpkg` |
 | `key` | see "Keys" |
 | `name`, `version` | as the metadata says (`Name`/`Version`, `name`/`version`); for a file that could not be read `version` is `null`, and `name` is `null` (pip) or the folder entry (npm) |
 | `python` | pip only: `<company>/<tag>` of the Python |
@@ -231,14 +274,17 @@ the list. A summary item:
 | `source` | winget only: the catalog label (its subfolder name of `LocalState`, case-folded) |
 | `versions_found` | dotnet-tools, nuget and psgallery only: the complete version folders of the id (psgallery: those whose `PSGetModuleInfo.xml` parsed); `version` is the highest of them; `null` for an unreadable item |
 | `module_folder`, `repository` | psgallery only: the label of the module folder (`user-powershell`...) and the repository of the version listed (`PSGallery`, or `null` when the file names none) |
-| `folder` | pip: `install` or `user`; npm: the package folder (`<prefix>\node_modules\<name>`, the prefix raw); pipx: `<home>\venvs\<venv>` (the home raw); uv: `<tool folder>\<tool>` (raw); conda: `<prefix>\conda-meta` (the prefix as `environments.txt` writes it, an expanded path); winget: `%LOCALAPPDATA%\Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\<catalog folder>` (raw); vscode: `<extensions folder>\<relativeLocation>` (the folder raw: `VSCODE_EXTENSIONS` as set, or `%USERPROFILE%\.vscode\extensions`), `null` when the entry has no `relativeLocation`; the `name` of a vscode item is its id; dotnet-tools: `<tools>\.store\<id>` (raw: `DOTNET_CLI_HOME` as set + `\.dotnet\tools`, or `%USERPROFILE%\.dotnet\tools`); nuget: `<packages folder>\<id>` (raw: `NUGET_PACKAGES` as set, or `%USERPROFILE%\.nuget\packages`); the `name` of a dotnet-tools or nuget item is its id folder name; psgallery: `<module folder>\<module>` (raw: the Documents folder as the registry or the default writes it, or `%ProgramFiles%`), its `name` the `Name` of the file (the folder name when unreadable) |
+| `root`, `bucket` | scoop only: the label of the root (`user`, `global`) and the bucket of `install.json` (`main`, or `null` when the file is missing, names none, could not be read or is not JSON) |
+| `triplet` | vcpkg only: the `Architecture` of the package (`x64-windows`) |
+| `folder` | pip: `install` or `user`; npm: the package folder (`<prefix>\node_modules\<name>`, the prefix raw); pipx: `<home>\venvs\<venv>` (the home raw); uv: `<tool folder>\<tool>` (raw); conda: `<prefix>\conda-meta` (the prefix as `environments.txt` writes it, an expanded path); winget: `%LOCALAPPDATA%\Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\<catalog folder>` (raw); vscode: `<extensions folder>\<relativeLocation>` (the folder raw: `VSCODE_EXTENSIONS` as set, or `%USERPROFILE%\.vscode\extensions`), `null` when the entry has no `relativeLocation`; the `name` of a vscode item is its id; dotnet-tools: `<tools>\.store\<id>` (raw: `DOTNET_CLI_HOME` as set + `\.dotnet\tools`, or `%USERPROFILE%\.dotnet\tools`); nuget: `<packages folder>\<id>` (raw: `NUGET_PACKAGES` as set, or `%USERPROFILE%\.nuget\packages`); the `name` of a dotnet-tools or nuget item is its id folder name; psgallery: `<module folder>\<module>` (raw: the Documents folder as the registry or the default writes it, or `%ProgramFiles%`), its `name` the `Name` of the file (the folder name when unreadable); choco: `<root>\lib\<folder>` (raw: `ChocolateyInstall` as set, or `%ProgramData%\chocolatey`), its `name` the nuspec `id` (the folder name when unreadable); scoop: `<root>\apps\<app>` (raw: `SCOOP` / `SCOOP_GLOBAL` as set, or `%USERPROFILE%\scoop` / `%ProgramData%\scoop`), its `name` the app folder name; vcpkg: `<root>\installed\<triplet>` (the root as `VCPKG_ROOT` or `vcpkg.path.txt` gives it), its `name` the `Package` |
 | `unreadable`, `reason` | only when the metadata file could not be read: `true` and why |
 | `entry` | pip, unreadable only: the `dist-info` / `egg-info` entry |
 | `from_baseline` | `true` when the folder could not be read in this run and the item is the previous baseline's |
 
 The items of `packages` in the detail file, and of the detail lists
 `pip_packages`, `npm_packages`, `pipx_packages`, `uv_tools`, `conda_packages`,
-`winget_packages`, `vscode_extensions`, `dotnet_tools`, `nuget_packages` and `psgallery_modules`, are the
+`winget_packages`, `vscode_extensions`, `dotnet_tools`, `nuget_packages`, `psgallery_modules`,
+`choco_packages`, `scoop_apps` and `vcpkg_packages`, are the
 full items: also `status`
 (`read` or `unreadable`), `reason`, and `unread_fields` (`["version"]` for an
 unreadable file); a conda item also has `build`; a winget item also has `id`
@@ -260,6 +306,9 @@ version it installed; the item's `version` is the highest of them).
 | `dotnet_tools` | `dotnet-tools:<id>`, case-folded: the tool's folder name in the store (`dotnet-tools:contoso.cli`); one key per id, whatever its versions |
 | `nuget_packages` | `nuget:<id>`, case-folded: the package's folder name (`nuget:contoso.json`); one key per id, whatever its versions |
 | `psgallery_modules` | `psgallery:<label>\|<module>`, case-folded: the module folder's label and the module's folder name (`psgallery:user-powershell\|contoso.az`); one key per module folder, whatever its versions |
+| `choco_packages` | `choco:<lib folder name>`, case-folded (`choco:contoso.cli`); the same key when the nuspec could not be read |
+| `scoop_apps` | `scoop:<label>\|<app>`, case-folded: the root's label and the app's folder name (`scoop:user\|git`); the same key when the manifest could not be read |
+| `vcpkg_packages` | `vcpkg:<Package>:<Architecture>`, case-folded (`vcpkg:zlib:x64-windows`) |
 
 ## Changes (`c..`)
 
@@ -274,11 +323,13 @@ version it installed; the item's `version` is the highest of them).
 | `environment` | `conda_packages` only: the environment label |
 | `catalog` | `winget_packages` only: the catalog label (the item's `source`); the change's `source` stays the source name `winget_packages` |
 | `module_folder`, `repository` | `psgallery_modules` only: the module folder's label (`user-powershell`...) and the repository of the item; the change's `source` stays the source name `psgallery_modules` |
+| `root`, `bucket` | `scoop_apps` only: the root's label (`user`, `global`) and the item's bucket; the change's `source` stays the source name `scoop_apps` |
+| `triplet` | `vcpkg_packages` only: the item's triplet |
 | `version` | `added` and `removed` only: the version added or removed |
 | `fields` | `changed` only: `{version: {before, after}}` |
 
 Changes come by source (pip, npm, pipx, uv, conda, winget, vscode, dotnet-tools,
-nuget, psgallery); within a source the order is
+nuget, psgallery, choco, scoop, vcpkg); within a source the order is
 added, removed, changed, then by key. Only a source whose `comparison` is
 `compared` gives changes. The compared field of every source is `version`;
 a field that either side names in `unread_fields` is not compared.
@@ -336,8 +387,23 @@ as without the flag.
 | `psgallery_modules <label> <module>` | that module's folder or a `PSGetModuleInfo.xml` of it could not be read, or no version of it parses (not XML, no `Name` or `Version`): its item is `unreadable` (no `changed` change), counted in `managers.psgallery.unreadable` |
 | `PowerShell modules not installed through PowerShellGet` | `managers.psgallery.other_modules` is above 0: module folders without a `PSGetModuleInfo.xml` (shipped with Windows or copied by hand) are counted, not listed |
 | `PowerShell module folders outside looked_in (PSModulePath)` | `managers.psgallery.state` is `read` or `not_present`: only the four standard module folders are searched |
+| `choco_packages` | the source is `unreadable`: the Chocolatey root or its `lib` folder exists but could not be listed; `managers.choco.count` is `null` and the previous items are kept |
+| `choco_packages <folder>` | that package folder could not be listed, or its nuspec could not be checked or read, is not XML, or lacks `id` or `version`: its item is `unreadable` (no `changed` change), counted in `managers.choco.unreadable` |
+| `choco_packages <folder>` (pending) | the package folder holds `.chocolateyPending`: "<folder>: .chocolateyPending present, the install is not finished"; its item is `unreadable` (never `removed`), counted in `managers.choco.unreadable` |
+| `Chocolatey package folders without a nuspec` | `managers.choco.incomplete` is above 0: "no <folder>.nuspec in the package's folder of lib" |
+| `Chocolatey lib-bad and lib-bkp folders` | `managers.choco.state` is `read` or `not_present`: "failed and backed-up installs are not read" |
+| `scoop_apps` | the source is `unreadable`: no Scoop root could be read and at least one could not be; the previous items are kept |
+| `scoop_apps <label>` | that root's `apps` folder exists but could not be listed: the reason says why; its previous items are kept (`from_baseline`, never `removed`) and `managers.scoop.count` is `null` |
+| `scoop_apps <label> <app>` | that app's folder could not be listed, or its `manifest.json` could not be read or is not JSON: its item is `unreadable` (no `changed` change), counted in `managers.scoop.unreadable` |
+| `scoop_apps <label> <app> install.json` | that app's `current\install.json` exists but could not be read or is not JSON: "<file> could not be read: <error>; bucket unknown" (or "<file>: not JSON: …"); the item stays `read` with `bucket` `null` |
+| `Scoop apps without a current version` | `managers.scoop.incomplete` is above 0: "no current\manifest.json with a version in the app's folder" |
+| `Scoop core (apps\scoop)` | a root holds `apps\scoop`: "Scoop's own folder is not an app" |
+| `vcpkg_packages` | the source is `unreadable`: `vcpkg.path.txt`, the status file, an update file or the `updates` folder exists but could not be read (the reason says which); `managers.vcpkg.count` is `null` and the previous items are kept |
+| `vcpkg update entries with a non-numeric name` | an entry of `installed\vcpkg\updates` whose name is not all digits: "not applied: vcpkg names its update files by digits only" |
+| `vcpkg_packages <package>:<triplet>` | an installed core paragraph without `Version`: "no Version in the status database"; its item is `unreadable`, counted in `managers.vcpkg.unreadable` |
+| `vcpkg manifest-mode vcpkg_installed folders in projects` | `managers.vcpkg.state` is `read` or `not_present`: "only the classic install's status database is read" |
 | `<manager name>` | every manager with `state` `not_read`: "not read yet". A `not_present` manager has no such item and no unreadable item |
-| `managers.json` | the data file could not be read: only the read managers (pip, npm, pipx, uv, conda, winget, vscode, dotnet-tools, nuget, psgallery) are listed under `managers`, the reason says why |
+| `managers.json` | the data file could not be read: only the read managers (pip, npm, pipx, uv, conda, winget, vscode, dotnet-tools, nuget, psgallery, choco, scoop, vcpkg) are listed under `managers`, the reason says why |
 | `baseline`, `reference baseline`, `baseline history`, `baseline save` | shared contract, "Baseline" |
 | `stable ids`, `stable ids save` | shared contract, "Ids" |
 | `summary budget` | the summary exceeds the budget after every package and change was cut |

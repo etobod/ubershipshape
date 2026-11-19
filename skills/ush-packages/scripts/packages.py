@@ -2,8 +2,8 @@
 
 Plan 061 moved the pip and npm reading of ush-inventory here, with the same
 PowerShell bodies, keys, item fields, ``from_baseline`` carrying and not_checked
-entries. No package manager runs: pip, npm, winget, VS Code, dotnet, nuget and the
-PowerShell module commands are never started.
+entries. No package manager runs: pip, npm, winget, VS Code, dotnet, nuget, choco,
+scoop, vcpkg and the PowerShell module commands are never started.
 Plan 073 added a Python read path beside the jobs: ``DISK`` reads files directly,
 at locations expanded from ``ENVIRON`` (an unset ``%VAR%`` counts as absent).
 
@@ -53,6 +53,19 @@ Sources (read-only PowerShell jobs, run through an injectable ``run_ps``; see
   user's shell folders, read-only, else ``%USERPROFILE%\\Documents``; through ``DISK``,
   no job): per module folder the highest parsed version. Key
   ``psgallery:<folder label>|<module folder name>``.
+- ``choco_packages``: the ``<folder>.nuspec`` (``id``, ``version``) of each package
+  folder of ``<root>\\lib`` (``ChocolateyInstall``, else ``%ProgramData%\\chocolatey``;
+  through ``DISK``, no job). Key ``choco:<lib folder name>``.
+- ``scoop_apps``: the ``current\\manifest.json`` (``version``) and
+  ``current\\install.json`` (``bucket``) of each app folder of ``<root>\\apps`` for the
+  ``user`` root (``SCOOP``, else ``%USERPROFILE%\\scoop``) and the ``global`` root
+  (``SCOOP_GLOBAL``, else ``%ProgramData%\\scoop``; through ``DISK``, no job). Key
+  ``scoop:<root label>|<app folder name>``.
+- ``vcpkg_packages``: the status database ``<root>\\installed\\vcpkg\\status`` with the
+  all-digit files of ``installed\\vcpkg\\updates`` applied after it in numeric order
+  (``<root>`` is ``VCPKG_ROOT``, else the first line of
+  ``%LOCALAPPDATA%\\vcpkg\\vcpkg.path.txt``; through ``DISK``, no job): the installed
+  paragraphs without ``Feature``. Key ``vcpkg:<Package>:<Architecture>``.
 
 Each is compared with the baseline ``ush-packages`` on ``version``; the changes
 are ``c`` items. The summary lists every manager of ``data/managers.json`` under
@@ -101,13 +114,15 @@ MANAGERS_FILE = Path(__file__).absolute().parents[1] / "data" / "managers.json"
 READ_MANAGERS = {"pip": "pip_packages", "npm": "npm_packages", "pipx": "pipx_packages",
                  "uv": "uv_tools", "conda": "conda_packages", "winget": "winget_packages",
                  "vscode": "vscode_extensions", "dotnet-tools": "dotnet_tools",
-                 "nuget": "nuget_packages", "psgallery": "psgallery_modules"}
+                 "nuget": "nuget_packages", "psgallery": "psgallery_modules",
+                 "choco": "choco_packages", "scoop": "scoop_apps",
+                 "vcpkg": "vcpkg_packages"}
 NOT_READ_YET = "not read yet"
 
 # The sources with items, compared with the baseline, in change order.
 SOURCES = ("pip_packages", "npm_packages", "pipx_packages", "uv_tools", "conda_packages",
            "winget_packages", "vscode_extensions", "dotnet_tools", "nuget_packages",
-           "psgallery_modules")
+           "psgallery_modules", "choco_packages", "scoop_apps", "vcpkg_packages")
 READ_STATUSES = ("read", "empty")
 COMPARED_FIELDS = {source: ("version",) for source in SOURCES}
 CHANGE_ORDER = ("added", "removed", "changed")
@@ -589,6 +604,11 @@ class Collector:
         self.nuget_summary = None
         # set by collect_psgallery: the summary part managers.psgallery (without state)
         self.psgallery_summary = None
+        # set by collect_choco / collect_scoop / collect_vcpkg: the summary parts
+        # managers.choco / managers.scoop / managers.vcpkg (without state)
+        self.choco_summary = None
+        self.scoop_summary = None
+        self.vcpkg_summary = None
         # the managers none of whose disk locations exists (state not_present)
         self.not_present = set()
 
@@ -1898,17 +1918,18 @@ def store_items(col: Collector, source: str, prefix: str, path: str, raw: str,
 
 
 def read_store_source(col: Collector, previous: dict, *, manager: str, source: str,
-                      variable: str, default: str, tail: str, store: str, complete,
+                      variable: str, default: str, tail: str, store: str, read_items,
                       outside: tuple, no_version: tuple) -> tuple[str, dict, dict]:
     """``(status, {key: item}, summary part)`` of a manager kept in a store folder.
 
     The folder is the non-blank ``variable`` + ``tail``, else ``default`` + ``tail``;
     absent (or its ``%VAR%`` unset): ``not_present``. The store is the folder +
-    ``store``; a store folder that is absent is read with nothing there. A folder that
-    exists but cannot be listed: ``unreadable``, the previous items kept
-    ``from_baseline``. The part is ``{status, folder_from, count, unreadable,
-    incomplete}``; ``outside`` is named when read or not present, ``no_version`` when
-    an id folder holds no complete version.
+    ``store``; a store folder that is absent is read with nothing there.
+    ``read_items(path, raw)`` gives ``({key: item}, incomplete)`` of the store, or raises
+    ``OSError`` when it cannot be listed. A folder that exists but cannot be listed:
+    ``unreadable``, the previous items kept ``from_baseline``. The part is ``{status,
+    folder_from, count, unreadable, incomplete}``; ``outside`` is named when read or not
+    present, ``no_version`` when ``incomplete`` is above 0.
     """
     home = environment_value(variable)
     folder_from = variable
@@ -1919,8 +1940,7 @@ def read_store_source(col: Collector, previous: dict, *, manager: str, source: s
     try:
         present = path is not None and DISK.exists(path)
         store_present = present and (not store or DISK.exists(path + store))
-        items, incomplete = (store_items(col, source, f"{manager}:", path + store,
-                                         raw + store, complete)
+        items, incomplete = (read_items(path + store, raw + store)
                              if store_present else ({}, 0))
     except OSError as exc:
         reason = f"{raw + store} could not be listed: {type(exc).__name__}: {exc}"
@@ -1959,7 +1979,10 @@ def collect_dotnet_tools(col: Collector, previous: dict) -> tuple[str, dict]:
     status, items, col.dotnet_tools_summary = read_store_source(
         col, previous, manager="dotnet-tools", source=DOTNET_SOURCE,
         variable=DOTNET_VARIABLE, default=DOTNET_DEFAULT_HOME, tail=DOTNET_TOOLS,
-        store=DOTNET_STORE, complete=is_folder, outside=DOTNET_OUTSIDE,
+        store=DOTNET_STORE,
+        read_items=lambda path, raw: store_items(col, DOTNET_SOURCE, "dotnet-tools:",
+                                                 path, raw, is_folder),
+        outside=DOTNET_OUTSIDE,
         no_version=DOTNET_INCOMPLETE)
     progress.step(f"{DOTNET_SOURCE} {'failed' if status == 'unreadable' else 'done'}")
     return status, items
@@ -1974,7 +1997,9 @@ def collect_nuget(col: Collector, previous: dict) -> tuple[str, dict]:
     status, items, col.nuget_summary = read_store_source(
         col, previous, manager="nuget", source=NUGET_SOURCE, variable=NUGET_VARIABLE,
         default=NUGET_DEFAULT_FOLDER, tail="", store="",
-        complete=lambda path: DISK.exists(f"{path}\\{NUGET_METADATA}"),
+        read_items=lambda path, raw: store_items(
+            col, NUGET_SOURCE, "nuget:", path, raw,
+            lambda version: DISK.exists(f"{version}\\{NUGET_METADATA}")),
         outside=NUGET_OUTSIDE, no_version=NUGET_INCOMPLETE)
     progress.step(f"{NUGET_SOURCE} {'failed' if status == 'unreadable' else 'done'}")
     return status, items
@@ -2174,7 +2199,8 @@ def read_psgallery(col: Collector, previous: dict) -> tuple[str, dict]:
         status, items, col.psgallery_summary = not_present(
             col, "psgallery", PSGALLERY_SOURCE, looked_in)
         return status, items
-    status = "read" if items else "empty"
+    # A folder that could not be listed is never "nothing there": partly read is read.
+    status = "read" if items or len(read) < len(rows) else "empty"
     col.record(PSGALLERY_SOURCE, status, None)
     if other_modules:
         col.skip(*PSGALLERY_OTHER)
@@ -2184,6 +2210,420 @@ def read_psgallery(col: Collector, previous: dict) -> tuple[str, dict]:
         "status": status, "folders": rows,
         "count": None if len(read) < len(rows) else sum(row["count"] for row in read),
         "unreadable": unreadable, "other_modules": other_modules}
+    return status, items
+
+
+# Chocolatey: the <id>.nuspec of each package folder of <root>\lib, read through DISK
+# (choco does not run).
+CHOCO_SOURCE = "choco_packages"
+CHOCO_VARIABLE = "ChocolateyInstall"
+CHOCO_DEFAULT_ROOT = "%ProgramData%\\chocolatey"
+CHOCO_LIB = "\\lib"
+CHOCO_OUTSIDE = ("Chocolatey lib-bad and lib-bkp folders",
+                 "failed and backed-up installs are not read")
+CHOCO_PENDING = ".chocolateyPending"  # left in a package folder while an install runs
+CHOCO_INCOMPLETE = ("Chocolatey package folders without a nuspec",
+                    "no <folder>.nuspec in the package's folder of lib")
+
+
+def nuspec_info(text_value: str) -> tuple[tuple | None, str | None]:
+    """``((id, version), None)`` of a ``.nuspec``: the text of ``metadata/id`` and
+    ``metadata/version`` under the root, any namespace on each element; ``(None,
+    reason)`` when the text is not XML or lacks ``id`` or ``version``."""
+    try:
+        root = ElementTree.fromstring(text_value)
+    except (ElementTree.ParseError, ValueError) as exc:
+        return None, f"not XML: {type(exc).__name__}: {exc}"
+
+    def local(element) -> str:
+        return element.tag.rsplit("}", 1)[-1] if isinstance(element.tag, str) else ""
+
+    metadata = next((child for child in root if local(child) == "metadata"), None)
+    found = {}
+    for child in metadata if metadata is not None else ():
+        if local(child) in ("id", "version") and local(child) not in found:
+            found[local(child)] = text((child.text or "").strip())
+    missing = [name for name in ("id", "version") if found.get(name) is None]
+    if missing:
+        return None, f"no {' or '.join(missing)} in metadata"
+    return (found["id"], found["version"]), None
+
+
+def choco_items(col: Collector, path: str, raw: str) -> tuple[dict, int]:
+    """``({key: item}, incomplete)`` of the Chocolatey ``lib`` folder ``path`` (``raw``
+    unexpanded): each folder (names starting with ``.`` skipped, a file is no package)
+    holding ``<folder>\\<folder>.nuspec``; a folder without it is no item and counts in
+    ``incomplete``; a folder holding ``.chocolateyPending`` (an unfinished install or
+    upgrade) gives an ``unreadable`` item named in not_checked, so it is never reported
+    as removed. A folder or nuspec that cannot be read, or a nuspec that does not
+    parse, gives an ``unreadable`` item named in not_checked. Key
+    ``choco:<folder case-folded>``. ``OSError`` when ``path`` cannot be listed."""
+    items, incomplete = {}, 0
+    names = sorted(DISK.list_dir(path), key=str.casefold)
+    for number, name in enumerate(names, 1):
+        progress.count(CHOCO_SOURCE, number, len(names))
+        if name.startswith("."):
+            continue
+        folder = f"{raw}\\{name}"
+        nuspec = f"{folder}\\{name}.nuspec"
+        item = {"name": name, "version": None, "status": "read", "reason": None,
+                "folder": folder}
+        reason = None
+        try:
+            if not is_folder(f"{path}\\{name}"):
+                continue  # a file beside the package folders
+        except OSError as exc:
+            reason = f"{folder} could not be read: {type(exc).__name__}: {exc}"
+        else:
+            try:
+                pending = DISK.exists(f"{path}\\{name}\\{CHOCO_PENDING}")
+            except OSError as exc:
+                reason = f"{folder} could not be read: {type(exc).__name__}: {exc}"
+            else:
+                if pending:
+                    reason = f"{folder}: {CHOCO_PENDING} present, the install is not finished"
+        if reason is None:
+            try:
+                if not DISK.exists(f"{path}\\{name}\\{name}.nuspec"):
+                    incomplete += 1
+                    continue
+                content = DISK.read_text(f"{path}\\{name}\\{name}.nuspec")
+            except (OSError, UnicodeDecodeError) as exc:
+                reason = f"{nuspec} could not be read: {type(exc).__name__}: {exc}"
+            else:
+                fields, bad = nuspec_info(content)
+                if fields is None:
+                    reason = f"{nuspec}: {bad}"
+                else:
+                    item["name"], item["version"] = fields
+        if reason is not None:
+            unreadable_item(item, reason)
+            col.skip(f"{CHOCO_SOURCE} {name}", reason)
+        key, suffix = f"choco:{name.casefold()}", 2
+        while key in items:  # names differing only in case (a case-sensitive folder)
+            key, suffix = f"choco:{name.casefold()}~{suffix}", suffix + 1
+        items[key] = item
+    return items, incomplete
+
+
+def collect_choco(col: Collector, previous: dict) -> tuple[str, dict]:
+    """The Chocolatey packages of ``<root>\\lib`` (``ChocolateyInstall``, non-blank, else
+    ``%ProgramData%\\chocolatey``); the part goes to ``col.choco_summary``."""
+    progress.step(f"{CHOCO_SOURCE} ...")
+    status, items, col.choco_summary = read_store_source(
+        col, previous, manager="choco", source=CHOCO_SOURCE, variable=CHOCO_VARIABLE,
+        default=CHOCO_DEFAULT_ROOT, tail="", store=CHOCO_LIB,
+        read_items=lambda path, raw: choco_items(col, path, raw),
+        outside=CHOCO_OUTSIDE, no_version=CHOCO_INCOMPLETE)
+    progress.step(f"{CHOCO_SOURCE} {'failed' if status == 'unreadable' else 'done'}")
+    return status, items
+
+
+# Scoop: the apps of the user root and the global root, each app's version from
+# apps\<app>\current\manifest.json and its bucket from install.json, read through DISK
+# (scoop does not run; the current junction is read through, never resolved).
+SCOOP_SOURCE = "scoop_apps"
+SCOOP_ROOTS = (("user", "SCOOP", "%USERPROFILE%\\scoop"),
+               ("global", "SCOOP_GLOBAL", "%ProgramData%\\scoop"))
+SCOOP_APPS = "\\apps"
+SCOOP_CORE = "scoop"  # apps\scoop: Scoop's own checkout, no manifest.json
+SCOOP_CORE_NOTE = ("Scoop core (apps\\scoop)", "Scoop's own folder is not an app")
+SCOOP_INCOMPLETE = ("Scoop apps without a current version",
+                    "no current\\manifest.json with a version in the app's folder")
+
+
+def scoop_bucket(path: str, raw: str) -> tuple[str | None, str | None]:
+    """``(bucket, reason)`` of ``<path>\\install.json`` (``raw`` its unexpanded path for
+    the reason). A missing file or one without a bucket (older installs have none) is
+    ``(None, None)``; a file that could not be read or is not JSON is ``(None, reason)``."""
+    try:
+        data = json.loads(DISK.read_text(f"{path}\\install.json"))
+    except FileNotFoundError:
+        return None, None
+    except (OSError, UnicodeDecodeError) as exc:
+        return None, f"{raw} could not be read: {type(exc).__name__}: {exc}"
+    except ValueError as exc:
+        return None, f"{raw}: not JSON: {type(exc).__name__}: {exc}"
+    return (text(data.get("bucket")) if isinstance(data, dict) else None), None
+
+
+def scoop_app(col: Collector, label: str, raw: str, path: str, app: str) -> dict | None:
+    """The item of the app folder ``<path>\\<app>`` (``raw`` unexpanded), or None when it
+    has no ``current\\manifest.json`` with a non-blank text ``version`` (incomplete).
+    A folder or manifest that cannot be read, or a manifest that is not JSON, gives an
+    ``unreadable`` item. An ``install.json`` that could not be read or is not JSON leaves
+    ``bucket`` null on a ``read`` item and is named in not_checked.
+    ``NotADirectoryError`` when the entry is a file."""
+    folder = f"{raw}\\{app}"
+    manifest = f"{folder}\\current\\manifest.json"
+    current = f"{path}\\{app}\\current"
+    item = {"name": app, "version": None, "bucket": None, "root": label,
+            "status": "read", "reason": None, "folder": folder}
+    try:
+        if not is_folder(f"{path}\\{app}"):
+            raise NotADirectoryError(f"{path}\\{app}")
+        if not DISK.exists(current) or not DISK.exists(f"{current}\\manifest.json"):
+            return None
+    except NotADirectoryError:
+        raise
+    except OSError as exc:
+        return unreadable_item(item, f"{folder} could not be read: "
+                                     f"{type(exc).__name__}: {exc}")
+    try:
+        data = json.loads(DISK.read_text(f"{current}\\manifest.json"))
+    except (OSError, UnicodeDecodeError) as exc:
+        return unreadable_item(item, f"{manifest} could not be read: "
+                                     f"{type(exc).__name__}: {exc}")
+    except ValueError as exc:
+        return unreadable_item(item, f"{manifest}: not JSON: {type(exc).__name__}: {exc}")
+    version = data.get("version") if isinstance(data, dict) else None
+    if not isinstance(version, str) or not version.strip():
+        return None
+    bucket, bad = scoop_bucket(current, f"{folder}\\current\\install.json")
+    if bad is not None:
+        col.skip(f"{SCOOP_SOURCE} {label} {app} install.json", f"{bad}; bucket unknown")
+    item.update(version=version.strip(), bucket=bucket)
+    return item
+
+
+def collect_scoop(col: Collector, previous: dict) -> tuple[str, dict]:
+    """Read the Scoop apps, with a start and an end progress line."""
+    progress.step(f"{SCOOP_SOURCE} ...")
+    status, items = read_scoop(col, previous)
+    progress.step(f"{SCOOP_SOURCE} {'failed' if status == 'unreadable' else 'done'}")
+    return status, items
+
+
+def read_scoop(col: Collector, previous: dict) -> tuple[str, dict]:
+    """``(status, {key: item})`` of the source ``scoop_apps``; the summary part
+    ``{status, roots, count, unreadable, incomplete}`` is kept in ``col.scoop_summary``.
+
+    Each root (``user``: ``SCOOP``, else ``%USERPROFILE%\\scoop``; ``global``:
+    ``SCOOP_GLOBAL``, else ``%ProgramData%\\scoop``) that exists is a row of ``roots``;
+    each folder of its ``apps`` (``.`` names, files and Scoop's own ``scoop`` folder
+    skipped) is an item keyed ``scoop:<label>|<app folder case-folded>``, one without a
+    current version counts in ``incomplete``. A root that cannot be listed keeps its
+    previous items ``from_baseline`` and is named in not_checked. ``not_present`` only
+    when neither root exists; ``unreadable`` only when no root was read and one could
+    not be; the count is null while any root is unreadable.
+    """
+    items, rows, looked_in, incomplete, core = {}, [], [], 0, False
+    for label, variable, default in SCOOP_ROOTS:
+        root = environment_value(variable)
+        folder_from = variable
+        if root is None:
+            root, folder_from = default, "default"
+        root = root.rstrip("\\/") or root
+        looked_in.append(root)
+        path = expand_path(root)
+        row = {"source": label, "status": "read", "folder_from": folder_from,
+               "count": None, "reason": None}
+        names = None
+        try:
+            if path is None or not DISK.exists(path):
+                continue  # absent (or its %VAR% unset)
+            apps = path + SCOOP_APPS
+            names = (sorted(DISK.list_dir(apps), key=str.casefold)
+                     if DISK.exists(apps) else [])
+        except OSError as exc:
+            row.update(status="unreadable", reason=(
+                f"{root}{SCOOP_APPS} could not be listed: {type(exc).__name__}: {exc}"))
+        rows.append(row)
+        if names is None:
+            col.skip(f"{SCOOP_SOURCE} {label}", row["reason"])
+            carry(col, SCOOP_SOURCE, previous, items,
+                  lambda key, label=label: key.startswith(f"scoop:{label}|"))
+            continue
+        row["count"] = 0
+        for number, app in enumerate(names, 1):
+            progress.count(f"{SCOOP_SOURCE} {label}", number, len(names))
+            if app.startswith("."):
+                continue
+            if app.casefold() == SCOOP_CORE:
+                core = True
+                continue
+            try:
+                item = scoop_app(col, label, root + SCOOP_APPS, apps, app)
+            except NotADirectoryError:
+                continue  # a file beside the app folders
+            if item is None:
+                incomplete += 1
+                continue
+            if item["status"] == "unreadable":
+                col.skip(f"{SCOOP_SOURCE} {label} {app}", item["reason"])
+            else:
+                row["count"] += 1
+            key, suffix = f"scoop:{label}|{app.casefold()}", 2
+            while key in items:  # names differing only in case (a case-sensitive folder)
+                key, suffix = f"scoop:{label}|{app.casefold()}~{suffix}", suffix + 1
+            items[key] = item
+    if core:
+        col.skip(*SCOOP_CORE_NOTE)
+    read = [row for row in rows if row["status"] == "read"]
+    if rows and not read:
+        col.record(SCOOP_SOURCE, "unreadable", "no Scoop root could be read")
+        col.scoop_summary = {"status": "unreadable", "roots": rows, "count": None,
+                             "unreadable": None, "incomplete": None}
+        return "unreadable", items
+    if not rows:
+        status, items, col.scoop_summary = not_present(col, "scoop", SCOOP_SOURCE,
+                                                       looked_in)
+        return status, items
+    # A root that could not be listed is never "nothing there": partly read is read.
+    status = "read" if items or len(read) < len(rows) else "empty"
+    col.record(SCOOP_SOURCE, status, None)
+    if incomplete:
+        col.skip(*SCOOP_INCOMPLETE)
+    unreadable = sum(1 for item in items.values()
+                     if item.get("status") == "unreadable" and not item.get("from_baseline"))
+    col.scoop_summary = {
+        "status": status, "roots": rows,
+        "count": None if len(read) < len(rows) else sum(row["count"] for row in read),
+        "unreadable": unreadable, "incomplete": incomplete}
+    return status, items
+
+
+# vcpkg (classic mode): the status database <root>\installed\vcpkg\status with the
+# update files of installed\vcpkg\updates applied after it, read through DISK (vcpkg
+# does not run).
+VCPKG_SOURCE = "vcpkg_packages"
+VCPKG_VARIABLE = "VCPKG_ROOT"
+VCPKG_PATH_FILE = "%LOCALAPPDATA%\\vcpkg\\vcpkg.path.txt"  # vcpkg integrate install
+VCPKG_PATH_FROM = "vcpkg.path.txt"
+VCPKG_STATUS = "\\installed\\vcpkg\\status"
+VCPKG_UPDATES = "\\installed\\vcpkg\\updates"
+VCPKG_OUTSIDE = ("vcpkg manifest-mode vcpkg_installed folders in projects",
+                 "only the classic install's status database is read")
+VCPKG_NON_NUMERIC = ("vcpkg update entries with a non-numeric name",
+                     "not applied: vcpkg names its update files by digits only")
+
+
+def vcpkg_paragraphs(content: str) -> list:
+    """The paragraphs of a vcpkg status file, each ``{field: value}``: paragraphs are
+    separated by blank lines, a line starting with a space or tab continues the previous
+    value, a line without ``:`` is skipped."""
+    paragraphs, current, last = [], {}, None
+    for line in content.splitlines():
+        if not line.strip():
+            if current:
+                paragraphs.append(current)
+            current, last = {}, None
+        elif line[0] in " \t":
+            if last is not None:
+                current[last] += "\n" + line.strip()
+        else:
+            field, sep, value = line.partition(":")
+            if sep:
+                last = field.strip()
+                current[last] = value.strip()
+    if current:
+        paragraphs.append(current)
+    return paragraphs
+
+
+def vcpkg_root() -> tuple[str | None, str, list, str | None]:
+    """``(root, folder_from, looked_in, reason)``: ``VCPKG_ROOT`` (non-blank), else the
+    first non-blank line of ``vcpkg.path.txt``; root None when neither names one
+    (``looked_in`` the raw places looked at); ``reason`` when the path file exists but
+    cannot be read."""
+    root = environment_value(VCPKG_VARIABLE)
+    if root is not None:
+        return root.rstrip("\\/") or root, VCPKG_VARIABLE, [], None
+    looked_in = [VCPKG_PATH_FILE]
+    path_file = expand_path(VCPKG_PATH_FILE)
+    try:
+        content = (DISK.read_text(path_file)
+                   if path_file is not None and DISK.exists(path_file) else "")
+    except (OSError, UnicodeDecodeError) as exc:
+        return None, VCPKG_PATH_FROM, looked_in, (
+            f"{VCPKG_PATH_FILE} could not be read: {type(exc).__name__}: {exc}")
+    root = next((line.strip() for line in content.splitlines() if line.strip()), None)
+    if root is None:
+        return None, VCPKG_PATH_FROM, looked_in, None
+    return root.rstrip("\\/") or root, VCPKG_PATH_FROM, looked_in, None
+
+
+def vcpkg_database(col: Collector, root: str) -> tuple[list, int]:
+    """``(paragraphs, update files applied)``: the status file, then the all-digit files
+    of the updates folder in numeric order (other entries named in not_checked). A
+    missing status file or updates folder adds nothing. ``OSError`` or
+    ``UnicodeDecodeError`` when a file or the updates folder cannot be read."""
+    paragraphs = []
+    if DISK.exists(root + VCPKG_STATUS):
+        paragraphs += vcpkg_paragraphs(DISK.read_text(root + VCPKG_STATUS))
+    updates = root + VCPKG_UPDATES
+    names = DISK.list_dir(updates) if DISK.exists(updates) else []
+    numbered = sorted((name for name in names if name.isascii() and name.isdigit()),
+                      key=lambda name: (int(name), name))
+    if len(numbered) < len(names):
+        col.skip(*VCPKG_NON_NUMERIC)
+    for number, name in enumerate(numbered, 1):
+        progress.count(VCPKG_SOURCE, number, len(numbered))
+        paragraphs += vcpkg_paragraphs(DISK.read_text(f"{updates}\\{name}"))
+    return paragraphs, len(numbered)
+
+
+def collect_vcpkg(col: Collector, previous: dict) -> tuple[str, dict]:
+    """Read the vcpkg packages, with a start and an end progress line."""
+    progress.step(f"{VCPKG_SOURCE} ...")
+    status, items = read_vcpkg(col, previous)
+    progress.step(f"{VCPKG_SOURCE} {'failed' if status == 'unreadable' else 'done'}")
+    return status, items
+
+
+def read_vcpkg(col: Collector, previous: dict) -> tuple[str, dict]:
+    """``(status, {key: item})`` of the source ``vcpkg_packages``; the summary part
+    ``{status, folder_from, count, update_files}`` is kept in ``col.vcpkg_summary``.
+
+    A later paragraph with the same ``(Package, Architecture, Feature)`` replaces an
+    earlier one; the items are the paragraphs without ``Feature`` whose ``Status`` ends
+    in `` installed``. Key ``vcpkg:<Package>:<Architecture>`` case-folded. No root found
+    (or the root absent): ``not_present``; a root without a status file: read, nothing
+    there; a file or folder of the database that cannot be read: ``unreadable``, the
+    previous items kept ``from_baseline``.
+    """
+    root, folder_from, looked_in, reason = vcpkg_root()
+    try:
+        present = root is not None and DISK.exists(root)
+        paragraphs, update_files = vcpkg_database(col, root) if present else ([], 0)
+    except (OSError, UnicodeDecodeError) as exc:
+        reason = f"{root}: the status database could not be read: {type(exc).__name__}: {exc}"
+    if reason is not None:
+        items = carry_source(col, VCPKG_SOURCE, previous, reason)
+        col.vcpkg_summary = {"status": "unreadable", "folder_from": folder_from,
+                             "count": None, "unreadable": None, "update_files": None}
+        return "unreadable", items
+    col.skip(*VCPKG_OUTSIDE)
+    if not present:
+        status, items, col.vcpkg_summary = not_present(
+            col, "vcpkg", VCPKG_SOURCE, looked_in + ([root] if root is not None else []))
+        return status, items
+    latest = {}
+    for fields in paragraphs:
+        latest[(fields.get("Package"), fields.get("Architecture"),
+                fields.get("Feature"))] = fields
+    items = {}
+    for (package, triplet, feature), fields in latest.items():
+        if (not package or not triplet or feature is not None
+                or not fields.get("Status", "").endswith(" installed")):
+            continue
+        version = fields.get("Version")
+        port_version = fields.get("Port-Version")
+        if version is not None and port_version not in (None, "", "0"):
+            version = f"{version}#{port_version}"
+        item = {"name": package, "version": version, "triplet": triplet,
+                "status": "read", "reason": None,
+                "folder": f"{root}\\installed\\{triplet}"}
+        if not (version or "").strip():
+            bad = f"{package}:{triplet}: no Version in the status database"
+            unreadable_item(item, bad)
+            col.skip(f"{VCPKG_SOURCE} {package}:{triplet}", bad)
+        items[f"vcpkg:{package}:{triplet}".casefold()] = item
+    status = "read" if items else "empty"
+    col.record(VCPKG_SOURCE, status, None)
+    count = sum(1 for item in items.values() if item["status"] == "read")
+    col.vcpkg_summary = {"status": status, "folder_from": folder_from, "count": count,
+                         "unreadable": len(items) - count, "update_files": update_files}
     return status, items
 
 
@@ -2226,7 +2666,9 @@ def build_managers(col: Collector) -> dict:
                   "pipx": col.pipx_summary, "uv": col.uv_summary,
                   "conda": col.conda_summary, "winget": col.winget_summary,
                   "vscode": col.vscode_summary, "dotnet-tools": col.dotnet_tools_summary,
-                  "nuget": col.nuget_summary, "psgallery": col.psgallery_summary}
+                  "nuget": col.nuget_summary, "psgallery": col.psgallery_summary,
+                  "choco": col.choco_summary, "scoop": col.scoop_summary,
+                  "vcpkg": col.vcpkg_summary}
     entries, reason = load_managers(MANAGERS_FILE)
     if entries is None:
         col.skip(MANAGERS_FILE.name, f"the managers not read by this skill are not "
@@ -2271,6 +2713,12 @@ def collect(run_ps, work: Path, stamp: str, previous: dict):
         col, previous.get("nuget_packages") or {})
     statuses["psgallery_modules"], current["psgallery_modules"] = collect_psgallery(
         col, previous.get("psgallery_modules") or {})
+    statuses["choco_packages"], current["choco_packages"] = collect_choco(
+        col, previous.get("choco_packages") or {})
+    statuses["scoop_apps"], current["scoop_apps"] = collect_scoop(
+        col, previous.get("scoop_apps") or {})
+    statuses["vcpkg_packages"], current["vcpkg_packages"] = collect_vcpkg(
+        col, previous.get("vcpkg_packages") or {})
     return statuses, current, col
 
 
@@ -2331,6 +2779,12 @@ def build_changes(previous: dict, current: dict, comparison: dict, numbering) ->
                 # ``source`` stays the source name; the folder label is ``module_folder``.
                 entry["module_folder"] = item.get("module_folder")
                 entry["repository"] = item.get("repository")
+            elif source == "scoop_apps":
+                # ``source`` stays the source name; the root label is ``root``.
+                entry["root"] = item.get("root")
+                entry["bucket"] = item.get("bucket")
+            elif source == "vcpkg_packages":
+                entry["triplet"] = item.get("triplet")
             if fields is not None:
                 entry["fields"] = fields
             else:
@@ -2343,7 +2797,7 @@ def build_changes(previous: dict, current: dict, comparison: dict, numbering) ->
 # --- packages ------------------------------------------------------------------
 def build_packages(current: dict, numbering) -> list:
     """Every package of the read managers (pip, npm, pipx, uv, conda, winget, vscode,
-    dotnet-tools, nuget, psgallery), each
+    dotnet-tools, nuget, psgallery, choco, scoop, vcpkg), each
     by key; ids ``k<n>`` from ``numbering``. The full item of the source, with ``manager`` and ``key``."""
     packages = []
     for manager, source in READ_MANAGERS.items():
@@ -2357,7 +2811,8 @@ def summary_package(item: dict) -> dict:
     """The summary form of a package: ``id``, ``manager``, ``key``, ``name``,
     ``version``, the Python (pip), the venv and ``injected`` (pipx), the environment
     (conda), the catalog label ``source`` (winget), ``versions_found`` (dotnet-tools,
-    nuget, psgallery), ``module_folder`` and ``repository`` (psgallery) and ``folder``; ``unreadable`` and ``reason`` when
+    nuget, psgallery), ``module_folder`` and ``repository`` (psgallery), ``root`` and
+    ``bucket`` (scoop), ``triplet`` (vcpkg) and ``folder``; ``unreadable`` and ``reason`` when
     its metadata could not be read, ``from_baseline`` when it was kept from the
     baseline because its folder could not be listed."""
     out = {"id": item["id"], "manager": item["manager"], "key": item["key"],
@@ -2377,6 +2832,11 @@ def summary_package(item: dict) -> dict:
         out["versions_found"] = item.get("versions_found")
         out["module_folder"] = item.get("module_folder")
         out["repository"] = item.get("repository")
+    elif item["manager"] == "scoop":
+        out["root"] = item.get("root")
+        out["bucket"] = item.get("bucket")
+    elif item["manager"] == "vcpkg":
+        out["triplet"] = item.get("triplet")
     out["folder"] = item.get("folder")
     if item.get("status") == "unreadable":
         out["unreadable"] = True

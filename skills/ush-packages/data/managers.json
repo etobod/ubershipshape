@@ -10,13 +10,13 @@
   {"name": "pipx", "step": 2, "read": true},
   {"name": "uv", "step": 2, "read": true},
   {"name": "conda", "step": 2, "read": true},
-  {"name": "choco", "step": 3, "read": false},
-  {"name": "scoop", "step": 3, "read": false},
+  {"name": "choco", "step": 3, "read": true},
+  {"name": "scoop", "step": 3, "read": true},
   {"name": "pnpm", "step": 3, "read": false},
   {"name": "yarn", "step": 3, "read": false},
   {"name": "bun", "step": 3, "read": false},
   {"name": "cargo", "step": 3, "read": false},
   {"name": "gem", "step": 3, "read": false},
   {"name": "composer", "step": 3, "read": false},
-  {"name": "vcpkg", "step": 3, "read": false}
+  {"name": "vcpkg", "step": 3, "read": true}
 ]

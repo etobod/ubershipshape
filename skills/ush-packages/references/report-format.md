@@ -110,6 +110,9 @@ gives the count of low recommendations whose main source no line names.
    | dotnet-tools | read | 2 (folder %USERPROFILE%\.dotnet\tools) |
    | nuget | read | 130 (folder %USERPROFILE%\.nuget\packages, 1 without a complete version) |
    | psgallery | read | 4 (user-powershell 3, allusers-windowspowershell 1; 52 other modules) |
+   | choco | read | 6 (root %ProgramData%\chocolatey) |
+   | scoop | read | 9 (user 7, global 2) |
+   | vcpkg | not present | — |
 
    - pip: the cell names each Python of `managers.pip.pythons` with its
      `count`, or „not read” when a `count` is `null`; never add them up.
@@ -163,6 +166,31 @@ gives the count of low recommendations whose main source no line names.
      counted as packages). `null` is „not read”, never 0; the count is for
      the whole manager. Name the folders by their label or as
      `%ProgramFiles%` / „Documents”, never by an expanded path.
+   - choco: `managers.choco.count` (the Chocolatey packages), with the root:
+     `%ProgramData%\chocolatey` for `folder_from` `default`, „root from
+     ChocolateyInstall” for `ChocolateyInstall`; with `incomplete` above 0,
+     that many package folders „without a nuspec” (not counted as packages);
+     with `unreadable` above 0, that many package folders could not be read
+     or hold an unfinished install (`.chocolateyPending`; each named in „Not
+     checked”), never counted in `incomplete`. `null` is „not
+     read”, never 0; a root without a package is 0.
+   - vcpkg: `managers.vcpkg.count` (the packages of the classic vcpkg
+     install), with „root from VCPKG_ROOT” or „root from vcpkg.path.txt”
+     (`folder_from`), never the expanded root; with `update_files` above 0,
+     that many update files applied; with `unreadable` above 0, that many
+     installed packages without a version (named in „Not checked”), not
+     counted in `count`. `null` is „not read”, never 0; a root
+     without a status database is 0.
+   - scoop: `managers.scoop.count` (the Scoop apps), with the roots of
+     `managers.scoop.roots` named by their `source` label (`user`,
+     `global`) and `count`; a root whose `status` is `unreadable` is named
+     as „could not be read”; a root from `SCOOP` or `SCOOP_GLOBAL`
+     (`folder_from`) is „root from SCOOP” / „root from SCOOP_GLOBAL”, never
+     the expanded path. With `incomplete` above 0, that many app folders
+     „without a current version” (not counted as apps); with `unreadable`
+     above 0, that many apps could not be read (each named in „Not
+     checked”), never counted in `incomplete`. `null` is „not read”, never
+     0; the count is for the whole manager; a root without an app is 0.
    - A manager with `state` `not_present` (none of its disk locations
      exists) is „not present” in the State cell and „—” in the Packages
      cell, never 0, „none”, „not read yet” or „could not be read”; the places
@@ -182,7 +210,8 @@ gives the count of low recommendations whose main source no line names.
    its id, `name`, the Python for pip (`python`), the venv for pipx
    (`venv`), the environment label for conda (`environment`), the catalog
    label for winget (`catalog`), the module folder label for psgallery
-   (`module_folder`), and what changed: `added`
+   (`module_folder`), the root label and bucket for scoop (`root`, `bucket`),
+   the triplet for vcpkg (`triplet`), and what changed: `added`
    with `version`, `removed` with `version`, `changed` with `fields.version`
    `before` and `after`. With `truncated_changes` above 0, one line: how
    many changes were cut and that the detail file has them. A source with
@@ -190,7 +219,8 @@ gives the count of low recommendations whose main source no line names.
    say so for that source, never „no changes”.
 
 4. Packages, one `###` heading per manager with packages (pip,
-   npm, pipx, uv, conda, winget, vscode, dotnet-tools, nuget, psgallery); the section heading never says
+   npm, pipx, uv, conda, winget, vscode, dotnet-tools, nuget, psgallery, choco,
+   scoop, vcpkg); the section heading never says
    „installed”, because the winget items are only recorded by winget;
    each package of `packages` one bullet with its id,
    `name`, `version`, and the place: for pip the Python (`python`) and the
@@ -200,7 +230,11 @@ gives the count of low recommendations whose main source no line names.
    „recorded by winget” and the catalog label (`source`), for vscode
    „VS Code extension”, for dotnet-tools „.NET global tool”, for nuget
    „NuGet global packages folder”, for psgallery „PowerShell module”, the
-   module folder label (`module_folder`) and the repository (`repository`);
+   module folder label (`module_folder`) and the repository (`repository`),
+   for choco „Chocolatey package”, for scoop „Scoop app”, the root label
+   (`root`) and the bucket (`bucket`, left out when `null`), for vcpkg
+   „vcpkg package” and the triplet
+   (`triplet`);
    with `versions_found` above 1 (dotnet-tools, nuget, psgallery), that many
    versions were found and `version` is the highest.
    Every package carries the words „not
@@ -345,6 +379,21 @@ Never report missing data as „none” or „nothing there”:
 - psgallery `state` `not_present`: none of the four standard module folders
   exists; say, from „Not checked”, that other folders of `PSModulePath` were
   not searched.
+- choco or vcpkg `state` `unreadable` (`count` `null`): the Chocolatey root
+  or its `lib` folder could not be listed, or `vcpkg.path.txt` or a file of
+  the vcpkg status database could not be read; the packages are kept from
+  the baseline. Give the reason from „Not checked”, never „not present” or 0.
+- choco or vcpkg `state` `not_present`: say, from „Not checked”, what was not
+  read (Chocolatey `lib-bad` and `lib-bkp`; vcpkg manifest-mode
+  `vcpkg_installed` folders in projects).
+- scoop `state` `unreadable` (`count` `null`): neither Scoop root could be
+  listed; the apps are kept from the baseline. Give the reason from „Not
+  checked”, never „not present” or 0.
+- A scoop `count` of `null` with `state` `read`: one root could not be
+  listed; its apps are kept from the baseline (`from_baseline`), the other
+  root is read and compared.
+- scoop `state` `not_present`: neither the user nor the global Scoop root
+  exists.
 - A conda environment with `status` `absent`: the line of
   `environments.txt` names a folder that does not exist; it has no packages
   and is not unreadable.

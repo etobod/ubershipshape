@@ -179,7 +179,7 @@ class TestNpm(PackagesTestCase):
                 summary = self.collect(fake)
                 notes = self.not_checked(summary)
 
-                for name in ("go", "choco", "scoop", "cargo"):  # winget is read from plan 073
+                for name in ("go", "pnpm", "yarn", "cargo"):  # winget from plan 073, choco and scoop from plan 080
                     own = [item for item in notes if item.get("what") == name]
                     self.assertEqual(len(own), 1, (name, notes))
                     self.assertIn(NOT_READ_YET, note_text(own[0]), own)

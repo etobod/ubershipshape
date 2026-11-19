@@ -13,7 +13,8 @@ Interface these tests assume (fixed before the code exists):
   their locations exists in these fixtures; so is winget (plan 073, M1: read from disk,
   and the empty ``ENVIRON`` of the tests names no location), and so is vscode (plan 073,
   M2), and so are dotnet-tools and nuget (plan 079, M1) and psgallery (plan 079, M2,
-  with ``DISK.documents_folder()`` returning None); npm is ``{state: "not_present", looked_in}`` when its global ``node_modules``
+  with ``DISK.documents_folder()`` returning None), and so are choco and vcpkg (plan
+  080, M1) and scoop (plan 080, M2); npm is ``{state: "not_present", looked_in}`` when its global ``node_modules``
   folder is missing (plan 073, M2); every other manager is ``{state:
   "not_read"}`` with one ``not_checked`` entry reading ``<name>: not read yet``
   (``what`` and ``reason`` joined by ": ").
@@ -79,8 +80,10 @@ class TestManagers(PackagesTestCase):
         # absent in these fixtures (ENVIRON is empty, so no winget location is looked at).
         # Plan 073 M2: vscode too. Plan 079 M1: dotnet-tools and nuget (no USERPROFILE).
         # Plan 079 M2: psgallery (no USERPROFILE, no ProgramFiles, Documents unset).
+        # Plan 080 M1: choco (no ProgramData) and vcpkg (no VCPKG_ROOT, no LOCALAPPDATA).
+        # Plan 080 M2: scoop (no SCOOP, SCOOP_GLOBAL, USERPROFILE or ProgramData).
         absent_here = ("pipx", "uv", "conda", "winget", "vscode", "dotnet-tools", "nuget",
-                       "psgallery")
+                       "psgallery", "choco", "vcpkg", "scoop")
         others = [name for name in names
                   if name.casefold() not in ("pip", "npm") + absent_here]
 

@@ -459,5 +459,25 @@ class TestPsgallery(PsgalleryTestCase):
         self.assertIs(items[fabrikam].get("from_baseline"), True, items[fabrikam])
 
 
+
+class TestReviewFixes(PsgalleryTestCase):
+    """Plan 080 M2 code-review round 2."""
+
+    def test_unlistable_folder_beside_empty_folder_is_read(self):
+        profile = self.profile()
+        self.modules(profile / "Documents", "PowerShell")  # exists, no module
+        program_files = self.program_files()
+        denied = self.modules(program_files, "PowerShell")
+        environ = {"USERPROFILE": str(profile), "ProgramFiles": str(program_files)}
+        with self.failing_list_dir(denied, PermissionError("Access is denied (invented)")):
+            summary = self.collect_with(environ)
+
+        psgallery = self.psgallery(summary)
+        self.assertEqual(psgallery.get("state"), "read", psgallery)
+        self.assertEqual(self.source(summary, SOURCE).get("status"), "read",
+                         self.source(summary, SOURCE))
+        self.assertIsNone(psgallery.get("count"), psgallery)
+
+
 if __name__ == "__main__":
     unittest.main()
