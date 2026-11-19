@@ -35,14 +35,16 @@ directory: `--data-dir`, else `USH_DATA_DIR`, else the plugin data folder
   `manager` and `key`), the detail lists `pip_packages`, `npm_packages`,
   `pipx_packages`, `uv_tools`, `conda_packages`, `winget_packages`,
   `vscode_extensions`, `dotnet_tools`, `nuget_packages`, `psgallery_modules`,
-  `choco_packages`, `scoop_apps` and `vcpkg_packages` (every item with its
+  `choco_packages`, `scoop_apps`, `vcpkg_packages`, `pnpm_packages`,
+  `yarn_packages` and `bun_packages` (every item with its
   `key`), and
   `summary_file`, the summary of the same run.
 - `state/ush-packages.json` (`ush-packages.elevated.json` for an elevated
   run) - the baseline, with the sources `pip_packages`, `npm_packages`,
   `pipx_packages`, `uv_tools`, `conda_packages`, `winget_packages`,
   `vscode_extensions`, `dotnet_tools`, `nuget_packages`, `psgallery_modules`,
-  `choco_packages`, `scoop_apps` and `vcpkg_packages`; `state/history/` keeps a day copy of it (shared contract, "Baseline").
+  `choco_packages`, `scoop_apps`, `vcpkg_packages`, `pnpm_packages`,
+  `yarn_packages` and `bun_packages`; `state/history/` keeps a day copy of it (shared contract, "Baseline").
 - `state/ush-packages.ids.json` - the id map of `k..` and `c..`.
 
 The PowerShell jobs write their results to `work/packages-<stamp>.<job>.json`
@@ -54,7 +56,8 @@ in `work/`): each is opened through SQLite with `mode=ro&immutable=1`, so
 nothing is written beside it (no `-journal`, `-shm` or `-wal` file). VS
 Code's `extensions.json`, the dotnet tool store, the NuGet global packages
 folder, the PowerShell module folders, the Chocolatey `lib` folder, the
-Scoop `apps` folders and the vcpkg status database are read by Python too (no
+Scoop `apps` folders, the vcpkg status database and the pnpm, yarn and bun global
+folders are read by Python too (no
 job). The
 script changes nothing on the machine and
 exits 0 when the collection ran, also when jobs failed.
@@ -89,6 +92,9 @@ order:
 | `choco_packages` | the Chocolatey root: a non-blank environment variable `ChocolateyInstall` (its name in any case), else `%ProgramData%\chocolatey`; each folder of `<root>\lib` holding `<folder>\<folder>.nuspec` is a package, listed directly by Python, no job (`%ProgramData%` expanded from the environment; unset: Chocolatey not present). The nuspec is parsed as XML, any namespace on each element: the text of `metadata/id` and `metadata/version`. Entries starting with `.` (`.chocolatey`) are skipped; an entry that is no folder is no package. A folder without its nuspec is no item and counts in `managers.choco.incomplete`. `lib-bad` and `lib-bkp` are not read. choco never runs. `empty` with no root (Chocolatey not present, `managers.choco.state` `not_present`), no `lib` folder or no package; `read` with at least one item; `unreadable` when the root or `lib` exists but could not be listed (the previous baseline's items are kept, `from_baseline`, never `removed`). A package folder that could not be listed, a folder holding `.chocolateyPending` (an install or upgrade choco has not finished), a nuspec that could not be checked or read, and a nuspec that is not XML or lacks `id` or `version` are an item with status `unreadable`, counted in `managers.choco.unreadable`, never `incomplete` | `managers.choco`, the `choco` items of `packages`, the detail list `choco_packages` |
 | `scoop_apps` | the two Scoop roots, each with a label: `user` a non-blank environment variable `SCOOP` (its name in any case), else `%USERPROFILE%\scoop`; `global` a non-blank `SCOOP_GLOBAL`, else `%ProgramData%\scoop`. Each folder of `<root>\apps` is an app, listed directly by Python, no job (`%USERPROFILE%` and `%ProgramData%` expanded from the environment; unset: that root absent). The version is the string `version` of `<app>\current\manifest.json` (read through the `current` junction, never resolved), the bucket the `bucket` of `<app>\current\install.json` (`null` when that file is missing or names none, no error; `null` with a not_checked entry when it could not be read or is not JSON, the item still `read`). Entries starting with `.` are skipped; an entry that is no folder is no app; the folder `scoop` (Scoop's own core) is no app. An app folder without `current`, without `manifest.json`, or whose manifest has no non-blank string `version` is no item and counts in `managers.scoop.incomplete`. `persist`, `cache`, `buckets` and the older version folders beside `current` are not read. scoop never runs. `empty` with neither root (Scoop not present, `managers.scoop.state` `not_present`), no `apps` folder or no app; `read` with at least one item, or while one root could not be listed and the other was read; `unreadable` when no root was read and at least one exists but could not be listed (the previous baseline's items are kept, `from_baseline`). A root (or its `apps`) that exists but could not be listed keeps its previous items (`from_baseline`, never `removed`); while the other root is read the source stays read and compared, and `managers.scoop.count` is `null`. An app folder that could not be listed and a `manifest.json` that could not be read or is not JSON are an item with status `unreadable`, counted in `managers.scoop.unreadable`, never `incomplete` | `managers.scoop`, the `scoop` items of `packages`, the detail list `scoop_apps` |
 | `vcpkg_packages` | the classic vcpkg root: a non-blank environment variable `VCPKG_ROOT`, else the first non-blank line of `%LOCALAPPDATA%\vcpkg\vcpkg.path.txt` (written by `vcpkg integrate install`); its status database `<root>\installed\vcpkg\status`, then each file of `<root>\installed\vcpkg\updates` whose name is all digits, in numeric order (any other entry there is not applied). Read directly by Python, no job. Each file is paragraphs separated by blank lines, each of `Field: value` lines (a line starting with a space continues the value); a later paragraph with the same `Package`, `Architecture` and `Feature` replaces an earlier one. The items are the paragraphs without `Feature` whose `Status` ends in ` installed`; the version is `Version`, with `#<Port-Version>` added when `Port-Version` is there and not `0`; an installed paragraph without a `Version` is an item with status `unreadable`, counted in `managers.vcpkg.unreadable`. vcpkg never runs; manifest-mode `vcpkg_installed` folders are not read. `empty` with no root (no variable, no path file or a blank one, or the root absent: vcpkg not present, `managers.vcpkg.state` `not_present`), no status file or no installed package; `read` with at least one item; `unreadable` when `vcpkg.path.txt` exists but could not be read, or the status file, an update file or the `updates` folder exists but could not be read (the previous baseline's items are kept, `from_baseline`, never `removed`; never a partial list) | `managers.vcpkg`, the `vcpkg` items of `packages`, the detail list `vcpkg_packages` |
+| `pnpm_packages` | the pnpm global folder `<home>\global`, the home a non-blank environment variable `PNPM_HOME` (its name in any case), else `%LOCALAPPDATA%\pnpm`, read directly by Python, no job (the pnpm rc file is not read). Each folder of the global folder whose name is all digits is a layout folder (a part, labelled by the digits), read as `yarn_packages` reads its global folder; every other entry is named once in `not_checked`. The store `node_modules\.pnpm` and any `node_modules` entry that is not a `dependencies` key is no item; a global package's folder (pnpm's junction into `.pnpm`) is read through, never resolved. pnpm never runs. `empty` with the global folder absent (or `%LOCALAPPDATA%` unset: pnpm not present, `managers.pnpm.state` `not_present`) or no layout folder with a global package; `read` with at least one item, or while one layout folder could not be read and another was (its previous items kept, `from_baseline`); `unreadable` when the global folder exists but could not be listed, or no layout folder could be read and at least one could not be (the previous baseline's items are kept, never `removed`) | `managers.pnpm`, the `pnpm` items of `packages`, the detail list `pnpm_packages` |
+| `yarn_packages` | the Yarn classic (v1) global folder: a non-blank environment variable `YARN_GLOBAL_FOLDER` (its name in any case), else `%LOCALAPPDATA%\Yarn\Data\global`, read directly by Python, no job (`.yarnrc` is not read; Yarn Berry has no global packages). Each key of `dependencies` in `<global folder>\package.json` is a global package; its version is the non-blank string `version` of `<global folder>\node_modules\<name>\package.json` (`/` of a scoped name as `\`). Any other `node_modules` entry (a hoisted dependency, `.bin`, a dot entry) is no item. A package whose `package.json` is missing, cannot be read, is not JSON or gives no version is an item with status `unreadable`, counted in `managers.yarn.unreadable`. yarn never runs. `empty` with the global folder absent (or `%LOCALAPPDATA%` unset: yarn not present, `managers.yarn.state` `not_present`), no `package.json` or one without `dependencies`; `read` with at least one item; `unreadable` when the global folder or its `package.json` exists but could not be read, is not a JSON object, or its `dependencies` is not an object (the previous baseline's items are kept, `from_baseline`, never `removed`) | `managers.yarn`, the `yarn` items of `packages`, the detail list `yarn_packages` |
+| `bun_packages` | the bun global folder: a non-blank environment variable `BUN_INSTALL_GLOBAL_DIR` (its name in any case), else `<B>\install\global` with `<B>` a non-blank `BUN_INSTALL`, else `%USERPROFILE%\.bun`; read as `yarn_packages` (`bunfig.toml` is not read; bun never runs), each `unreadable` package counted in `managers.bun.unreadable`, `not_present` when the global folder is absent (or `%USERPROFILE%` unset when no variable names it) | `managers.bun`, the `bun` items of `packages`, the detail list `bun_packages` |
 
 ## Summary fields
 
@@ -97,7 +103,7 @@ order:
 | `schema_version`, `skill`, `generated_at`, `elevated` | | shared contract |
 | `sources` | list | see "Sources" |
 | `baseline` | object | shared contract, "Baseline": `status` (`none`, `compared`, `unreadable`), `created_at`, `age_days`, `saved`, `reason`, `reference` (`latest` or the `--compare-to` value, e.g. `7d`) and `reference_file` (the history copy compared with, or `null`). `created_at` and `age_days` are those of the state compared with |
-| `comparison` | object | per source (`pip_packages`, `npm_packages`, `pipx_packages`, `uv_tools`, `conda_packages`, `winget_packages`, `vscode_extensions`, `dotnet_tools`, `nuget_packages`, `psgallery_modules`, `choco_packages`, `scoop_apps`, `vcpkg_packages`): `compared`, `no_baseline` or `not_read` (shared contract). A first run is `no_baseline` and gives no changes. A `not_present` manager's source is `empty`, so it is `compared` (or `no_baseline`), never `not_read`: a manager read before and not present now gives one `removed` change per old item |
+| `comparison` | object | per source (`pip_packages`, `npm_packages`, `pipx_packages`, `uv_tools`, `conda_packages`, `winget_packages`, `vscode_extensions`, `dotnet_tools`, `nuget_packages`, `psgallery_modules`, `choco_packages`, `scoop_apps`, `vcpkg_packages`, `pnpm_packages`, `yarn_packages`, `bun_packages`): `compared`, `no_baseline` or `not_read` (shared contract). A first run is `no_baseline` and gives no changes. A `not_present` manager's source is `empty`, so it is `compared` (or `no_baseline`), never `not_read`: a manager read before and not present now gives one `removed` change per old item |
 | `managers` | object | one entry per manager of `data/managers.json`, in its order; see "Managers" |
 | `counts` | object | `packages` (all packages, before the cut), `changes` (all changes, before the cut), and `added`, `removed`, `changed` (the changes of each kind) |
 | `truncated` | int | the `packages` items cut from the summary |
@@ -121,12 +127,14 @@ reads them). Every entry has `state`:
 | `state` | Meaning |
 |---|---|
 | `read` | a read manager with `status` `read` or `empty` (`count` `0` when nothing is there) |
-| `not_present` | npm, pipx, uv, conda, winget, vscode, dotnet-tools, nuget, psgallery, choco, scoop or vcpkg: none of the manager's disk locations exists (for npm: the global `node_modules` folder of the prefix read; for winget: `LocalState`, or `%LOCALAPPDATA%` is unset; for vscode: the extensions folder, or `%USERPROFILE%` is unset; for dotnet-tools: the tools folder `.dotnet\tools`; for nuget: the global packages folder; for both, or `%USERPROFILE%` is unset when no variable names the folder; for psgallery: none of the four module folders, each of them looked at, so never when the Documents folder could not be read; for choco: the root
+| `not_present` | npm, pipx, uv, conda, winget, vscode, dotnet-tools, nuget, psgallery, choco, scoop, vcpkg, pnpm, yarn or bun: none of the manager's disk locations exists (for npm: the global `node_modules` folder of the prefix read; for winget: `LocalState`, or `%LOCALAPPDATA%` is unset; for vscode: the extensions folder, or `%USERPROFILE%` is unset; for dotnet-tools: the tools folder `.dotnet\tools`; for nuget: the global packages folder; for both, or `%USERPROFILE%` is unset when no variable names the folder; for psgallery: none of the four module folders, each of them looked at, so never when the Documents folder could not be read; for choco: the root
 (`ChocolateyInstall`, else `%ProgramData%\chocolatey`), or `%ProgramData%` is unset; for scoop:
 neither the user root nor the global root, both looked at, `looked_in` the two raw roots; for vcpkg: no
 root is named (no `VCPKG_ROOT`, and no `vcpkg.path.txt` or a blank one), or the root named does not
 exist, `looked_in` the path file and the root it names; never when `vcpkg.path.txt` could not be
-read). The entry is `{"state": "not_present", "looked_in": [<raw paths>]}`; its source has status `empty`. Not `unreadable` (a location exists but could not be read) and not `read` with `count` `0` (a location exists and is empty) |
+read; for pnpm: the global folder `<home>\global`, or `%LOCALAPPDATA%` is unset when `PNPM_HOME` does
+not name the home, `looked_in` the raw global folder; for yarn and bun: the global folder, or `%LOCALAPPDATA%` (yarn) / `%USERPROFILE%` (bun) is
+unset when no variable names it, `looked_in` the raw global folder). The entry is `{"state": "not_present", "looked_in": [<raw paths>]}`; its source has status `empty`. Not `unreadable` (a location exists but could not be read) and not `read` with `count` `0` (a location exists and is empty) |
 | `unreadable` | a read manager with `status` `unreadable` |
 | `not_read` | a manager this skill does not read yet; the entry is `{"state": "not_read"}` and `not_checked` has the item `<name>`: "not read yet". It is never "not present" |
 
@@ -256,16 +264,38 @@ installed packages read (`0` when nothing is there), `null` for `unreadable`;
 `unreadable`. Not present, it is `{"state": "not_present", "looked_in":
 [<the variable's value or the path file, and the root it names>]}`.
 
+`managers.pnpm` (not `not_present`) is `{state, status, folder_from, parts,
+count, unreadable}`: `status` as the source `pnpm_packages`; `folder_from`
+`PNPM_HOME` or `default`; `parts` one entry per layout folder (each folder of
+the global folder whose name is all digits), `{source, status, count, reason}`:
+`source` the digits (`5`, pnpm's global layout version), `status` `read` or
+`unreadable`, `count` the global packages read in it (`null` when it could not
+be read), `reason` why its `package.json` could not be read; `parts` is `null`
+when the global folder could not be listed; `count` the global packages read
+(`0` when nothing is there), `null` while any part is unreadable; `unreadable`
+the global packages whose `package.json` could not be read or gives no version,
+`null` for `unreadable`. Not present, it is `{"state": "not_present",
+"looked_in": [<the raw global folder>]}`.
+
+`managers.yarn` and `managers.bun` (not `not_present`) are each `{state,
+status, folder_from, count, unreadable}`: `status` as the source
+`yarn_packages` / `bun_packages`; `folder_from` the variable the global folder
+came from (`YARN_GLOBAL_FOLDER`; `BUN_INSTALL_GLOBAL_DIR` or `BUN_INSTALL`) or
+`default`; `count` the global packages read (`0` when nothing is there), `null`
+for `unreadable`; `unreadable` the global packages whose `package.json` could
+not be read or gives no version, `null` for `unreadable`. Not present, each is
+`{"state": "not_present", "looked_in": [<the raw global folder>]}`.
+
 ## Packages (`k..`)
 
 `packages` is one flat list over the read managers: pip, npm, pipx, uv, conda,
-winget, vscode, dotnet-tools, nuget, psgallery, choco, scoop, vcpkg, each by key. Ids `k<n>` are stable between runs (the id map), not places in
+winget, vscode, dotnet-tools, nuget, psgallery, choco, scoop, vcpkg, pnpm, yarn, bun, each by key. Ids `k<n>` are stable between runs (the id map), not places in
 the list. A summary item:
 
 | Field | Meaning |
 |---|---|
 | `id` | `k<n>` |
-| `manager` | `pip`, `npm`, `pipx`, `uv`, `conda`, `winget`, `vscode`, `dotnet-tools`, `nuget`, `psgallery`, `choco`, `scoop` or `vcpkg` |
+| `manager` | `pip`, `npm`, `pipx`, `uv`, `conda`, `winget`, `vscode`, `dotnet-tools`, `nuget`, `psgallery`, `choco`, `scoop`, `vcpkg`, `pnpm`, `yarn` or `bun` |
 | `key` | see "Keys" |
 | `name`, `version` | as the metadata says (`Name`/`Version`, `name`/`version`); for a file that could not be read `version` is `null`, and `name` is `null` (pip) or the folder entry (npm) |
 | `python` | pip only: `<company>/<tag>` of the Python |
@@ -276,7 +306,8 @@ the list. A summary item:
 | `module_folder`, `repository` | psgallery only: the label of the module folder (`user-powershell`...) and the repository of the version listed (`PSGallery`, or `null` when the file names none) |
 | `root`, `bucket` | scoop only: the label of the root (`user`, `global`) and the bucket of `install.json` (`main`, or `null` when the file is missing, names none, could not be read or is not JSON) |
 | `triplet` | vcpkg only: the `Architecture` of the package (`x64-windows`) |
-| `folder` | pip: `install` or `user`; npm: the package folder (`<prefix>\node_modules\<name>`, the prefix raw); pipx: `<home>\venvs\<venv>` (the home raw); uv: `<tool folder>\<tool>` (raw); conda: `<prefix>\conda-meta` (the prefix as `environments.txt` writes it, an expanded path); winget: `%LOCALAPPDATA%\Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\<catalog folder>` (raw); vscode: `<extensions folder>\<relativeLocation>` (the folder raw: `VSCODE_EXTENSIONS` as set, or `%USERPROFILE%\.vscode\extensions`), `null` when the entry has no `relativeLocation`; the `name` of a vscode item is its id; dotnet-tools: `<tools>\.store\<id>` (raw: `DOTNET_CLI_HOME` as set + `\.dotnet\tools`, or `%USERPROFILE%\.dotnet\tools`); nuget: `<packages folder>\<id>` (raw: `NUGET_PACKAGES` as set, or `%USERPROFILE%\.nuget\packages`); the `name` of a dotnet-tools or nuget item is its id folder name; psgallery: `<module folder>\<module>` (raw: the Documents folder as the registry or the default writes it, or `%ProgramFiles%`), its `name` the `Name` of the file (the folder name when unreadable); choco: `<root>\lib\<folder>` (raw: `ChocolateyInstall` as set, or `%ProgramData%\chocolatey`), its `name` the nuspec `id` (the folder name when unreadable); scoop: `<root>\apps\<app>` (raw: `SCOOP` / `SCOOP_GLOBAL` as set, or `%USERPROFILE%\scoop` / `%ProgramData%\scoop`), its `name` the app folder name; vcpkg: `<root>\installed\<triplet>` (the root as `VCPKG_ROOT` or `vcpkg.path.txt` gives it), its `name` the `Package` |
+| `layout` | pnpm only: the label of the layout folder the global package was read from (`5`) |
+| `folder` | pip: `install` or `user`; npm: the package folder (`<prefix>\node_modules\<name>`, the prefix raw); pipx: `<home>\venvs\<venv>` (the home raw); uv: `<tool folder>\<tool>` (raw); conda: `<prefix>\conda-meta` (the prefix as `environments.txt` writes it, an expanded path); winget: `%LOCALAPPDATA%\Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\<catalog folder>` (raw); vscode: `<extensions folder>\<relativeLocation>` (the folder raw: `VSCODE_EXTENSIONS` as set, or `%USERPROFILE%\.vscode\extensions`), `null` when the entry has no `relativeLocation`; the `name` of a vscode item is its id; dotnet-tools: `<tools>\.store\<id>` (raw: `DOTNET_CLI_HOME` as set + `\.dotnet\tools`, or `%USERPROFILE%\.dotnet\tools`); nuget: `<packages folder>\<id>` (raw: `NUGET_PACKAGES` as set, or `%USERPROFILE%\.nuget\packages`); the `name` of a dotnet-tools or nuget item is its id folder name; psgallery: `<module folder>\<module>` (raw: the Documents folder as the registry or the default writes it, or `%ProgramFiles%`), its `name` the `Name` of the file (the folder name when unreadable); choco: `<root>\lib\<folder>` (raw: `ChocolateyInstall` as set, or `%ProgramData%\chocolatey`), its `name` the nuspec `id` (the folder name when unreadable); scoop: `<root>\apps\<app>` (raw: `SCOOP` / `SCOOP_GLOBAL` as set, or `%USERPROFILE%\scoop` / `%ProgramData%\scoop`), its `name` the app folder name; vcpkg: `<root>\installed\<triplet>` (the root as `VCPKG_ROOT` or `vcpkg.path.txt` gives it), its `name` the `Package`; pnpm: `<home>\global\<layout>\node_modules\<name>` (the home raw: `PNPM_HOME` as set, or `%LOCALAPPDATA%\pnpm`), its `name` the `dependencies` key; yarn and bun: `<global folder>\node_modules\<name>` (the global folder raw: the variable as set, or the default), its `name` the `dependencies` key |
 | `unreadable`, `reason` | only when the metadata file could not be read: `true` and why |
 | `entry` | pip, unreadable only: the `dist-info` / `egg-info` entry |
 | `from_baseline` | `true` when the folder could not be read in this run (winget: the catalog could not be read, or had manifest rows without an id) and the item is the previous baseline's |
@@ -284,7 +315,7 @@ the list. A summary item:
 The items of `packages` in the detail file, and of the detail lists
 `pip_packages`, `npm_packages`, `pipx_packages`, `uv_tools`, `conda_packages`,
 `winget_packages`, `vscode_extensions`, `dotnet_tools`, `nuget_packages`, `psgallery_modules`,
-`choco_packages`, `scoop_apps` and `vcpkg_packages`, are the
+`choco_packages`, `scoop_apps`, `vcpkg_packages`, `pnpm_packages`, `yarn_packages` and `bun_packages`, are the
 full items: also `status`
 (`read` or `unreadable`), `reason`, and `unread_fields` (`["version"]` for an
 unreadable file); a conda item also has `build`; a winget item also has `id`
@@ -309,6 +340,9 @@ version it installed; the item's `version` is the highest of them).
 | `choco_packages` | `choco:<lib folder name>`, case-folded (`choco:contoso.cli`); the same key when the nuspec could not be read |
 | `scoop_apps` | `scoop:<label>\|<app>`, case-folded: the root's label and the app's folder name (`scoop:user\|git`); the same key when the manifest could not be read |
 | `vcpkg_packages` | `vcpkg:<Package>:<Architecture>`, case-folded (`vcpkg:zlib:x64-windows`) |
+| `pnpm_packages` | `pnpm:<layout>\|<name>`, case-folded: the layout folder's label and the `dependencies` key (`pnpm:5\|contoso-cli`); the same key when its `package.json` could not be read. A second name differing only in case gets `~2`, `~3`... |
+| `yarn_packages` | `yarn:<name>`, case-folded: the `dependencies` key (`yarn:contoso-cli`, `yarn:@contoso/tool`); the same key when its `package.json` could not be read. A second name differing only in case gets `~2`, `~3`... |
+| `bun_packages` | `bun:<name>`, case-folded, as for yarn (`bun:contoso-cli`) |
 
 ## Changes (`c..`)
 
@@ -325,11 +359,12 @@ version it installed; the item's `version` is the highest of them).
 | `module_folder`, `repository` | `psgallery_modules` only: the module folder's label (`user-powershell`...) and the repository of the item; the change's `source` stays the source name `psgallery_modules` |
 | `root`, `bucket` | `scoop_apps` only: the root's label (`user`, `global`) and the item's bucket; the change's `source` stays the source name `scoop_apps` |
 | `triplet` | `vcpkg_packages` only: the item's triplet |
+| `layout` | `pnpm_packages` only: the item's layout label; the change's `source` stays the source name `pnpm_packages` |
 | `version` | `added` and `removed` only: the version added or removed |
 | `fields` | `changed` only: `{version: {before, after}}` |
 
 Changes come by source (pip, npm, pipx, uv, conda, winget, vscode, dotnet-tools,
-nuget, psgallery, choco, scoop, vcpkg); within a source the order is
+nuget, psgallery, choco, scoop, vcpkg, pnpm, yarn, bun); within a source the order is
 added, removed, changed, then by key. Only a source whose `comparison` is
 `compared` gives changes. The compared field of every source is `version`;
 a field that either side names in `unread_fields` is not compared.
@@ -402,8 +437,17 @@ as without the flag.
 | `vcpkg update entries with a non-numeric name` | an entry of `installed\vcpkg\updates` whose name is not all digits: "not applied: vcpkg names its update files by digits only" |
 | `vcpkg_packages <package>:<triplet>` | an installed core paragraph without `Version`: "no Version in the status database"; its item is `unreadable`, counted in `managers.vcpkg.unreadable` |
 | `vcpkg manifest-mode vcpkg_installed folders in projects` | `managers.vcpkg.state` is `read` or `not_present`: "only the classic install's status database is read" |
+| `pnpm_packages` | the source is `unreadable`: the global folder exists but could not be listed, or no layout folder could be read and at least one could not be (the reason says which); `managers.pnpm.count` is `null` and the previous items are kept |
+| `pnpm_packages <layout>` | that layout folder could not be listed, or its `package.json` could not be read, is not a JSON object, or its `dependencies` is not an object: its previous items are kept (`from_baseline`, never `removed`) and `managers.pnpm.count` is `null` |
+| `pnpm_packages <layout> <name>` | that global package's `node_modules\<name>\package.json` is missing, could not be read, is not JSON or gives no version: its item is `unreadable` (no `changed` change), counted in `managers.pnpm.unreadable` |
+| `pnpm global entries with a non-numeric name` | an entry of the global folder that is not a folder with an all-digit name: "not read: pnpm names its global layout folders by digits only" |
+| `pnpm global-dir setting in the pnpm rc file` | `managers.pnpm.state` is `read` or `not_present`: "the config file is not read; only PNPM_HOME and the default are looked at" |
+| `yarn_packages`, `bun_packages` | the source is `unreadable`: the global folder or its `package.json` exists but could not be read, is not a JSON object, or its `dependencies` is not an object (the reason says which); `managers.<yarn/bun>.count` is `null` and the previous items are kept |
+| `yarn_packages <name>`, `bun_packages <name>` | that global package's `node_modules\<name>\package.json` is missing, could not be read, is not JSON or gives no version: its item is `unreadable` (no `changed` change), counted in `managers.<yarn/bun>.unreadable` |
+| `yarn global-folder setting in .yarnrc` | `managers.yarn.state` is `read` or `not_present`: "the config file is not read; only YARN_GLOBAL_FOLDER and the default are looked at" |
+| `bun globalDir setting in bunfig.toml` | `managers.bun.state` is `read` or `not_present`: "the config file is not read; only BUN_INSTALL_GLOBAL_DIR, BUN_INSTALL and the default are looked at" |
 | `<manager name>` | every manager with `state` `not_read`: "not read yet". A `not_present` manager has no such item and no unreadable item |
-| `managers.json` | the data file could not be read: only the read managers (pip, npm, pipx, uv, conda, winget, vscode, dotnet-tools, nuget, psgallery, choco, scoop, vcpkg) are listed under `managers`, the reason says why |
+| `managers.json` | the data file could not be read: only the read managers (pip, npm, pipx, uv, conda, winget, vscode, dotnet-tools, nuget, psgallery, choco, scoop, vcpkg, pnpm, yarn, bun) are listed under `managers`, the reason says why |
 | `baseline`, `reference baseline`, `baseline history`, `baseline save` | shared contract, "Baseline" |
 | `stable ids`, `stable ids save` | shared contract, "Ids" |
 | `summary budget` | the summary exceeds the budget after every package and change was cut |

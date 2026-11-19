@@ -82,8 +82,11 @@ class TestManagers(PackagesTestCase):
         # Plan 079 M2: psgallery (no USERPROFILE, no ProgramFiles, Documents unset).
         # Plan 080 M1: choco (no ProgramData) and vcpkg (no VCPKG_ROOT, no LOCALAPPDATA).
         # Plan 080 M2: scoop (no SCOOP, SCOOP_GLOBAL, USERPROFILE or ProgramData).
+        # Plan 083 M1: yarn (no YARN_GLOBAL_FOLDER, no LOCALAPPDATA) and bun (no
+        # BUN_INSTALL_GLOBAL_DIR, BUN_INSTALL or USERPROFILE).
+        # Plan 083 M2: pnpm (no PNPM_HOME, no LOCALAPPDATA).
         absent_here = ("pipx", "uv", "conda", "winget", "vscode", "dotnet-tools", "nuget",
-                       "psgallery", "choco", "vcpkg", "scoop")
+                       "psgallery", "choco", "vcpkg", "scoop", "yarn", "bun", "pnpm")
         others = [name for name in names
                   if name.casefold() not in ("pip", "npm") + absent_here]
 

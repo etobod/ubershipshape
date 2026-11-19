@@ -570,6 +570,44 @@ class TestOtherSources(AdviceTestCase):
                          "ush-advice does not look up the ush-packages sources "
                          "choco_packages, scoop_apps, vcpkg_packages", notes)
 
+    # Plan 083, M2, K4
+    def test_node_managers_named(self):
+        doc = packages_detail({"pip_packages": [pip_item("contoso-lib", "1.2.0")]})
+        doc["sources"] += [
+            {"name": "pnpm_packages", "status": "read", "reason": None},
+            {"name": "yarn_packages", "status": "read", "reason": None},
+            {"name": "bun_packages", "status": "read", "reason": None},
+        ]
+        doc["comparison"].update({"pnpm_packages": "no_baseline",
+                                  "yarn_packages": "no_baseline",
+                                  "bun_packages": "no_baseline"})
+        doc["pnpm_packages"] = [{
+            "key": "pnpm:5|contoso-cli", "name": "contoso-cli", "version": "1.2.3",
+            "layout": "5",
+            "folder": INVENTED_HOME + "\\AppData\\Local\\pnpm\\global\\5\\node_modules"
+                      "\\contoso-cli",
+            "status": "read", "reason": None}]
+        doc["yarn_packages"] = [{
+            "key": "yarn:@fabrikam/tool", "name": "@fabrikam/tool", "version": "3.0.1",
+            "folder": INVENTED_HOME + "\\AppData\\Local\\Yarn\\Data\\global\\node_modules"
+                      "\\@fabrikam\\tool",
+            "status": "read", "reason": None}]
+        doc["bun_packages"] = [{
+            "key": "bun:litware", "name": "litware", "version": "2.0.1",
+            "folder": INVENTED_HOME + "\\.bun\\install\\global\\node_modules\\litware",
+            "status": "read", "reason": None}]
+        summary = self.run_with(doc)
+
+        notes = [item for item in self.not_checked(summary)
+                 if item.get("what") == OTHER_SOURCES_WHAT]
+        self.assertEqual(len(notes), 1, self.not_checked(summary))
+        reason = str(notes[0].get("reason"))
+        self.assertTrue(reason.startswith(
+            "ush-advice does not look up the ush-packages sources "), notes)
+        named = reason.split("sources ", 1)[-1].split(", ")
+        self.assertEqual(sorted(named),
+                         ["bun_packages", "pnpm_packages", "yarn_packages"], notes)
+
 
 if __name__ == "__main__":
     unittest.main()

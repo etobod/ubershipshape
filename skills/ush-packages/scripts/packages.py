@@ -116,13 +116,16 @@ READ_MANAGERS = {"pip": "pip_packages", "npm": "npm_packages", "pipx": "pipx_pac
                  "vscode": "vscode_extensions", "dotnet-tools": "dotnet_tools",
                  "nuget": "nuget_packages", "psgallery": "psgallery_modules",
                  "choco": "choco_packages", "scoop": "scoop_apps",
-                 "vcpkg": "vcpkg_packages"}
+                 "vcpkg": "vcpkg_packages", "pnpm": "pnpm_packages",
+                 "yarn": "yarn_packages",
+                 "bun": "bun_packages"}
 NOT_READ_YET = "not read yet"
 
 # The sources with items, compared with the baseline, in change order.
 SOURCES = ("pip_packages", "npm_packages", "pipx_packages", "uv_tools", "conda_packages",
            "winget_packages", "vscode_extensions", "dotnet_tools", "nuget_packages",
-           "psgallery_modules", "choco_packages", "scoop_apps", "vcpkg_packages")
+           "psgallery_modules", "choco_packages", "scoop_apps", "vcpkg_packages",
+           "pnpm_packages", "yarn_packages", "bun_packages")
 READ_STATUSES = ("read", "empty")
 COMPARED_FIELDS = {source: ("version",) for source in SOURCES}
 CHANGE_ORDER = ("added", "removed", "changed")
@@ -609,6 +612,12 @@ class Collector:
         self.choco_summary = None
         self.scoop_summary = None
         self.vcpkg_summary = None
+        # set by read_pnpm: the summary part managers.pnpm (without state)
+        self.pnpm_summary = None
+        # set by collect_yarn / collect_bun: the summary parts managers.yarn /
+        # managers.bun (without state)
+        self.yarn_summary = None
+        self.bun_summary = None
         # the managers none of whose disk locations exists (state not_present)
         self.not_present = set()
 
@@ -949,6 +958,11 @@ class Disk:
         """True when ``path`` exists; False when it (or a parent) is not there. Any other
         ``OSError`` (access denied) is raised, so "absent" never hides "unreadable"."""
         return Path(path).exists()
+
+    def is_file(self, path) -> bool:
+        """True when ``path`` is a file; False when it is a folder or not there. Any other
+        ``OSError`` (access denied) is raised."""
+        return Path(path).is_file()
 
     def size(self, path) -> int:
         """The size in bytes of the file ``path``; ``OSError`` when it cannot be read."""
@@ -1952,7 +1966,7 @@ def read_store_source(col: Collector, previous: dict, *, manager: str, source: s
     raw = (home.rstrip("\\/") or home) + tail
     path = expand_path(raw)
     try:
-        present = path is not None and DISK.exists(path)
+        present = folder_present(path)
         store_present = present and (not store or DISK.exists(path + store))
         items, incomplete = (read_items(path + store, raw + store)
                              if store_present else ({}, 0))
@@ -1981,6 +1995,31 @@ def is_folder(path: str) -> bool:
         DISK.list_dir(path)
     except NotADirectoryError:
         return False
+    return True
+
+
+def folder_present(path) -> bool:
+    """True when the folder ``path`` exists, False when it (or its ``%VAR%``) is absent.
+    A file at ``path``, or a folder that cannot be listed, raises ``OSError``, so a root
+    that is no folder is never read as an empty one; so does an absent ``path`` under a
+    file (a variable root such as PNPM_HOME that is a file)."""
+    if path is None:
+        return False
+    if not DISK.exists(path):
+        for parent in Path(path).parents:
+            try:
+                if not DISK.exists(parent):
+                    continue
+                parent_is_file = DISK.is_file(parent)
+            except OSError:
+                # An ancestor that cannot be checked proves nothing: the path stays absent.
+                break
+            if parent_is_file:
+                raise NotADirectoryError(f"{parent} is a file, not a folder")
+            break
+        return False
+    if not is_folder(path):
+        raise NotADirectoryError(f"{path} is a file, not a folder")
     return True
 
 
@@ -2434,7 +2473,7 @@ def read_scoop(col: Collector, previous: dict) -> tuple[str, dict]:
                "count": None, "reason": None}
         names = None
         try:
-            if path is None or not DISK.exists(path):
+            if not folder_present(path):
                 continue  # absent (or its %VAR% unset)
             apps = path + SCOOP_APPS
             names = (sorted(DISK.list_dir(apps), key=str.casefold)
@@ -2598,7 +2637,7 @@ def read_vcpkg(col: Collector, previous: dict) -> tuple[str, dict]:
     """
     root, folder_from, looked_in, reason = vcpkg_root()
     try:
-        present = root is not None and DISK.exists(root)
+        present = folder_present(root)
         paragraphs, update_files = vcpkg_database(col, root) if present else ([], 0)
     except (OSError, UnicodeDecodeError) as exc:
         reason = f"{root}: the status database could not be read: {type(exc).__name__}: {exc}"
@@ -2638,6 +2677,257 @@ def read_vcpkg(col: Collector, previous: dict) -> tuple[str, dict]:
     count = sum(1 for item in items.values() if item["status"] == "read")
     col.vcpkg_summary = {"status": status, "folder_from": folder_from, "count": count,
                          "unreadable": len(items) - count, "update_files": update_files}
+    return status, items
+
+
+# Node.js global folders (yarn classic, bun): the dependencies of the global folder's
+# package.json are the global packages; each version comes from
+# node_modules\<name>\package.json, read through DISK (no yarn or bun command runs).
+YARN_SOURCE = "yarn_packages"
+YARN_VARIABLE = "YARN_GLOBAL_FOLDER"
+YARN_DEFAULT_FOLDER = "%LOCALAPPDATA%\\Yarn\\Data\\global"
+YARN_CONFIG = ("yarn global-folder setting in .yarnrc",
+               ("the config file is not read; only YARN_GLOBAL_FOLDER and the default are "
+                "looked at"))
+BUN_SOURCE = "bun_packages"
+BUN_GLOBAL_VARIABLE = "BUN_INSTALL_GLOBAL_DIR"
+BUN_INSTALL_VARIABLE = "BUN_INSTALL"
+BUN_DEFAULT_INSTALL = "%USERPROFILE%\\.bun"
+BUN_GLOBAL = "\\install\\global"
+BUN_CONFIG = ("bun globalDir setting in bunfig.toml",
+              ("the config file is not read; only BUN_INSTALL_GLOBAL_DIR, BUN_INSTALL and "
+               "the default are looked at"))
+GLOBAL_MANIFEST = "\\package.json"
+
+
+def global_dependencies(path: str, raw: str) -> tuple[list | None, str | None]:
+    """``(names, None)``: the keys of ``dependencies`` in ``<path>\\package.json`` (none
+    when the file or the key is absent), or ``(None, reason)`` when the file cannot be
+    read, is not a JSON object or its ``dependencies`` is not an object."""
+    manifest = path + GLOBAL_MANIFEST
+    try:
+        if not DISK.exists(manifest):
+            return [], None
+        data = json.loads(DISK.read_text(manifest))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        return None, f"{raw}{GLOBAL_MANIFEST} could not be read: {type(exc).__name__}: {exc}"
+    if not isinstance(data, dict):
+        return None, f"{raw}{GLOBAL_MANIFEST} does not hold a JSON object"
+    dependencies = data.get("dependencies")
+    if dependencies is None:
+        return [], None
+    if not isinstance(dependencies, dict):
+        return None, f"{raw}{GLOBAL_MANIFEST}: dependencies is not an object"
+    return list(dependencies), None
+
+
+def global_items(col: Collector, source: str, prefix: str, path: str, raw: str,
+                 names: list) -> dict:
+    """``{key: item}`` of the global packages ``names`` of the global folder ``path``
+    (``raw`` unexpanded): ``name``, ``version`` (the non-blank string ``version`` of
+    ``node_modules\\<name>\\package.json``) and the raw ``folder``. A package whose
+    ``package.json`` is missing, cannot be read or gives no version is ``unreadable``,
+    named in not_checked. Key ``<prefix><name case-folded>``."""
+    items = {}
+    for number, name in enumerate(names, 1):
+        progress.count(source, number, len(names))
+        relative = "\\node_modules\\" + name.replace("/", "\\")
+        item = {"name": name, "version": None, "status": "read", "reason": None,
+                "folder": raw + relative}
+        manifest = path + relative + GLOBAL_MANIFEST
+        reason = None
+        try:
+            data = json.loads(DISK.read_text(manifest))
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
+            reason = (f"{item['folder']}{GLOBAL_MANIFEST} could not be read: "
+                      f"{type(exc).__name__}: {exc}")
+        else:
+            version = data.get("version") if isinstance(data, dict) else None
+            if isinstance(version, str) and version.strip():
+                item["version"] = version.strip()
+            else:
+                reason = f"{item['folder']}{GLOBAL_MANIFEST} gives no version"
+        if reason is not None:
+            unreadable_item(item, reason)
+            col.skip(f"{source} {name}", reason)
+        key, suffix = f"{prefix}{name.casefold()}", 2
+        while key in items:  # names differing only in case
+            key, suffix = f"{prefix}{name.casefold()}~{suffix}", suffix + 1
+        items[key] = item
+    return items
+
+
+def read_global_folder(col: Collector, previous: dict, *, manager: str, source: str,
+                       prefix: str, raw: str, folder_from: str,
+                       config: tuple) -> tuple[str, dict, dict]:
+    """``(status, {key: item}, summary part)`` of the Node.js global folder ``raw``.
+
+    The folder absent (or its ``%VAR%`` unset): ``not_present``. No ``package.json``,
+    or one without ``dependencies``: ``empty``. A folder or ``package.json`` that cannot
+    be read: ``unreadable``, the previous items kept ``from_baseline``. The part is
+    ``{status, folder_from, count, unreadable}``; ``config`` is named when read or not
+    present."""
+    raw = raw.rstrip("\\/") or raw
+    path = expand_path(raw)
+    try:
+        present = folder_present(path)
+    except OSError as exc:
+        present, names = True, None
+        reason = f"{raw} could not be read: {type(exc).__name__}: {exc}"
+    else:
+        names, reason = global_dependencies(path, raw) if present else ([], None)
+    if names is None:
+        items = carry_source(col, source, previous, reason)
+        return "unreadable", items, {"status": "unreadable", "folder_from": folder_from,
+                                     "count": None, "unreadable": None}
+    col.skip(*config)
+    if not present:
+        return not_present(col, manager, source, [raw])
+    items = global_items(col, source, prefix, path, raw, names)
+    status = "read" if items else "empty"
+    col.record(source, status, None)
+    count = sum(1 for item in items.values() if item["status"] == "read")
+    return status, items, {"status": status, "folder_from": folder_from, "count": count,
+                           "unreadable": len(items) - count}
+
+
+def collect_yarn(col: Collector, previous: dict) -> tuple[str, dict]:
+    """The Yarn classic global packages of ``YARN_GLOBAL_FOLDER`` (non-blank), else
+    ``%LOCALAPPDATA%\\Yarn\\Data\\global``. Key ``yarn:<name case-folded>``; the part
+    goes to ``col.yarn_summary``."""
+    progress.step(f"{YARN_SOURCE} ...")
+    raw, folder_from = environment_value(YARN_VARIABLE), YARN_VARIABLE
+    if raw is None:
+        raw, folder_from = YARN_DEFAULT_FOLDER, "default"
+    status, items, col.yarn_summary = read_global_folder(
+        col, previous, manager="yarn", source=YARN_SOURCE, prefix="yarn:", raw=raw,
+        folder_from=folder_from, config=YARN_CONFIG)
+    progress.step(f"{YARN_SOURCE} {'failed' if status == 'unreadable' else 'done'}")
+    return status, items
+
+
+def collect_bun(col: Collector, previous: dict) -> tuple[str, dict]:
+    """The bun global packages of ``BUN_INSTALL_GLOBAL_DIR`` (non-blank), else
+    ``<BUN_INSTALL or %USERPROFILE%\\.bun>\\install\\global``. Key ``bun:<name
+    case-folded>``; the part goes to ``col.bun_summary``."""
+    progress.step(f"{BUN_SOURCE} ...")
+    raw, folder_from = environment_value(BUN_GLOBAL_VARIABLE), BUN_GLOBAL_VARIABLE
+    if raw is None:
+        install, folder_from = environment_value(BUN_INSTALL_VARIABLE), BUN_INSTALL_VARIABLE
+        if install is None:
+            install, folder_from = BUN_DEFAULT_INSTALL, "default"
+        raw = (install.rstrip("\\/") or install) + BUN_GLOBAL
+    status, items, col.bun_summary = read_global_folder(
+        col, previous, manager="bun", source=BUN_SOURCE, prefix="bun:", raw=raw,
+        folder_from=folder_from, config=BUN_CONFIG)
+    progress.step(f"{BUN_SOURCE} {'failed' if status == 'unreadable' else 'done'}")
+    return status, items
+
+
+# pnpm: each layout folder <home>\global\<digits> is read as one Node.js global folder
+# (no pnpm command runs; node_modules\<name> is pnpm's junction into .pnpm, read through).
+PNPM_SOURCE = "pnpm_packages"
+PNPM_VARIABLE = "PNPM_HOME"
+PNPM_DEFAULT_HOME = "%LOCALAPPDATA%\\pnpm"
+PNPM_GLOBAL = "\\global"
+PNPM_CONFIG = ("pnpm global-dir setting in the pnpm rc file",
+               ("the config file is not read; only PNPM_HOME and the default are "
+                "looked at"))
+PNPM_NON_NUMERIC = ("pnpm global entries with a non-numeric name",
+                    ("not read: pnpm names its global layout folders by digits only"))
+
+
+def pnpm_order(name: str) -> tuple:
+    """Sort key of a global folder entry: all-digit names first, by number."""
+    numeric = name.isascii() and name.isdigit()
+    return (not numeric, int(name) if numeric else 0, name.casefold())
+
+
+def collect_pnpm(col: Collector, previous: dict) -> tuple[str, dict]:
+    """Read the pnpm global packages, with a start and an end progress line."""
+    progress.step(f"{PNPM_SOURCE} ...")
+    status, items = read_pnpm(col, previous)
+    progress.step(f"{PNPM_SOURCE} {'failed' if status == 'unreadable' else 'done'}")
+    return status, items
+
+
+def read_pnpm(col: Collector, previous: dict) -> tuple[str, dict]:
+    """``(status, {key: item})`` of the source ``pnpm_packages``; the summary part
+    ``{status, folder_from, parts, count, unreadable}`` is kept in ``col.pnpm_summary``.
+
+    The global folder is ``<PNPM_HOME (non-blank), else %LOCALAPPDATA%\\pnpm>\\global``;
+    absent (or its ``%VAR%`` unset): ``not_present``; one that cannot be listed:
+    ``unreadable``, the previous items kept ``from_baseline``. Each of its folders with
+    an all-digit name is one part (a row of ``parts``, labelled by the digits), read as
+    one global folder; every other entry is named once in not_checked. Key
+    ``pnpm:<label>|<name case-folded>``, with ``layout`` the label. A part whose
+    ``package.json`` cannot be read keeps its previous items ``from_baseline``;
+    ``unreadable`` only when no part was read and one could not be; the count is null
+    while any part is unreadable.
+    """
+    home, folder_from = environment_value(PNPM_VARIABLE), PNPM_VARIABLE
+    if home is None:
+        home, folder_from = PNPM_DEFAULT_HOME, "default"
+    raw = (home.rstrip("\\/") or home) + PNPM_GLOBAL
+    path = expand_path(raw)
+    try:
+        present = folder_present(path)
+        names = sorted(DISK.list_dir(path), key=pnpm_order) if present else []
+    except OSError as exc:
+        items = carry_source(col, PNPM_SOURCE, previous,
+                             f"{raw} could not be listed: {type(exc).__name__}: {exc}")
+        col.pnpm_summary = {"status": "unreadable", "folder_from": folder_from,
+                            "parts": None, "count": None, "unreadable": None}
+        return "unreadable", items
+    if not present:
+        col.skip(*PNPM_CONFIG)
+        status, items, col.pnpm_summary = not_present(col, "pnpm", PNPM_SOURCE, [raw])
+        return status, items
+    items, rows, other = {}, [], False
+    for label in names:
+        part_path, part_raw = f"{path}\\{label}", f"{raw}\\{label}"
+        row = {"source": label, "status": "read", "count": None, "reason": None}
+        try:
+            if not (label.isascii() and label.isdigit()) or not is_folder(part_path):
+                other = True
+                continue
+        except OSError as exc:
+            dependencies = None
+            reason = f"{part_raw} could not be listed: {type(exc).__name__}: {exc}"
+        else:
+            dependencies, reason = global_dependencies(part_path, part_raw)
+        rows.append(row)
+        prefix = f"pnpm:{label}|"
+        if dependencies is None:
+            row.update(status="unreadable", reason=reason)
+            col.skip(f"{PNPM_SOURCE} {label}", reason)
+            carry(col, PNPM_SOURCE, previous, items,
+                  lambda key, prefix=prefix: key.startswith(prefix))
+            continue
+        found = global_items(col, f"{PNPM_SOURCE} {label}", prefix, part_path, part_raw,
+                             dependencies)
+        for item in found.values():
+            item["layout"] = label
+        row["count"] = sum(1 for item in found.values() if item["status"] == "read")
+        items.update(found)
+    if other:
+        col.skip(*PNPM_NON_NUMERIC)
+    read = [row for row in rows if row["status"] == "read"]
+    if rows and not read:
+        col.record(PNPM_SOURCE, "unreadable", "no pnpm global layout folder could be read")
+        col.pnpm_summary = {"status": "unreadable", "folder_from": folder_from,
+                            "parts": rows, "count": None, "unreadable": None}
+        return "unreadable", items
+    col.skip(*PNPM_CONFIG)
+    # A part that could not be read is never "nothing there": partly read is read.
+    status = "read" if items or len(read) < len(rows) else "empty"
+    col.record(PNPM_SOURCE, status, None)
+    unreadable = sum(1 for item in items.values()
+                     if item.get("status") == "unreadable" and not item.get("from_baseline"))
+    col.pnpm_summary = {
+        "status": status, "folder_from": folder_from, "parts": rows,
+        "count": None if len(read) < len(rows) else sum(row["count"] for row in read),
+        "unreadable": unreadable}
     return status, items
 
 
@@ -2682,7 +2972,9 @@ def build_managers(col: Collector) -> dict:
                   "vscode": col.vscode_summary, "dotnet-tools": col.dotnet_tools_summary,
                   "nuget": col.nuget_summary, "psgallery": col.psgallery_summary,
                   "choco": col.choco_summary, "scoop": col.scoop_summary,
-                  "vcpkg": col.vcpkg_summary}
+                  "vcpkg": col.vcpkg_summary, "pnpm": col.pnpm_summary,
+                  "yarn": col.yarn_summary,
+                  "bun": col.bun_summary}
     entries, reason = load_managers(MANAGERS_FILE)
     if entries is None:
         col.skip(MANAGERS_FILE.name, f"the managers not read by this skill are not "
@@ -2733,6 +3025,12 @@ def collect(run_ps, work: Path, stamp: str, previous: dict):
         col, previous.get("scoop_apps") or {})
     statuses["vcpkg_packages"], current["vcpkg_packages"] = collect_vcpkg(
         col, previous.get("vcpkg_packages") or {})
+    statuses["pnpm_packages"], current["pnpm_packages"] = collect_pnpm(
+        col, previous.get("pnpm_packages") or {})
+    statuses["yarn_packages"], current["yarn_packages"] = collect_yarn(
+        col, previous.get("yarn_packages") or {})
+    statuses["bun_packages"], current["bun_packages"] = collect_bun(
+        col, previous.get("bun_packages") or {})
     return statuses, current, col
 
 
@@ -2799,6 +3097,8 @@ def build_changes(previous: dict, current: dict, comparison: dict, numbering) ->
                 entry["bucket"] = item.get("bucket")
             elif source == "vcpkg_packages":
                 entry["triplet"] = item.get("triplet")
+            elif source == "pnpm_packages":
+                entry["layout"] = item.get("layout")
             if fields is not None:
                 entry["fields"] = fields
             else:
@@ -2811,7 +3111,7 @@ def build_changes(previous: dict, current: dict, comparison: dict, numbering) ->
 # --- packages ------------------------------------------------------------------
 def build_packages(current: dict, numbering) -> list:
     """Every package of the read managers (pip, npm, pipx, uv, conda, winget, vscode,
-    dotnet-tools, nuget, psgallery, choco, scoop, vcpkg), each
+    dotnet-tools, nuget, psgallery, choco, scoop, vcpkg, pnpm, yarn, bun), each
     by key; ids ``k<n>`` from ``numbering``. The full item of the source, with ``manager`` and ``key``."""
     packages = []
     for manager, source in READ_MANAGERS.items():
@@ -2826,7 +3126,7 @@ def summary_package(item: dict) -> dict:
     ``version``, the Python (pip), the venv and ``injected`` (pipx), the environment
     (conda), the catalog label ``source`` (winget), ``versions_found`` (dotnet-tools,
     nuget, psgallery), ``module_folder`` and ``repository`` (psgallery), ``root`` and
-    ``bucket`` (scoop), ``triplet`` (vcpkg) and ``folder``; ``unreadable`` and ``reason`` when
+    ``bucket`` (scoop), ``triplet`` (vcpkg), ``layout`` (pnpm) and ``folder``; ``unreadable`` and ``reason`` when
     its metadata could not be read, ``from_baseline`` when it was kept from the
     baseline because its folder could not be listed (winget: its catalog could not be
     read, or had rows without an id)."""
@@ -2852,6 +3152,8 @@ def summary_package(item: dict) -> dict:
         out["bucket"] = item.get("bucket")
     elif item["manager"] == "vcpkg":
         out["triplet"] = item.get("triplet")
+    elif item["manager"] == "pnpm":
+        out["layout"] = item.get("layout")
     out["folder"] = item.get("folder")
     if item.get("status") == "unreadable":
         out["unreadable"] = True

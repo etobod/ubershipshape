@@ -638,3 +638,40 @@ class TestReviewFixes(ChocoVcpkgTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRootIsAFile(ChocoVcpkgTestCase):
+    """Plan 083 M1 code-review round 2: a root that is a file is unreadable, never
+    empty, so its baseline items are kept and never reported as removed."""
+
+    def test_choco_root_is_a_file(self):
+        program_data = self.program_data()
+        root = program_data / "chocolatey"
+        lib = self.choco_lib(root)
+        add_choco(lib, "contoso.cli", "Contoso.Cli", "1.10.0")
+        environ = {"ProgramData": str(program_data)}
+        data_dir = self.data_dir()
+        first = self.collect_with(environ, data_dir=data_dir, now=NOW)
+        self.assertEqual(set(self.items(first, CHOCO_SOURCE)), {CONTOSO_CLI})
+
+        shutil.rmtree(root)
+        root.write_text("not a folder\n", encoding="utf-8")
+        second = self.collect_with(environ, data_dir=data_dir,
+                                   now=NOW + timedelta(days=1))
+
+        self.assert_carried(second, CHOCO, CHOCO_SOURCE, CHOCO_PREFIX,
+                            {CONTOSO_CLI: "1.10.0"})
+
+    def test_vcpkg_root_is_a_file(self):
+        root = self.vcpkg_root(database(ZLIB_INSTALLED))
+        environ = {"VCPKG_ROOT": str(root)}
+        data_dir = self.data_dir()
+        first = self.collect_with(environ, data_dir=data_dir, now=NOW)
+        self.assertEqual(set(self.items(first, VCPKG_SOURCE)), {ZLIB})
+
+        shutil.rmtree(root)
+        root.write_text("not a folder\n", encoding="utf-8")
+        second = self.collect_with(environ, data_dir=data_dir,
+                                   now=NOW + timedelta(days=1))
+
+        self.assert_carried(second, VCPKG, VCPKG_SOURCE, VCPKG_PREFIX, {ZLIB: "1.3.1"})

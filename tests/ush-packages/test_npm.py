@@ -58,9 +58,11 @@ class TestNpm(PackagesTestCase):
         return self.manager(summary, "npm")
 
     def npm_notes(self, summary):
-        """The not_checked items naming npm, without the "pnpm: not read yet" item."""
+        """The not_checked items naming npm, without the pnpm items (plan 083 M2: the
+        pnpm rc file entry, formerly "pnpm: not read yet")."""
         return [item for item in self.notes_with(summary, "npm")
-                if NOT_READ_YET not in note_text(item)]
+                if NOT_READ_YET not in note_text(item)
+                and not str(item.get("what")).casefold().startswith("pnpm")]
 
     def test_global_packages(self):
         fake = npm_fake({DEFAULT_NPM_FOLDER: read_folder(
@@ -179,7 +181,9 @@ class TestNpm(PackagesTestCase):
                 summary = self.collect(fake)
                 notes = self.not_checked(summary)
 
-                for name in ("go", "pnpm", "yarn", "cargo"):  # winget from plan 073, choco and scoop from plan 080
+                # winget from plan 073, choco and scoop from plan 080, yarn and pnpm
+                # from plan 083
+                for name in ("go", "composer", "gem", "cargo"):
                     own = [item for item in notes if item.get("what") == name]
                     self.assertEqual(len(own), 1, (name, notes))
                     self.assertIn(NOT_READ_YET, note_text(own[0]), own)

@@ -1,6 +1,6 @@
 ---
 name: ush-packages
-description: List the packages the package managers of this Windows machine have installed, and the packages winget recorded, read offline from disk - pip for every Python registered in PEP 514, the global npm packages, pipx apps, uv tools, conda environments, the VS Code extensions, the .NET global tools, the NuGet global packages folder, the PowerShell modules installed through PowerShellGet, the Chocolatey packages, the Scoop apps (user and global) and the classic vcpkg packages - with each version and what was added, removed or changed since the last run. A manager none of whose disk locations exists is listed as not present, every other package manager as not read yet. Use when the user asks which packages, extensions, tools or modules of these managers are installed, which packages winget recorded, which versions, or what changed in them. Read-only; no package manager runs and nothing goes online, so no package is checked for a newer version here (an ush-advice run with findings does that).
+description: List the packages the package managers of this Windows machine have installed, and the packages winget recorded, read offline from disk - pip for every Python registered in PEP 514, the global npm packages, pipx apps, uv tools, conda environments, the VS Code extensions, the .NET global tools, the NuGet global packages folder, the PowerShell modules installed through PowerShellGet, the Chocolatey packages, the Scoop apps (user and global), the classic vcpkg packages and the global packages of pnpm, Yarn classic and bun - with each version and what was added, removed or changed since the last run. A manager none of whose disk locations exists is listed as not present, every other package manager as not read yet. Use when the user asks which packages, extensions, tools or modules of these managers are installed, which packages winget recorded, which versions, or what changed in them. Read-only; no package manager runs and nothing goes online, so no package is checked for a newer version here (an ush-advice run with findings does that).
 ---
 
 # ush-packages
@@ -22,9 +22,13 @@ folder setting in the registry, read-only), the `.nuspec` of each Chocolatey
 package in `<Chocolatey root>\lib`, the `current\manifest.json` and
 `install.json` of each Scoop app in the user and the global Scoop root, and
 the status database of a classic
-vcpkg install (`installed\vcpkg\status` with its `updates` files). No
+vcpkg install (`installed\vcpkg\status` with its `updates` files), and the
+global folders of pnpm (each layout folder `global\<digits>`), Yarn classic
+and bun (the `dependencies` of the global `package.json`, each version from
+`node_modules\<name>\package.json`). No
 package manager runs (no pip, npm, pipx, uv, conda, winget, VS Code, dotnet,
-nuget, choco, scoop or vcpkg command and no PowerShell module command) and nothing
+nuget, choco, scoop, vcpkg, pnpm, yarn or bun command and no PowerShell module
+command) and nothing
 goes online. It compares every package with the baseline of the last run. A
 script counts and compares; you judge and write a Markdown report; the user
 decides what to act on.
@@ -55,8 +59,8 @@ another way (a shell command, another folder).
 
 - The user asks which Python (pip), npm, pipx, uv tool or conda packages
   or VS Code extensions, .NET global tools, NuGet packages, PowerShell
-  modules from the PowerShell Gallery, Chocolatey packages, Scoop apps or
-  vcpkg packages are installed,
+  modules from the PowerShell Gallery, Chocolatey packages, Scoop apps,
+  vcpkg packages or pnpm, yarn or bun global packages are installed,
   which packages winget recorded, in
   which version, or for which Python, venv, conda environment or winget
   catalog.
@@ -71,6 +75,9 @@ VS Code Insiders, VSCodium and portable VS Code, PowerShell modules not
 installed through PowerShellGet (only counted), vcpkg manifest-mode
 `vcpkg_installed` folders in projects, Chocolatey `lib-bad` and `lib-bkp`,
 Scoop's own `apps\scoop` folder and its `persist`, `cache` and `buckets`,
+Yarn Berry (v2+), packages that are only dependencies of a pnpm, yarn or
+bun global package, the pnpm store (`.pnpm`), a global folder set only in
+the pnpm rc file, `.yarnrc` or `bunfig.toml`,
 installed programs, drivers and
 autostart (`ush-inventory`). Say so if the user asks for these.
 

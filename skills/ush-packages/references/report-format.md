@@ -112,6 +112,9 @@ gives the count of low recommendations whose main source no line names.
    | psgallery | read | 4 (user-powershell 3, allusers-windowspowershell 1; 52 other modules) |
    | choco | read | 6 (root %ProgramData%\chocolatey) |
    | scoop | read | 9 (user 7, global 2) |
+   | pnpm | read | 3 (layout 5: 3; folder %LOCALAPPDATA%\pnpm\global) |
+   | yarn | read | 2 (folder %LOCALAPPDATA%\Yarn\Data\global) |
+   | bun | not present | — |
    | vcpkg | not present | — |
 
    - pip: the cell names each Python of `managers.pip.pythons` with its
@@ -191,6 +194,27 @@ gives the count of low recommendations whose main source no line names.
      above 0, that many apps could not be read (each named in „Not
      checked”), never counted in `incomplete`. `null` is „not read”, never
      0; the count is for the whole manager; a root without an app is 0.
+   - pnpm: `managers.pnpm.count` (the global packages of every layout
+     folder), with the parts of `managers.pnpm.parts` named by their
+     `source` label („layout 5”) and `count`; a part whose `status` is
+     `unreadable` is named as „could not be read”; the folder is
+     `%LOCALAPPDATA%\pnpm\global` for `folder_from` `default`, else
+     „folder from PNPM_HOME”, never the expanded path. With `unreadable`
+     above 0, that many global packages whose `package.json` could not be
+     read or gives no version (each named in „Not checked”), not counted in
+     `count`. `null` is „not read”, never 0; a global folder without a
+     layout folder is 0.
+   - yarn and bun: `managers.yarn.count` / `managers.bun.count` (the global
+     packages: the `dependencies` of the global folder's `package.json`),
+     with the folder: `%LOCALAPPDATA%\Yarn\Data\global` /
+     `%USERPROFILE%\.bun\install\global` for `folder_from` `default`,
+     else „folder from YARN_GLOBAL_FOLDER”, „folder from
+     BUN_INSTALL_GLOBAL_DIR” or „folder from BUN_INSTALL”, never the
+     expanded path. With `unreadable` above 0, that many global packages
+     whose `package.json` could not be read or gives no version (each named
+     in „Not checked”), not counted in `count`. `null` is „not read”, never
+     0; a global folder without a `package.json` or without `dependencies`
+     is 0.
    - A manager with `state` `not_present` (none of its disk locations
      exists) is „not present” in the State cell and „—” in the Packages
      cell, never 0, „none”, „not read yet” or „could not be read”; the places
@@ -211,7 +235,8 @@ gives the count of low recommendations whose main source no line names.
    (`venv`), the environment label for conda (`environment`), the catalog
    label for winget (`catalog`), the module folder label for psgallery
    (`module_folder`), the root label and bucket for scoop (`root`, `bucket`),
-   the triplet for vcpkg (`triplet`), and what changed: `added`
+   the triplet for vcpkg (`triplet`), the layout label for pnpm
+   (`layout`), and what changed: `added`
    with `version`, `removed` with `version`, `changed` with `fields.version`
    `before` and `after`. With `truncated_changes` above 0, one line: how
    many changes were cut and that the detail file has them. A source with
@@ -220,7 +245,7 @@ gives the count of low recommendations whose main source no line names.
 
 4. Packages, one `###` heading per manager with packages (pip,
    npm, pipx, uv, conda, winget, vscode, dotnet-tools, nuget, psgallery, choco,
-   scoop, vcpkg); the section heading never says
+   scoop, vcpkg, pnpm, yarn, bun); the section heading never says
    „installed”, because the winget items are only recorded by winget;
    each package of `packages` one bullet with its id,
    `name`, `version`, and the place: for pip the Python (`python`) and the
@@ -234,7 +259,9 @@ gives the count of low recommendations whose main source no line names.
    for choco „Chocolatey package”, for scoop „Scoop app”, the root label
    (`root`) and the bucket (`bucket`, left out when `null`), for vcpkg
    „vcpkg package” and the triplet
-   (`triplet`);
+   (`triplet`), for pnpm „pnpm global package” and the layout label
+   (`layout`), for yarn „yarn global package”, for bun „bun global
+   package”;
    with `versions_found` above 1 (dotnet-tools, nuget, psgallery), that many
    versions were found and `version` is the highest.
    Every package carries the words „not
@@ -402,6 +429,23 @@ Never report missing data as „none” or „nothing there”:
   root is read and compared.
 - scoop `state` `not_present`: neither the user nor the global Scoop root
   exists.
+- pnpm `state` `unreadable` (`count` `null`): the global folder could not be
+  listed, or no layout folder could be read; the packages are kept from the
+  baseline. Give the reason from „Not checked”, never „not present” or 0.
+- A pnpm `count` of `null` with `state` `read`: one layout folder could not
+  be read; its packages are kept from the baseline (`from_baseline`), the
+  other layout folders are read and compared.
+- pnpm `state` `not_present`: the global folder does not exist; say, from
+  „Not checked”, that a global folder set in the pnpm rc file was not looked
+  at, so pnpm may still keep global packages elsewhere.
+- yarn or bun `state` `unreadable` (`count` `null`): the global folder or its
+  `package.json` could not be read, is not JSON or its `dependencies` is not
+  an object; the packages are kept from the baseline. Give the reason from
+  „Not checked”, never „not present” or 0.
+- yarn or bun `state` `not_present`: the global folder does not exist; say,
+  from „Not checked”, that a global folder set in `.yarnrc` (yarn) or
+  `bunfig.toml` (bun) was not looked at, so the manager may still keep
+  global packages elsewhere.
 - A conda environment with `status` `absent`: the line of
   `environments.txt` names a folder that does not exist; it has no packages
   and is not unreadable.

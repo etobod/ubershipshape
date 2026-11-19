@@ -428,3 +428,30 @@ class TestReviewFixes(ScoopTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRootIsAFile(ScoopTestCase):
+    """Plan 083 M1 code-review round 2: a root that is a file is unreadable, never
+    empty, so its baseline apps are kept and never reported as removed."""
+
+    def test_user_root_is_a_file(self):
+        profile = self.profile()
+        user_root = profile / "scoop"
+        add_app(self.apps(user_root), "git", "2.47.1", bucket="main")
+        environ = {"USERPROFILE": str(profile),
+                   "ProgramData": str(self.program_data())}
+        data_dir = self.data_dir()
+        first = self.collect_with(environ, data_dir=data_dir, now=NOW)
+        self.assertEqual(set(self.items(first)), {GIT})
+
+        shutil.rmtree(user_root)
+        user_root.write_text("not a folder\n", encoding="utf-8")
+        second = self.collect_with(environ, data_dir=data_dir,
+                                   now=NOW + timedelta(days=1))
+
+        scoop = self.scoop(second)
+        self.assertEqual(scoop.get("state"), "unreadable", scoop)
+        items = self.items(second)
+        self.assertIn(GIT, items, sorted(map(str, items)))
+        self.assertIs(items[GIT].get("from_baseline"), True, items[GIT])
+        self.assertEqual(self.scoop_changes(second), [])
