@@ -12,7 +12,8 @@ Interface these tests assume (fixed before the code exists):
   unreadable}``; pipx, uv and conda (plan 066) are ``not_present`` here, since none of
   their locations exists in these fixtures; so is winget (plan 073, M1: read from disk,
   and the empty ``ENVIRON`` of the tests names no location), and so is vscode (plan 073,
-  M2); npm is ``{state: "not_present", looked_in}`` when its global ``node_modules``
+  M2), and so are dotnet-tools and nuget (plan 079, M1) and psgallery (plan 079, M2,
+  with ``DISK.documents_folder()`` returning None); npm is ``{state: "not_present", looked_in}`` when its global ``node_modules``
   folder is missing (plan 073, M2); every other manager is ``{state:
   "not_read"}`` with one ``not_checked`` entry reading ``<name>: not read yet``
   (``what`` and ``reason`` joined by ": ").
@@ -25,6 +26,7 @@ PowerShell never starts; every value is invented.
 import json
 import re
 import unittest
+from unittest import mock
 
 from .fakes import (
     DEFAULT_NPM_FOLDER,
@@ -75,8 +77,10 @@ class TestManagers(PackagesTestCase):
         self.assertEqual(len(set(folded)), len(folded), names)
         # Read by plan 066 (M1: pipx, uv; M2: conda) and plan 073 (M1: winget), and
         # absent in these fixtures (ENVIRON is empty, so no winget location is looked at).
-        # Plan 073 M2: vscode too.
-        absent_here = ("pipx", "uv", "conda", "winget", "vscode")
+        # Plan 073 M2: vscode too. Plan 079 M1: dotnet-tools and nuget (no USERPROFILE).
+        # Plan 079 M2: psgallery (no USERPROFILE, no ProgramFiles, Documents unset).
+        absent_here = ("pipx", "uv", "conda", "winget", "vscode", "dotnet-tools", "nuget",
+                       "psgallery")
         others = [name for name in names
                   if name.casefold() not in ("pip", "npm") + absent_here]
 
@@ -102,7 +106,10 @@ class TestManagers(PackagesTestCase):
         }
         for case, (fake, (pip_state, pip_status), (npm_state, npm_status)) in runs.items():
             with self.subTest(case=case):
-                summary = self.collect(fake)
+                # The Documents folder is never read from the registry in a test.
+                with mock.patch.object(self.packages.DISK, "documents_folder",
+                                       lambda: None):
+                    summary = self.collect(fake)
                 listed = self.managers(summary)
                 self.assertEqual([name for name, _ in listed], names, listed)
 

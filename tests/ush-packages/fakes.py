@@ -450,6 +450,8 @@ class PackagesTestCase(unittest.TestCase):
         # Tests never read the machine: the process environment (NPM_CONFIG_PREFIX)
         # is replaced by an empty one; a test that needs a variable patches its own.
         cls.packages.ENVIRON = {}
+        # Nor the registry: the user's Documents folder is unset (%USERPROFILE%\Documents).
+        cls.packages.DISK.documents_folder = lambda: None
 
     def data_dir(self):
         tmp = tempfile.TemporaryDirectory()

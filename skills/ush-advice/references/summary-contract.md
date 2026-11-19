@@ -128,6 +128,13 @@ reason. Each `unreadable` manager gives an item `packages <manager>` in
 not told apart from empty: the report says "no packages read", never
 "not installed".
 
+The other sources of ush-packages (e.g. `dotnet_tools`, `nuget_packages`,
+`psgallery_modules`) are not looked up: when any of them has the status
+`read` in `sources`, `not_checked` gets one item `packages of other
+managers` with the reason "ush-advice does not look up the ush-packages
+sources <names>" (the source names, sorted, joined by `, `). None read: no
+such item.
+
 An item is left out when it has `from_baseline` (`from_baseline`), the
 status `unreadable` or no name (`unreadable`), or no version
 (`no_version`). Every other item is one `packages` item, in the order of

@@ -1255,6 +1255,14 @@ def read_packages(work: Path, state: Path, today: str, not_checked: list):
         return info, None, None
 
     managers = package_managers(data, not_checked)
+    sources = data.get("sources") if isinstance(data.get("sources"), list) else []
+    other = sorted({entry["name"] for entry in sources
+                    if isinstance(entry, dict) and isinstance(entry.get("name"), str)
+                    and entry.get("status") == "read" and entry["name"] not in PACKAGE_SOURCES})
+    if other:
+        not_checked.append({"what": "packages of other managers",
+                            "reason": f"ush-advice does not look up the ush-packages "
+                                      f"sources {', '.join(other)}"})
     skipped = dict.fromkeys(SKIP_CAUSES, 0)
     packages, keys = [], []
     for source, manager in PACKAGE_SOURCES.items():

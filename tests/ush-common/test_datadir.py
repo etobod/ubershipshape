@@ -412,8 +412,13 @@ class TestScripts(unittest.TestCase):
 
         if script in ("inventory", "packages", "processes"):
             fakes = other_test_module(f"ush-{script}.fakes")
+            patches = ()
+            if script == "packages":
+                # The Documents folder is a registry read: never the real one in a test.
+                patches = (mock.patch.object(self.modules["packages"].DISK,
+                                             "documents_folder", lambda: None),)
             return ([], {"run_ps": fakes.FakePowerShell(), "is_admin": lambda: False,
-                         "now": fakes.NOW}, (), collection)
+                         "now": fakes.NOW}, patches, collection)
 
         if script == "settings":
             fakes = other_test_module("ush-settings.fakes")

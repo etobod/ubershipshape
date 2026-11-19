@@ -107,6 +107,9 @@ gives the count of low recommendations whose main source no line names.
    | winget | read | 15 recorded by winget (catalog contoso.source) |
    | go | not read yet | not read |
    | vscode | read | 24 (folder %USERPROFILE%\.vscode\extensions) |
+   | dotnet-tools | read | 2 (folder %USERPROFILE%\.dotnet\tools) |
+   | nuget | read | 130 (folder %USERPROFILE%\.nuget\packages, 1 without a complete version) |
+   | psgallery | read | 4 (user-powershell 3, allusers-windowspowershell 1; 52 other modules) |
 
    - pip: the cell names each Python of `managers.pip.pythons` with its
      `count`, or „not read” when a `count` is `null`; never add them up.
@@ -137,6 +140,29 @@ gives the count of low recommendations whose main source no line names.
      extensions folder: `%USERPROFILE%\.vscode\extensions` for
      `folder_from` `default`, „folder from VSCODE_EXTENSIONS” for
      `VSCODE_EXTENSIONS`. `null` is „not read”, never 0; an empty list is 0.
+   - dotnet-tools: `managers.dotnet-tools.count` (the .NET global tools),
+     with the tools folder: `%USERPROFILE%\.dotnet\tools` for `folder_from`
+     `default`, „folder from DOTNET_CLI_HOME” for `DOTNET_CLI_HOME`.
+     `null` is „not read”, never 0; a tools folder without a tool is 0.
+   - nuget: `managers.nuget.count` (the packages of the NuGet global
+     packages folder), with the folder: `%USERPROFILE%\.nuget\packages` for
+     `folder_from` `default`, „folder from NUGET_PACKAGES” for
+     `NUGET_PACKAGES`; with `incomplete` above 0, that many package folders
+     „without a complete version” (no `.nupkg.metadata`: not counted as
+     packages). `null` is „not read”, never 0. Never write „installed in a
+     project” for these: the folder is NuGet's download cache for every
+     project of the account.
+   - For both, `unreadable` above 0: that many ids could not be read (named
+     in „Not checked”), never counted in `incomplete`.
+   - psgallery: `managers.psgallery.count` (the PowerShell modules installed
+     through PowerShellGet or PSResourceGet), with the module folders of
+     `managers.psgallery.folders` named by their `source` label and `count`;
+     a folder whose `status` is `unreadable` is named as „could not be read”.
+     With `other_modules` above 0, that many „other modules” (no
+     `PSGetModuleInfo.xml`: shipped with Windows or copied by hand, not
+     counted as packages). `null` is „not read”, never 0; the count is for
+     the whole manager. Name the folders by their label or as
+     `%ProgramFiles%` / „Documents”, never by an expanded path.
    - A manager with `state` `not_present` (none of its disk locations
      exists) is „not present” in the State cell and „—” in the Packages
      cell, never 0, „none”, „not read yet” or „could not be read”; the places
@@ -155,7 +181,8 @@ gives the count of low recommendations whose main source no line names.
    `baseline.reference`. Then every change of `changes`, one bullet each:
    its id, `name`, the Python for pip (`python`), the venv for pipx
    (`venv`), the environment label for conda (`environment`), the catalog
-   label for winget (`catalog`), and what changed: `added`
+   label for winget (`catalog`), the module folder label for psgallery
+   (`module_folder`), and what changed: `added`
    with `version`, `removed` with `version`, `changed` with `fields.version`
    `before` and `after`. With `truncated_changes` above 0, one line: how
    many changes were cut and that the detail file has them. A source with
@@ -163,7 +190,7 @@ gives the count of low recommendations whose main source no line names.
    say so for that source, never „no changes”.
 
 4. Packages, one `###` heading per manager with packages (pip,
-   npm, pipx, uv, conda, winget, vscode); the section heading never says
+   npm, pipx, uv, conda, winget, vscode, dotnet-tools, nuget, psgallery); the section heading never says
    „installed”, because the winget items are only recorded by winget;
    each package of `packages` one bullet with its id,
    `name`, `version`, and the place: for pip the Python (`python`) and the
@@ -171,7 +198,12 @@ gives the count of low recommendations whose main source no line names.
    (`venv`, and „injected” when `injected` is `true`), for uv „tool
    folder”, for conda the environment label (`environment`), for winget
    „recorded by winget” and the catalog label (`source`), for vscode
-   „VS Code extension”. Every package carries the words „not
+   „VS Code extension”, for dotnet-tools „.NET global tool”, for nuget
+   „NuGet global packages folder”, for psgallery „PowerShell module”, the
+   module folder label (`module_folder`) and the repository (`repository`);
+   with `versions_found` above 1 (dotnet-tools, nuget, psgallery), that many
+   versions were found and `version` is the highest.
+   Every package carries the words „not
    checked for updates” (in a Polish report „nie sprawdzono pod kątem
    aktualizacji”): packages are checked for updates only in an
    ush-advice run with findings. Rule 7 (long lists) of
@@ -294,6 +326,25 @@ Never report missing data as „none” or „nothing there”:
   but its `extensions.json` is missing, could not be read, has no entry with an id or is not a JSON
   list; the extensions are kept from the baseline. Give the reason from
   „Not checked”, never „not present” or 0.
+- dotnet-tools or nuget `state` `unreadable` (`count` `null`): the tools
+  folder (or its `.store`) or the global packages folder exists but could
+  not be listed; the packages are kept from the baseline. Give the reason
+  from „Not checked”, never „not present” or 0.
+- dotnet-tools or nuget `state` `not_present`: say, from „Not checked”, what
+  was not searched (dotnet local tools and `--tool-path` folders; a NuGet
+  folder set in `NuGet.Config`, fallback folders and the http-cache), so the
+  manager may still keep packages elsewhere.
+- psgallery `state` `unreadable` (`count` `null`): no module folder could be
+  read; the modules are kept from the baseline. Give the reason from „Not
+  checked”, never „not present” or 0.
+- A psgallery `count` of `null` with `state` `read`: a module folder could
+  not be listed, or the Documents folder (the user's shell folder setting)
+  could not be read, so the two `user-` folders were not looked at; their
+  modules are kept from the baseline (`from_baseline`), the other folders
+  are read and compared.
+- psgallery `state` `not_present`: none of the four standard module folders
+  exists; say, from „Not checked”, that other folders of `PSModulePath` were
+  not searched.
 - A conda environment with `status` `absent`: the line of
   `environments.txt` names a folder that does not exist; it has no packages
   and is not unreadable.

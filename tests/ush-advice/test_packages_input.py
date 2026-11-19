@@ -476,13 +476,66 @@ class TestPackagesInput(AdviceTestCase):
 
     # K6
     def test_sources_match_ush_packages(self):
-        """PACKAGE_SOURCES is the inverse of ush-packages' READ_MANAGERS."""
+        """Every PACKAGE_SOURCES entry is a source of ush-packages' READ_MANAGERS,
+        in the order of SOURCES; ush-packages may read more sources than advice
+        looks up (plan 079: those are named in advice's not_checked)."""
         from tests.skill_loader import load_script
         packages = load_script("ush-packages", "packages")
         advice = load_script("ush-advice", "advice")
-        self.assertEqual(advice.PACKAGE_SOURCES,
-                         {source: manager for manager, source in packages.READ_MANAGERS.items()})
-        self.assertEqual(tuple(advice.PACKAGE_SOURCES), packages.SOURCES)
+        inverse = {source: manager for manager, source in packages.READ_MANAGERS.items()}
+        for source, manager in advice.PACKAGE_SOURCES.items():
+            self.assertEqual(inverse.get(source), manager, source)
+        self.assertEqual(tuple(advice.PACKAGE_SOURCES),
+                         tuple(s for s in packages.SOURCES if s in advice.PACKAGE_SOURCES))
+
+
+OTHER_SOURCES_WHAT = "packages of other managers"
+
+
+class TestOtherSources(AdviceTestCase):
+    """Plan 079, M2: the ush-packages sources advice does not look up are named once."""
+
+    write_packages = TestPackagesInput.write_packages
+    run_with = TestPackagesInput.run_with
+
+    # K6
+    def test_unlooked_sources_named(self):
+        doc = packages_detail({"pip_packages": [pip_item("contoso-lib", "1.2.0")]})
+        doc["sources"] += [
+            {"name": "dotnet_tools", "status": "empty", "reason": None},
+            {"name": "nuget_packages", "status": "read", "reason": None},
+            {"name": "psgallery_modules", "status": "read", "reason": None},
+        ]
+        doc["comparison"].update({"dotnet_tools": "no_baseline",
+                                  "nuget_packages": "no_baseline",
+                                  "psgallery_modules": "no_baseline"})
+        doc["dotnet_tools"] = []
+        doc["nuget_packages"] = [{
+            "key": "nuget:contoso.json", "name": "contoso.json", "version": "13.0.1",
+            "versions_found": 1,
+            "folder": INVENTED_HOME + "\\.nuget\\packages\\contoso.json",
+            "status": "read", "reason": None}]
+        doc["psgallery_modules"] = [{
+            "key": "psgallery:user-powershell|contoso.az", "name": "Contoso.Az",
+            "version": "1.10.0", "versions_found": 2, "repository": "PSGallery",
+            "module_folder": "user-powershell",
+            "folder": INVENTED_HOME + "\\Documents\\PowerShell\\Modules\\Contoso.Az",
+            "status": "read", "reason": None}]
+        summary = self.run_with(doc)
+
+        notes = [item for item in self.not_checked(summary)
+                 if item.get("what") == OTHER_SOURCES_WHAT]
+        self.assertEqual(len(notes), 1, self.not_checked(summary))
+        self.assertEqual(notes[0].get("reason"),
+                         "ush-advice does not look up the ush-packages sources "
+                         "nuget_packages, psgallery_modules", notes)
+
+        with self.subTest("only the 7 known sources"):
+            summary = self.run_with(packages_detail(k1_lists()), data_dir=self.data_dir())
+            notes = [item for item in self.not_checked(summary)
+                     if item.get("what") == OTHER_SOURCES_WHAT]
+            self.assertEqual(notes, [], self.not_checked(summary))
+
 
 if __name__ == "__main__":
     unittest.main()

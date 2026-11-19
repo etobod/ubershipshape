@@ -2,7 +2,8 @@
 
 Plan 061 moved the pip and npm reading of ush-inventory here, with the same
 PowerShell bodies, keys, item fields, ``from_baseline`` carrying and not_checked
-entries. No package manager runs: pip, npm, winget and VS Code are never started.
+entries. No package manager runs: pip, npm, winget, VS Code, dotnet, nuget and the
+PowerShell module commands are never started.
 Plan 073 added a Python read path beside the jobs: ``DISK`` reads files directly,
 at locations expanded from ``ENVIRON`` (an unset ``%VAR%`` counts as absent).
 
@@ -39,6 +40,19 @@ Sources (read-only PowerShell jobs, run through an injectable ``run_ps``; see
 - ``vscode_extensions``: the ``extensions.json`` of the VS Code extensions folder
   (``VSCODE_EXTENSIONS``, else ``%USERPROFILE%\\.vscode\\extensions``; read through
   ``DISK``, no job). Key ``vscode:<extension id>``.
+- ``dotnet_tools``: the .NET global tool store ``<tools>\\.store\\<id>\\<version>``
+  (``<tools>`` is ``DOTNET_CLI_HOME``, else ``%USERPROFILE%``, + ``\\.dotnet\\tools``;
+  through ``DISK``, no job): per id the highest version. Key ``dotnet-tools:<id>``.
+- ``nuget_packages``: the NuGet global packages folder ``<id>\\<version>``
+  (``NUGET_PACKAGES``, else ``%USERPROFILE%\\.nuget\\packages``; through ``DISK``, no
+  job): per id the highest version whose folder holds ``.nupkg.metadata``. Key
+  ``nuget:<id>``.
+- ``psgallery_modules``: the ``PSGetModuleInfo.xml`` of each module version folder of
+  the four standard module folders (``<Documents>`` and ``%ProgramFiles%``, each with
+  ``WindowsPowerShell\\Modules`` and ``PowerShell\\Modules``; ``<Documents>`` from the
+  user's shell folders, read-only, else ``%USERPROFILE%\\Documents``; through ``DISK``,
+  no job): per module folder the highest parsed version. Key
+  ``psgallery:<folder label>|<module folder name>``.
 
 Each is compared with the baseline ``ush-packages`` on ``version``; the changes
 are ``c`` items. The summary lists every manager of ``data/managers.json`` under
@@ -64,6 +78,7 @@ import sys
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
+from xml.etree import ElementTree
 
 # The shared modules live in skills/ush-common/scripts.
 sys.path.insert(0, str(Path(__file__).absolute().parents[2] / "ush-common" / "scripts"))
@@ -85,12 +100,14 @@ MANAGERS_FILE = Path(__file__).absolute().parents[1] / "data" / "managers.json"
 # The managers this script reads; every other one is "not_read".
 READ_MANAGERS = {"pip": "pip_packages", "npm": "npm_packages", "pipx": "pipx_packages",
                  "uv": "uv_tools", "conda": "conda_packages", "winget": "winget_packages",
-                 "vscode": "vscode_extensions"}
+                 "vscode": "vscode_extensions", "dotnet-tools": "dotnet_tools",
+                 "nuget": "nuget_packages", "psgallery": "psgallery_modules"}
 NOT_READ_YET = "not read yet"
 
 # The sources with items, compared with the baseline, in change order.
 SOURCES = ("pip_packages", "npm_packages", "pipx_packages", "uv_tools", "conda_packages",
-           "winget_packages", "vscode_extensions")
+           "winget_packages", "vscode_extensions", "dotnet_tools", "nuget_packages",
+           "psgallery_modules")
 READ_STATUSES = ("read", "empty")
 COMPARED_FIELDS = {source: ("version",) for source in SOURCES}
 CHANGE_ORDER = ("added", "removed", "changed")
@@ -566,6 +583,12 @@ class Collector:
         self.winget_summary = None
         # set by collect_vscode: the summary part managers.vscode (without state)
         self.vscode_summary = None
+        # set by collect_dotnet_tools / collect_nuget: the summary parts
+        # managers.dotnet-tools / managers.nuget (without state)
+        self.dotnet_tools_summary = None
+        self.nuget_summary = None
+        # set by collect_psgallery: the summary part managers.psgallery (without state)
+        self.psgallery_summary = None
         # the managers none of whose disk locations exists (state not_present)
         self.not_present = set()
 
@@ -893,6 +916,9 @@ NPM_PREFIX_VARIABLE = "NPM_CONFIG_PREFIX"
 # path are expanded from; tests replace it with an invented one.
 ENVIRON = os.environ
 ENVIRONMENT_REFERENCE = re.compile(r"%([^%]+)%")
+# The user's Documents folder: a value of the user's shell folders (read-only).
+USER_SHELL_FOLDERS = r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
+DOCUMENTS_VALUE = "Personal"
 
 
 class Disk:
@@ -912,10 +938,33 @@ class Disk:
         """The entry names of the folder ``path``; ``OSError`` when it cannot be listed."""
         return os.listdir(path)
 
-    def read_text(self, path) -> str:
-        """The text of the UTF-8 file ``path`` (a BOM is dropped); ``OSError`` or
-        ``UnicodeDecodeError`` when it cannot be read."""
-        return Path(path).read_text(encoding="utf-8-sig")
+    def read_text(self, path, utf16_bom: bool = False) -> str:
+        """The text of the UTF-8 file ``path`` (a BOM is dropped); with ``utf16_bom``, a
+        file starting with a UTF-16 byte order mark is read as UTF-16 (as Export-Clixml
+        of Windows PowerShell writes it). ``OSError`` or ``UnicodeDecodeError`` when it
+        cannot be read."""
+        data = Path(path).read_bytes()
+        if utf16_bom and data[:2] in (b"\xff\xfe", b"\xfe\xff"):
+            return data.decode("utf-16")
+        return data.decode("utf-8-sig")
+
+    def documents_folder(self) -> str | None:
+        """The raw (unexpanded) ``Personal`` value of ``HKCU\\...\\Explorer\\User Shell
+        Folders`` (the user's Documents folder), or None when it is not set; opened
+        read-only. A read error, or a value that is not text, is an ``OSError``."""
+        try:
+            import winreg  # Windows-only, and only for a real run
+        except ImportError as exc:
+            raise OSError(f"winreg is not available: {exc}") from exc
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, USER_SHELL_FOLDERS, 0,
+                                winreg.KEY_READ) as key:
+                data, _ = winreg.QueryValueEx(key, DOCUMENTS_VALUE)
+        except FileNotFoundError:
+            return None
+        if not isinstance(data, str):
+            raise OSError(f"the value {DOCUMENTS_VALUE} is not text")
+        return data
 
     def query_catalog(self, path, sql) -> list:
         """The rows of ``sql`` on the SQLite file ``path``, opened read-only and immutable
@@ -1782,6 +1831,362 @@ def read_vscode(col: Collector, previous: dict) -> tuple[str, dict]:
     return status, items
 
 
+# dotnet global tools and the NuGet global packages folder: folders laid out
+# <root>\<id>\<version>\ read through DISK (neither dotnet nor nuget runs).
+DOTNET_SOURCE = "dotnet_tools"
+DOTNET_VARIABLE = "DOTNET_CLI_HOME"
+DOTNET_DEFAULT_HOME = "%USERPROFILE%"
+DOTNET_TOOLS = "\\.dotnet\\tools"
+DOTNET_STORE = "\\.store"
+DOTNET_OUTSIDE = ("dotnet local tools (tool manifests) and tools installed with --tool-path",
+                  ("only the global tool store is read; tool manifests in repositories and "
+                   "--tool-path folders are not searched"))
+DOTNET_INCOMPLETE = ("dotnet tool folders without a version",
+                     "no version folder in the tool's folder of the tool store")
+NUGET_SOURCE = "nuget_packages"
+NUGET_VARIABLE = "NUGET_PACKAGES"
+NUGET_DEFAULT_FOLDER = "%USERPROFILE%\\.nuget\\packages"
+NUGET_METADATA = ".nupkg.metadata"
+NUGET_OUTSIDE = (("NuGet globalPackagesFolder of NuGet.Config, fallback folders and the "
+                  "http-cache"), "not read")
+NUGET_INCOMPLETE = ("NuGet package folders without a complete version",
+                    ("no .nupkg.metadata in any version folder (NuGet writes it after a "
+                     "package is fully extracted)"))
+
+
+def store_items(col: Collector, source: str, prefix: str, path: str, raw: str,
+                complete) -> tuple[dict, int]:
+    """``({key: item}, incomplete)`` of the store folder ``path`` (``raw`` unexpanded),
+    laid out ``<id>\\<version>``; ``complete(version path)`` tells a complete version.
+    Entries starting with ``.`` are skipped at both levels; an entry that is no folder is
+    no id. Per id the highest complete version by ``version_key`` (a tie broken by the
+    version string) and ``versions_found``; an id without a complete version is no item
+    and counts in ``incomplete``. An id or version folder that cannot be read gives an
+    ``unreadable`` item, named in not_checked. ``OSError`` when ``path`` cannot be
+    listed."""
+    items, incomplete = {}, 0
+    names = sorted(DISK.list_dir(path), key=str.casefold)
+    for number, name in enumerate(names, 1):
+        progress.count(source, number, len(names))
+        if name.startswith("."):
+            continue
+        folder = f"{raw}\\{name}"
+        item = {"name": name, "version": None, "versions_found": None, "status": "read",
+                "reason": None, "folder": folder}
+        try:
+            versions = [version for version in DISK.list_dir(f"{path}\\{name}")
+                        if not version.startswith(".")]
+            done = [version for version in versions
+                    if complete(f"{path}\\{name}\\{version}")]
+        except NotADirectoryError:
+            continue  # a file beside the id folders
+        except OSError as exc:
+            reason = f"{folder} could not be read: {type(exc).__name__}: {exc}"
+            unreadable_item(item, reason)
+            col.skip(f"{source} {name}", reason)
+        else:
+            if not done:
+                incomplete += 1
+                continue
+            item["version"] = max(done, key=lambda version: (version_key(version), version))
+            item["versions_found"] = len(done)
+        key, number = f"{prefix}{name.casefold()}", 2
+        while key in items:  # ids differing only in case (a case-sensitive folder)
+            key, number = f"{prefix}{name.casefold()}~{number}", number + 1
+        items[key] = item
+    return items, incomplete
+
+
+def read_store_source(col: Collector, previous: dict, *, manager: str, source: str,
+                      variable: str, default: str, tail: str, store: str, complete,
+                      outside: tuple, no_version: tuple) -> tuple[str, dict, dict]:
+    """``(status, {key: item}, summary part)`` of a manager kept in a store folder.
+
+    The folder is the non-blank ``variable`` + ``tail``, else ``default`` + ``tail``;
+    absent (or its ``%VAR%`` unset): ``not_present``. The store is the folder +
+    ``store``; a store folder that is absent is read with nothing there. A folder that
+    exists but cannot be listed: ``unreadable``, the previous items kept
+    ``from_baseline``. The part is ``{status, folder_from, count, unreadable,
+    incomplete}``; ``outside`` is named when read or not present, ``no_version`` when
+    an id folder holds no complete version.
+    """
+    home = environment_value(variable)
+    folder_from = variable
+    if home is None:
+        home, folder_from = default, "default"
+    raw = (home.rstrip("\\/") or home) + tail
+    path = expand_path(raw)
+    try:
+        present = path is not None and DISK.exists(path)
+        store_present = present and (not store or DISK.exists(path + store))
+        items, incomplete = (store_items(col, source, f"{manager}:", path + store,
+                                         raw + store, complete)
+                             if store_present else ({}, 0))
+    except OSError as exc:
+        reason = f"{raw + store} could not be listed: {type(exc).__name__}: {exc}"
+        items = carry_source(col, source, previous, reason)
+        return "unreadable", items, {"status": "unreadable", "folder_from": folder_from,
+                                     "count": None, "unreadable": None, "incomplete": None}
+    col.skip(*outside)
+    if not present:
+        return not_present(col, manager, source, [raw])
+    status = "read" if items else "empty"
+    col.record(source, status, None)
+    if incomplete:
+        col.skip(*no_version)
+    count = sum(1 for item in items.values() if item["status"] == "read")
+    return status, items, {"status": status, "folder_from": folder_from, "count": count,
+                           "unreadable": len(items) - count, "incomplete": incomplete}
+
+
+def is_folder(path: str) -> bool:
+    """True when ``path`` is a folder that can be listed, False when it is a file;
+    any other ``OSError`` is raised, so a folder that cannot be read is never taken
+    for a file."""
+    try:
+        DISK.list_dir(path)
+    except NotADirectoryError:
+        return False
+    return True
+
+
+def collect_dotnet_tools(col: Collector, previous: dict) -> tuple[str, dict]:
+    """The .NET global tools of the tool store ``<tools>\\.store\\<id>\\<version>``,
+    where ``<tools>`` is ``DOTNET_CLI_HOME`` (non-blank), else ``%USERPROFILE%``, +
+    ``\\.dotnet\\tools``; every version folder is complete (a file is no version). Key
+    ``dotnet-tools:<id case-folded>``; the part goes to ``col.dotnet_tools_summary``."""
+    progress.step(f"{DOTNET_SOURCE} ...")
+    status, items, col.dotnet_tools_summary = read_store_source(
+        col, previous, manager="dotnet-tools", source=DOTNET_SOURCE,
+        variable=DOTNET_VARIABLE, default=DOTNET_DEFAULT_HOME, tail=DOTNET_TOOLS,
+        store=DOTNET_STORE, complete=is_folder, outside=DOTNET_OUTSIDE,
+        no_version=DOTNET_INCOMPLETE)
+    progress.step(f"{DOTNET_SOURCE} {'failed' if status == 'unreadable' else 'done'}")
+    return status, items
+
+
+def collect_nuget(col: Collector, previous: dict) -> tuple[str, dict]:
+    """The NuGet global packages folder ``<id>\\<version>`` (``NUGET_PACKAGES``, non-blank,
+    else ``%USERPROFILE%\\.nuget\\packages``); a version is complete when its folder holds
+    a file named exactly ``.nupkg.metadata``. Key ``nuget:<id case-folded>``; the part
+    goes to ``col.nuget_summary``."""
+    progress.step(f"{NUGET_SOURCE} ...")
+    status, items, col.nuget_summary = read_store_source(
+        col, previous, manager="nuget", source=NUGET_SOURCE, variable=NUGET_VARIABLE,
+        default=NUGET_DEFAULT_FOLDER, tail="", store="",
+        complete=lambda path: DISK.exists(f"{path}\\{NUGET_METADATA}"),
+        outside=NUGET_OUTSIDE, no_version=NUGET_INCOMPLETE)
+    progress.step(f"{NUGET_SOURCE} {'failed' if status == 'unreadable' else 'done'}")
+    return status, items
+
+
+# PowerShell modules installed through PowerShellGet or PSResourceGet: the
+# PSGetModuleInfo.xml of each module version folder of the four standard module folders,
+# read through DISK (no PowerShell module command runs).
+PSGALLERY_SOURCE = "psgallery_modules"
+PSGALLERY_DEFAULT_DOCUMENTS = "%USERPROFILE%\\Documents"
+# (label, under the Documents folder, the folder below it or the full raw folder)
+PSGALLERY_FOLDERS = (
+    ("user-windowspowershell", True, "\\WindowsPowerShell\\Modules"),
+    ("user-powershell", True, "\\PowerShell\\Modules"),
+    ("allusers-windowspowershell", False, "%ProgramFiles%\\WindowsPowerShell\\Modules"),
+    ("allusers-powershell", False, "%ProgramFiles%\\PowerShell\\Modules"),
+)
+PSGALLERY_INFO_FILE = "PSGetModuleInfo.xml"
+PSGALLERY_OUTSIDE = ("PowerShell module folders outside looked_in (PSModulePath)",
+                     ("only the four standard module folders are searched; other folders "
+                      "of PSModulePath are not"))
+PSGALLERY_OTHER = ("PowerShell modules not installed through PowerShellGet",
+                   ("module folders without a PSGetModuleInfo.xml (shipped with Windows or "
+                    "copied by hand) are counted in other_modules, not listed"))
+PSGALLERY_FIELDS = ("Name", "Version", "Repository")
+
+
+def module_info(text_value: str) -> tuple[dict | None, str | None]:
+    """``({Name, Version, Repository}, None)`` of a PSGetModuleInfo.xml (CLIXML): the text
+    of the elements with attribute ``N`` of those names that are children of the
+    top-level object's ``MS`` element, whatever their tag; ``(None, reason)`` when the
+    text is not XML or lacks ``Name`` or ``Version``."""
+    try:
+        root = ElementTree.fromstring(text_value)
+    except (ElementTree.ParseError, ValueError) as exc:
+        return None, f"not XML: {type(exc).__name__}: {exc}"
+
+    def local(element) -> str:
+        return element.tag.rsplit("}", 1)[-1] if isinstance(element.tag, str) else ""
+
+    found = {}
+    top = next((child for child in root if local(child) == "Obj"), None)
+    members = (next((child for child in top if local(child) == "MS"), None)
+               if top is not None else None)
+    for child in members if members is not None else ():
+        name = child.get("N")
+        if name in PSGALLERY_FIELDS and name not in found:
+            found[name] = text(child.text)
+    missing = [name for name in PSGALLERY_FIELDS[:2] if found.get(name) is None]
+    if missing:
+        return None, f"no {' or '.join(missing)} in the top-level object"
+    return found, None
+
+
+def psgallery_module(label: str, raw: str, path: str, module: str) -> dict | None:
+    """The item of the module folder ``<path>\\<module>``, or None when no version folder
+    holds a PSGetModuleInfo.xml (not installed through PowerShellGet). A version that
+    does not parse is skipped while another one parses; a folder or file that cannot be
+    read makes the item ``unreadable``. ``NotADirectoryError`` for a file beside the
+    module folders."""
+    folder = f"{raw}\\{module}"
+    item = {"name": module, "version": None, "versions_found": None, "repository": None,
+            "status": "read", "reason": None, "module_folder": label, "folder": folder}
+    parsed, bad = [], []
+    try:
+        versions = sorted(DISK.list_dir(f"{path}\\{module}"), key=str.casefold)
+    except NotADirectoryError:
+        raise
+    except OSError as exc:
+        return unreadable_item(item, f"{folder} could not be read: {type(exc).__name__}: "
+                                     f"{exc}")
+    for version in versions:
+        info = f"{folder}\\{version}\\{PSGALLERY_INFO_FILE}"
+        try:
+            content = DISK.read_text(f"{path}\\{module}\\{version}\\{PSGALLERY_INFO_FILE}",
+                                     utf16_bom=True)
+        except (FileNotFoundError, NotADirectoryError):
+            continue  # no record of PowerShellGet in it, or a file of the module
+        except (OSError, UnicodeDecodeError) as exc:
+            return unreadable_item(item, f"{info} could not be read: "
+                                         f"{type(exc).__name__}: {exc}")
+        fields, reason = module_info(content)
+        if fields is None:
+            bad.append(f"{info}: {reason}")
+        else:
+            parsed.append(fields)
+    if not parsed:
+        return unreadable_item(item, "; ".join(bad)) if bad else None
+    best = max(parsed, key=lambda fields: (version_key(fields["Version"]),
+                                            fields["Version"]))
+    item.update(name=best["Name"], version=best["Version"], versions_found=len(parsed),
+                repository=best.get("Repository"))
+    return item
+
+
+def psgallery_folders() -> tuple[list, str | None]:
+    """``([(label, raw folder or None)], reason)``: the four module folders; the two
+    ``user-`` ones have no folder (None) when the Documents folder cannot be read, with
+    the reason."""
+    try:
+        documents = DISK.documents_folder()
+    except OSError as exc:
+        documents, reason = None, (f"the Documents folder (User Shell Folders, Personal) "
+                                   f"could not be read: {type(exc).__name__}: {exc}")
+    else:
+        reason = None
+        documents = text(documents)  # unset or blank: the default
+        if documents and expand_path(documents.strip()) is None:
+            # The setting names a variable this run's environment lacks: the folder is
+            # unknown, not absent, so its modules are carried and never "removed".
+            documents, reason = None, (f"the Documents folder (User Shell Folders, "
+                                       f"Personal) {documents.strip()} names an "
+                                       f"environment variable that is not set")
+        else:
+            documents = (documents.strip().rstrip("\\/") or documents.strip()
+                         if documents else PSGALLERY_DEFAULT_DOCUMENTS)
+    folders = []
+    for label, in_documents, tail in PSGALLERY_FOLDERS:
+        if in_documents:
+            folders.append((label, None if reason else documents + tail))
+        else:
+            folders.append((label, tail))
+    return folders, reason
+
+
+def collect_psgallery(col: Collector, previous: dict) -> tuple[str, dict]:
+    """Read the PowerShellGet modules, with a start and an end progress line."""
+    progress.step(f"{PSGALLERY_SOURCE} ...")
+    status, items = read_psgallery(col, previous)
+    progress.step(f"{PSGALLERY_SOURCE} {'failed' if status == 'unreadable' else 'done'}")
+    return status, items
+
+
+def read_psgallery(col: Collector, previous: dict) -> tuple[str, dict]:
+    """``(status, {key: item})`` of the source ``psgallery_modules``; the summary part
+    ``{status, folders, count, unreadable, other_modules}`` is kept in
+    ``col.psgallery_summary``.
+
+    Each of the four module folders that exists is listed; a module folder whose version
+    folders hold a PSGetModuleInfo.xml is an item keyed
+    ``psgallery:<label>|<module folder name case-folded>``, one without counts in
+    ``other_modules``. A folder that cannot be looked at (or the Documents folder of the
+    ``user-`` ones that cannot be read) keeps its previous items ``from_baseline`` and is
+    named in not_checked. ``not_present`` only when every folder was looked at and none
+    exists; ``unreadable`` only when no folder was read and one could not be; the count
+    is null while any folder is unreadable.
+    """
+    folders, documents_reason = psgallery_folders()
+    items, rows, looked_in, other_modules = {}, [], [], 0
+    for label, raw in folders:
+        row = {"source": label, "status": "read", "count": None, "reason": None}
+        names = None
+        if raw is None:
+            row.update(status="unreadable", reason=documents_reason)
+        else:
+            looked_in.append(raw)
+            path = expand_path(raw)
+            try:
+                if path is None or not DISK.exists(path):
+                    continue  # absent (or its %VAR% unset)
+                names = sorted(DISK.list_dir(path), key=str.casefold)
+            except OSError as exc:
+                row.update(status="unreadable", reason=(
+                    f"{raw} could not be listed: {type(exc).__name__}: {exc}"))
+        rows.append(row)
+        if names is None:
+            col.skip(f"{PSGALLERY_SOURCE} {label}", row["reason"])
+            carry(col, PSGALLERY_SOURCE, previous, items,
+                  lambda key, label=label: key.startswith(f"psgallery:{label}|"))
+            continue
+        row["count"] = 0
+        for number, module in enumerate(names, 1):
+            progress.count(f"{PSGALLERY_SOURCE} {label}", number, len(names))
+            try:
+                item = psgallery_module(label, raw, path, module)
+            except NotADirectoryError:
+                continue  # a file beside the module folders
+            if item is None:
+                other_modules += 1
+                continue
+            if item["status"] == "unreadable":
+                col.skip(f"{PSGALLERY_SOURCE} {label} {module}", item["reason"])
+            else:
+                row["count"] += 1
+            key, suffix = f"psgallery:{label}|{module.casefold()}", 2
+            while key in items:  # names differing only in case (a case-sensitive folder)
+                key, suffix = f"psgallery:{label}|{module.casefold()}~{suffix}", suffix + 1
+            items[key] = item
+    read = [row for row in rows if row["status"] == "read"]
+    if rows and not read:
+        col.record(PSGALLERY_SOURCE, "unreadable", "no PowerShell module folder could be read")
+        col.psgallery_summary = {"status": "unreadable", "folders": rows, "count": None,
+                                 "unreadable": None, "other_modules": None}
+        return "unreadable", items
+    col.skip(*PSGALLERY_OUTSIDE)
+    if not rows:
+        status, items, col.psgallery_summary = not_present(
+            col, "psgallery", PSGALLERY_SOURCE, looked_in)
+        return status, items
+    status = "read" if items else "empty"
+    col.record(PSGALLERY_SOURCE, status, None)
+    if other_modules:
+        col.skip(*PSGALLERY_OTHER)
+    unreadable = sum(1 for item in items.values()
+                     if item.get("status") == "unreadable" and not item.get("from_baseline"))
+    col.psgallery_summary = {
+        "status": status, "folders": rows,
+        "count": None if len(read) < len(rows) else sum(row["count"] for row in read),
+        "unreadable": unreadable, "other_modules": other_modules}
+    return status, items
+
+
 # --- managers ----------------------------------------------------------------
 def load_managers(path: Path) -> tuple[list | None, str | None]:
     """``(entries, None)`` of ``data/managers.json`` (``{name, step, read}`` each, in
@@ -1820,7 +2225,8 @@ def build_managers(col: Collector) -> dict:
     read_parts = {"pip": col.pip_summary, "npm": col.npm_summary,
                   "pipx": col.pipx_summary, "uv": col.uv_summary,
                   "conda": col.conda_summary, "winget": col.winget_summary,
-                  "vscode": col.vscode_summary}
+                  "vscode": col.vscode_summary, "dotnet-tools": col.dotnet_tools_summary,
+                  "nuget": col.nuget_summary, "psgallery": col.psgallery_summary}
     entries, reason = load_managers(MANAGERS_FILE)
     if entries is None:
         col.skip(MANAGERS_FILE.name, f"the managers not read by this skill are not "
@@ -1859,6 +2265,12 @@ def collect(run_ps, work: Path, stamp: str, previous: dict):
         col, previous.get("winget_packages") or {})
     statuses["vscode_extensions"], current["vscode_extensions"] = collect_vscode(
         col, previous.get("vscode_extensions") or {})
+    statuses["dotnet_tools"], current["dotnet_tools"] = collect_dotnet_tools(
+        col, previous.get("dotnet_tools") or {})
+    statuses["nuget_packages"], current["nuget_packages"] = collect_nuget(
+        col, previous.get("nuget_packages") or {})
+    statuses["psgallery_modules"], current["psgallery_modules"] = collect_psgallery(
+        col, previous.get("psgallery_modules") or {})
     return statuses, current, col
 
 
@@ -1915,6 +2327,10 @@ def build_changes(previous: dict, current: dict, comparison: dict, numbering) ->
             elif source == "winget_packages":
                 # ``source`` stays the source name; the catalog label is ``catalog``.
                 entry["catalog"] = item.get("source")
+            elif source == "psgallery_modules":
+                # ``source`` stays the source name; the folder label is ``module_folder``.
+                entry["module_folder"] = item.get("module_folder")
+                entry["repository"] = item.get("repository")
             if fields is not None:
                 entry["fields"] = fields
             else:
@@ -1926,7 +2342,8 @@ def build_changes(previous: dict, current: dict, comparison: dict, numbering) ->
 
 # --- packages ------------------------------------------------------------------
 def build_packages(current: dict, numbering) -> list:
-    """Every package of the read managers (pip, npm, pipx, uv, conda, winget, vscode), each
+    """Every package of the read managers (pip, npm, pipx, uv, conda, winget, vscode,
+    dotnet-tools, nuget, psgallery), each
     by key; ids ``k<n>`` from ``numbering``. The full item of the source, with ``manager`` and ``key``."""
     packages = []
     for manager, source in READ_MANAGERS.items():
@@ -1939,7 +2356,8 @@ def build_packages(current: dict, numbering) -> list:
 def summary_package(item: dict) -> dict:
     """The summary form of a package: ``id``, ``manager``, ``key``, ``name``,
     ``version``, the Python (pip), the venv and ``injected`` (pipx), the environment
-    (conda), the catalog label ``source`` (winget) and ``folder``; ``unreadable`` and ``reason`` when
+    (conda), the catalog label ``source`` (winget), ``versions_found`` (dotnet-tools,
+    nuget, psgallery), ``module_folder`` and ``repository`` (psgallery) and ``folder``; ``unreadable`` and ``reason`` when
     its metadata could not be read, ``from_baseline`` when it was kept from the
     baseline because its folder could not be listed."""
     out = {"id": item["id"], "manager": item["manager"], "key": item["key"],
@@ -1953,6 +2371,12 @@ def summary_package(item: dict) -> dict:
         out["environment"] = item.get("environment")
     elif item["manager"] == "winget":
         out["source"] = item.get("source")
+    elif item["manager"] in ("dotnet-tools", "nuget"):
+        out["versions_found"] = item.get("versions_found")
+    elif item["manager"] == "psgallery":
+        out["versions_found"] = item.get("versions_found")
+        out["module_folder"] = item.get("module_folder")
+        out["repository"] = item.get("repository")
     out["folder"] = item.get("folder")
     if item.get("status") == "unreadable":
         out["unreadable"] = True
